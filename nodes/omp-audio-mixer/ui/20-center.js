@@ -54,9 +54,9 @@ class CenterControl {
 
     this.tabs = [
       ["in", "IN", () => this.tabIn()],
-      ["eq", "EQ", () => this.tabEq()],
-      ["comp", "COMP", () => this.tabComp()],
-      ["gate", "GATE", () => this.tabGate()],
+      ["eq", "EQ", () => this.withPresets("eq", this.tabEq())],
+      ["comp", "COMP", () => this.withPresets("dyn", this.tabComp())],
+      ["gate", "GATE", () => this.withPresets("dyn", this.tabGate())],
       ["delay", "DELAY", () => this.tabDelay()],
       ["pan", "PAN", () => this.tabPan()],
       ["route", "AUX", () => this.tabRoute()],
@@ -207,6 +207,12 @@ class CenterControl {
   /** Tab-Inhalt bauen (binds/liveBinds sind von mount() bereits zurückgesetzt). */
   buildTab(fn) {
     return fn();
+  }
+
+  // Preset-Leiste (EQ bzw. Dynamik) oben im Reiter
+  withPresets(kind, root) {
+    root.prepend(h("div", { class: "ctab-presets" }, presetBar(this.app, kind)));
+    return root;
   }
 
   // IN: Quelle, Gain, Phase, Solo, Name

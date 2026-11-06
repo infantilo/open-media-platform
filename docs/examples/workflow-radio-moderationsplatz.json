@@ -2,15 +2,15 @@
   "name": "Radio-Moderationsplatz",
   "definition": {
     "title": "Radio-Moderationsplatz",
-    "description": "Moderationsplatz Radio: Segue-Player (Log und Hotkeys), Radio-Automation mit Sendungen/Moderationskarten, Mischer, Kontakte (Rotlicht, Cough-Taste) und Studio-Logik. Die Steuer-Nodes finden ihre Ziele über die Rollennamen (Umgebung OMP_RADIO_TARGET_LABEL, OMP_STUDIO_MIXER_LABEL, OMP_STUDIO_GPIO_LABEL). Den Tonweg Segue-Player → Mischerkanal (Quelle am Kanal) und die Mikrofonkanäle legt man im Mischer an.",
+    "description": "Moderationsplatz Radio: Segue-Player (Log und Hotkeys), Radio-Automation mit Sendungen/Moderationskarten, Mischer, GPIO (Rotlicht, Cough-Taste) und Studio-Logik. Die Steuer-Nodes finden ihre Ziele über die Rollennamen (Umgebung OMP_RADIO_TARGET_LABEL, OMP_STUDIO_MIXER_LABEL, OMP_STUDIO_GPIO_LABEL). Den Tonweg Segue-Player → Mischerkanal (Quelle am Kanal) und die Mikrofonkanäle legt man im Mischer an.",
     "category": "Radio",
     "tags": ["radio", "moderation"],
     "roles": [
       {"name": "Segue-Player", "nodeType": "omp-segue-player"},
       {"name": "Radio-Automation", "nodeType": "omp-radio-automation", "env": {"OMP_RADIO_TARGET_LABEL": "Segue-Player"}},
       {"name": "Moderationsmischer", "nodeType": "omp-audio-mixer"},
-      {"name": "Kontakte", "nodeType": "omp-gpio", "env": {"OMP_GPIO_INPUTS": "8", "OMP_GPIO_OUTPUTS": "8"}},
-      {"name": "Studio-Logik", "nodeType": "omp-studio-logic", "env": {"OMP_STUDIO_MIXER_LABEL": "Moderationsmischer", "OMP_STUDIO_GPIO_LABEL": "Kontakte"}}
+      {"name": "GPIO", "nodeType": "omp-gpio", "env": {"OMP_GPIO_INPUTS": "8", "OMP_GPIO_OUTPUTS": "8"}},
+      {"name": "Studio-Logik", "nodeType": "omp-studio-logic", "env": {"OMP_STUDIO_MIXER_LABEL": "Moderationsmischer", "OMP_STUDIO_GPIO_LABEL": "GPIO"}}
     ],
     "connections": []
   }

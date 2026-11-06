@@ -37,6 +37,7 @@ const CSS2 = `
   display:flex;flex-direction:column;background:var(--bg);color:var(--txt);font:11px/1.2 var(--mono);height:max(var(--c2-min,520px),calc(100vh - var(--c2-off,0px) - 6px));min-height:0;overflow:hidden;border:1px solid #000;position:relative;user-select:none}
 :host{display:block;overflow:auto;max-height:100vh}
 .c2 :where(button){font:inherit;color:inherit;cursor:pointer}
+.c2 .pst-sel{background:#1c1c1c;color:#e0e0e0;border:1px solid #444;border-radius:2px;font:11px var(--mono)}.c2 .pst-btn{background:linear-gradient(#444,#2a2a2a);color:#dcdcdc;border:1px solid #000;border-radius:2px}.c2 .pst-btn:hover{background:#4a4a4a}
 .c2 *{box-sizing:border-box}
 .c2 [hidden]{display:none!important}
 /* Kopfzeile */
@@ -55,7 +56,7 @@ const CSS2 = `
 .c2-lim{display:flex;align-items:center;gap:4px;padding:0 6px;border:1px solid var(--line);border-radius:3px;background:#0d0d0d}
 .c2-clock{font:600 14px/1 var(--mono);color:#e8e8e8;padding:0 8px;align-self:center;min-width:76px;text-align:right}
 /* Detail */
-.c2-detail{display:grid;grid-template-columns:140px minmax(250px,1.4fr) minmax(300px,2.4fr) minmax(190px,1fr) minmax(170px,.9fr);overflow-x:auto;gap:4px;padding:4px 6px;background:#0c0c0c;border-bottom:1px solid #000;flex:0 0 auto;height:clamp(176px,31vh,262px);min-height:0}
+.c2-detail{display:grid;grid-template-columns:140px minmax(250px,1.4fr) minmax(300px,2.4fr) minmax(190px,1fr) minmax(170px,.9fr);overflow-x:auto;gap:4px;padding:4px 6px;background:#0c0c0c;border-bottom:1px solid #000;flex:0 0 auto;height:clamp(222px,37vh,292px);min-height:0}
 .c2-det-empty{grid-column:1/-1;display:flex;align-items:center;justify-content:center;color:var(--dim)}
 .c2-sec{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:2px;padding:6px 6px 6px 22px;min-width:0;min-height:0;display:flex;flex-direction:column;gap:5px;overflow-x:hidden;overflow-y:auto;scrollbar-width:thin}
 .c2-sec>.vl{position:absolute;left:1px;top:0;bottom:0;width:18px;display:flex;align-items:center;justify-content:center;writing-mode:vertical-rl;transform:rotate(180deg);font-weight:700;letter-spacing:.14em;color:#9aa3ad;font-size:10px;border-right:1px solid var(--line)}
@@ -511,7 +512,7 @@ class ConsoleApp extends MixerApp {
       h("div", { class: "c2-knobs" }, pk("Thr", "gateThreshold", -90, 0, 0.5, -55, "dB", sendGate).root, pk("Range", "gateRange", -90, 0, 1, -30, "dB", sendGate).root, pk("Atk", "gateAttack", 0.1, 200, 0.1, 5, "ms", sendGate, { scale: "log" }).root, pk("Rel", "gateRelease", 5, 4000, 5, 300, "ms", sendGate, { scale: "log" }).root, this.grBar("gateGr")));
     const compCol = h("div", { class: "c2-dcol" }, this.chip("COMP", "comp", (ch) => ch.proc.compEnabled, (ch, v) => { ch.proc.compEnabled = v; sendComp(ch); }),
       h("div", { class: "c2-knobs" }, ...[pk("Thr", "compThreshold", -60, 0, 0.5, -20, "dB", sendComp, { color: "var(--orange)" }), pk("Ratio", "compRatio", 1, 20, 0.1, 2, ":1", sendComp, { color: "var(--orange)" }), pk("Gain", "compMakeup", 0, 24, 0.5, 0, "dB", sendComp, { color: "var(--orange)" }), pk("Atk", "compAttack", 0.1, 200, 0.1, 15, "ms", sendComp, { scale: "log", color: "var(--orange)" }), pk("Rel", "compRelease", 5, 2000, 1, 150, "ms", sendComp, { scale: "log", color: "var(--orange)" })].map((k) => k.root), this.grBar("compGr")));
-    const dynSec = this.section(T2("dyn"), h("div", { class: "c2-dyn" }, gateCol, compCol));
+    const dynSec = this.section(T2("dyn"), presetBar(this, "dyn"), h("div", { class: "c2-dyn" }, gateCol, compCol));
 
     // EQ
     const eqSec = this.section("EQ", this.buildEq());
@@ -532,7 +533,7 @@ class ConsoleApp extends MixerApp {
   buildEq() {
     const wrap = h("div", { class: "c2-eq" });
     const canvas = h("canvas", { class: "c2-eqcv", "aria-label": T2("eqHint") });
-    const top = h("div", { class: "c2-eq-top" }, this.chip("EQ", "eq", (ch) => !ch.proc.eqBypass, (ch, v) => { ch.proc.eqBypass = !v; this.sendCh(ch.id, "setEqBypass", { bypass: !v }); }), h("span", { class: "hint", text: T2("eqHint") }));
+    const top = h("div", { class: "c2-eq-top" }, this.chip("EQ", "eq", (ch) => !ch.proc.eqBypass, (ch, v) => { ch.proc.eqBypass = !v; this.sendCh(ch.id, "setEqBypass", { bypass: !v }); }), presetBar(this, "eq"), h("span", { class: "hint", text: T2("eqHint") }));
     const sendBand = (ch, b) => this.sendCh(ch.id, "setEqBand", { band: b.key, freq: ch.proc[b.freq], width: ch.proc[b.width] }, "f" + b.key);
     const sendGain = (ch, b) => this.sendCh(ch.id, "setEqGain", { band: b.key, gainDb: ch.proc[b.gain] }, "g" + b.key);
     const sendHp = (ch) => this.sendCh(ch.id, "setEqHp", { enabled: ch.proc.eqHpEnabled, freq: ch.proc.eqHpFreq }, "hp");
@@ -808,6 +809,8 @@ class ConsoleApp extends MixerApp {
     if (this.follow && this.follow.isOpen) this.follow.render();
     if (this.global && this.global.isOpen) this.global.refresh();
     this.updateMasterUi();
+    this.presetBars = (this.presetBars || []).filter((b) => b.root.isConnected || performance.now() - b.born < 3000);
+    for (const b of this.presetBars) b.render();
     if (!this.drawer.hidden) this.center.refresh();
     this.refreshDetail();
   }

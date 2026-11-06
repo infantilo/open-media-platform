@@ -26,6 +26,8 @@ const BUNDLE: &str = concat!(
     "\n",
     include_str!("../ui/24-global.js"),
     "\n",
+    include_str!("../ui/25-presets.js"),
+    "\n",
     include_str!("../ui/30-panel.js"),
     "\n",
     include_str!("../ui/40-console2.js"),

@@ -14,6 +14,7 @@
 //! B6/das eigene UI-Bundle re-fetchen entsprechend (kein Push-Mechanismus
 //! nötig, `ARCHITECTURE.md` §13.2).
 
+mod presets;
 mod automation;
 mod dsp;
 mod engine;
@@ -491,6 +492,8 @@ struct AudioMixerStore {
     node_label: String,
     /// Audio-Szenen und Video→Audio-Kontext (Kapitel 26).
     scenes: Mutex<Vec<SceneState>>,
+    /// Eigene Presets für EQ/Dynamik (Werkspresets stehen in `presets::factory`).
+    presets: Mutex<Vec<presets::Preset>>,
     contexts: Mutex<Vec<ContextRule>>,
     /// „Ton folgt Bild“: Welchen Gebern (Bildmischer/Switcher, Node-IDs) folgt der Mischer? Global + Überschreibung je Videoquelle.
     tally_filter: Mutex<TallyFilter>,
@@ -588,6 +591,8 @@ impl ParamStore for AudioMixerStore {
             // Dutzenden Einzelparametern je Kanal, wichtig bei 32–128 Kanälen).
             ParamSpec { name: "mixState".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ParamSpec { name: "scenes".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // Eigene Presets mit Werten als Austauschdokument (Export)
+            ParamSpec { name: "presetExport".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // P6: Erwartungen, Quell-Kontext, letzter Plan samt Begründung/Konflikten.
             ParamSpec { name: "routing".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ParamSpec {
@@ -743,6 +748,27 @@ impl ParamStore for AudioMixerStore {
                 ],
             },
             MethodSpec { name: "clearSourceContext".to_string(), args: vec![] },
+            MethodSpec {
+                name: "applyPreset".to_string(),
+                args: vec![
+                    MethodArg { name: "channelId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "kind".to_string(), kind: ParamType::String },
+                    MethodArg { name: "name".to_string(), kind: ParamType::String },
+                ],
+            },
+            MethodSpec {
+                name: "savePreset".to_string(),
+                args: vec![
+                    MethodArg { name: "channelId".to_string(), kind: ParamType::String },
+                    MethodArg { name: "kind".to_string(), kind: ParamType::String },
+                    MethodArg { name: "name".to_string(), kind: ParamType::String },
+                ],
+            },
+            MethodSpec { name: "importPresets".to_string(), args: vec![MethodArg { name: "json".to_string(), kind: ParamType::String }] },
+            MethodSpec {
+                name: "deletePreset".to_string(),
+                args: vec![MethodArg { name: "kind".to_string(), kind: ParamType::String }, MethodArg { name: "name".to_string(), kind: ParamType::String }],
+            },
             MethodSpec {
                 name: "resetRouting".to_string(),
                 args: vec![MethodArg { name: "channelId".to_string(), kind: ParamType::String }],
@@ -1157,6 +1183,9 @@ impl ParamStore for AudioMixerStore {
         if name == "routing" {
             return Some(self.routing.lock().expect("lock poisoned").view());
         }
+        if name == "presetExport" {
+            return Some(Value::String(presets::export_doc(&self.presets.lock().expect("lock poisoned")).to_string()));
+        }
         if name == "scenes" {
             let scenes = self.scenes.lock().expect("lock poisoned");
             return Some(Value::Array(
@@ -1563,6 +1592,7 @@ impl AudioMixerStore {
             "duckRules": duck_docs,
             "scenes": self.scenes.lock().expect("lock poisoned").iter()
                 .map(|s| serde_json::json!({"id": s.id, "label": s.label, "doc": s.doc})).collect::<Vec<_>>(),
+            "presets": self.presets.lock().expect("lock poisoned").iter().map(presets::Preset::to_state).collect::<Vec<_>>(),
             "contextRules": self.contexts.lock().expect("lock poisoned").iter().map(ContextRule::to_json).collect::<Vec<_>>(),
             "tallyFilter": self.tally_filter.lock().expect("lock poisoned").to_json(),
             "auxBuses": self.aux.lock().expect("lock poisoned").iter().filter(|a| a.active).map(aux_json).collect::<Vec<_>>(),
@@ -1606,6 +1636,8 @@ impl AudioMixerStore {
             .map(|a| a.iter().filter_map(DuckState::from_json).collect())
             .unwrap_or_default();
 
+        *self.presets.lock().expect("lock poisoned") =
+            doc.get("presets").and_then(Value::as_array).map(|a| a.iter().filter_map(presets::Preset::from_state).collect()).unwrap_or_default();
         *self.scenes.lock().expect("lock poisoned") = doc
             .get("scenes")
             .and_then(Value::as_array)
@@ -2027,6 +2059,68 @@ impl AudioMixerStore {
                 let doc = self.capture_scene_doc(with_proc);
                 self.scenes.lock().expect("lock poisoned").push(SceneState { id: format!("s{seq}"), label, doc });
                 Ok(())
+            }
+            "applyPreset" => {
+                let ch_id = args.get("channelId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let kind = args.get("kind").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let name = args.get("name").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let keys = presets::keys(kind).ok_or_else(|| InvokeError::Message("kind: eq oder dyn".to_string()))?;
+                let preset = presets::find(&self.presets.lock().expect("lock poisoned"), kind, name).ok_or_else(|| InvokeError::Message(format!("Preset „{name}“ gibt es nicht")))?;
+                let mut channels = self.channels.lock().expect("lock poisoned");
+                let ch = channels.iter_mut().find(|c| c.id == ch_id).ok_or_else(|| InvokeError::Message(format!("Kanal {ch_id} gibt es nicht")))?;
+                // in der Reihenfolge der Schlüsselliste anwenden (Frequenz vor Breite)
+                for k in keys {
+                    if let Some(v) = preset.values.get(*k) {
+                        proc_set(&mut ch.proc, k, v);
+                    }
+                }
+                self.pipeline.set_proc(ch_id.to_string(), ch.proc);
+                Ok(())
+            }
+            "savePreset" => {
+                let ch_id = args.get("channelId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let kind = args.get("kind").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let name = args.get("name").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let keys = presets::keys(kind).ok_or_else(|| InvokeError::Message("kind: eq oder dyn".to_string()))?;
+                presets::valid_name(name).map_err(InvokeError::Message)?;
+                if presets::factory().iter().any(|p| p.kind == kind && p.name == name) {
+                    return Err(InvokeError::Message(format!("„{name}“ ist ein Werkspreset — anderen Namen wählen")));
+                }
+                let values: serde_json::Map<String, Value> = {
+                    let channels = self.channels.lock().expect("lock poisoned");
+                    let ch = channels.iter().find(|c| c.id == ch_id).ok_or_else(|| InvokeError::Message(format!("Kanal {ch_id} gibt es nicht")))?;
+                    keys.iter().filter_map(|k| proc_get(&ch.proc, k).map(|v| (k.to_string(), v))).collect()
+                };
+                let mut user = self.presets.lock().expect("lock poisoned");
+                user.retain(|p| !(p.kind == kind && p.name == name)); // gleicher Name = überschreiben
+                if user.len() >= 200 {
+                    return Err(InvokeError::Message("höchstens 200 eigene Presets".to_string()));
+                }
+                user.push(presets::Preset { kind: kind.to_string(), name: name.to_string(), values, builtin: false });
+                Ok(())
+            }
+            "importPresets" => {
+                let text = args.get("json").and_then(Value::as_str).ok_or_else(|| InvokeError::Message("json fehlt".to_string()))?;
+                let incoming = presets::parse_import(text).map_err(InvokeError::Message)?;
+                let mut user = self.presets.lock().expect("lock poisoned");
+                let mut merged = user.clone();
+                for p in incoming {
+                    merged.retain(|u| !(u.kind == p.kind && u.name == p.name)); // gleicher Name = überschreiben
+                    merged.push(p);
+                }
+                if merged.len() > 200 {
+                    return Err(InvokeError::Message("insgesamt höchstens 200 eigene Presets".to_string()));
+                }
+                *user = merged;
+                Ok(())
+            }
+            "deletePreset" => {
+                let kind = args.get("kind").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let name = args.get("name").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let mut user = self.presets.lock().expect("lock poisoned");
+                let before = user.len();
+                user.retain(|p| !(p.kind == kind && p.name == name));
+                if user.len() == before { Err(InvokeError::Message("kein eigenes Preset dieses Namens (Werkspresets lassen sich nicht löschen)".to_string())) } else { Ok(()) }
             }
             "removeScene" => {
                 let id = args.get("sceneId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
@@ -2606,6 +2700,7 @@ impl AudioMixerStore {
             "auxFree": aux.iter().filter(|a| !a.active).count(),
             "scenes": self.scenes.lock().expect("lock poisoned").iter()
                 .map(|s| serde_json::json!({"id": s.id, "label": s.label})).collect::<Vec<_>>(),
+            "presets": presets::list(&self.presets.lock().expect("lock poisoned")),
             "contextRules": self.contexts.lock().expect("lock poisoned").iter().map(ContextRule::to_json).collect::<Vec<_>>(),
             "audioContext": {"activeSources": ctx.active_sources, "activeScene": ctx.active_scene},
             "tallyFilter": self.tally_filter.lock().expect("lock poisoned").to_json(),
@@ -3083,6 +3178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sender_changes: sender_changes_tx,
         node_label: label.clone(),
         scenes: Mutex::new(Vec::new()),
+        presets: Mutex::new(Vec::new()),
         contexts: Mutex::new(Vec::new()),
         tally_filter: Mutex::new(TallyFilter::default()),
         tally_givers: Mutex::new(Default::default()),
