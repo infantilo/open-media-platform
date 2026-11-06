@@ -321,16 +321,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let auth = OrchestratorAuth::new();
     if let (Some(id), false) = (instance_id.as_deref(), launch_secret.is_empty()) {
-        match remote::fetch_service_token(&orchestrator_url, id, &launch_secret) {
-            Ok(t) => auth.set(t),
-            Err(e) => eprintln!("omp-studio-logic: Service-Token nicht erhalten: {e}"),
-        }
+        // Token holen und stündlich erneuern. Startet der Node innerhalb eines Workflows, kennt der Orchestrator die Instanz manchmal noch
+        // nicht (404) — dann alle 2 s wiederholen, nicht erst nach einer Stunde (sonst bleiben alle Fernaufrufe ohne Token).
         let (url, id, secret, auth2) = (orchestrator_url.clone(), id.to_string(), launch_secret.clone(), auth.clone());
+        let name = "omp-studio-logic";
         std::thread::spawn(move || {
+            let mut warned = false;
             loop {
-                std::thread::sleep(Duration::from_secs(3600));
-                if let Ok(t) = remote::fetch_service_token(&url, &id, &secret) {
-                    auth2.set(t);
+                match remote::fetch_service_token(&url, &id, &secret) {
+                    Ok(t) => {
+                        auth2.set(t);
+                        warned = false;
+                        std::thread::sleep(Duration::from_secs(3600));
+                    }
+                    Err(e) => {
+                        if !warned {
+                            eprintln!("{name}: Service-Token noch nicht erhalten ({e}) — erneuter Versuch alle 2 s");
+                            warned = true;
+                        }
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
                 }
             }
         });
