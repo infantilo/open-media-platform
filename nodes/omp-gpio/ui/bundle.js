@@ -47,6 +47,7 @@ const STYLE = `
     --bg: #1b1b1d; --bg2: #232326; --bg3: #2c2c30; --bd: #3a3a40; --mut: #8a8a92; --acc: #4a90d9; --ok: #3fae4b; --err: #e05050; }
   * { box-sizing: border-box; }
   button, input { font: inherit; color: inherit; }
+  button { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
   input { background: var(--bg); border: 1px solid var(--bd); border-radius: 3px; padding: 4px 6px; }
   button { cursor: pointer; background: var(--bg3); border: 1px solid var(--bd); border-radius: 4px; padding: 4px 9px; }
   button:hover:not(:disabled) { border-color: var(--acc); }
@@ -114,6 +115,7 @@ class OmpGpioPanel extends HTMLElement {
         h("td", {}, h("button", { onclick: async () => { await call("setOutput", { pin: p.pin, level: !p.level, holdMs }); poll(); } }, T("toggle"))))));
       evEl.replaceChildren(...(events.length ? events.slice().reverse().map((e) => h("div", { class: "ev" }, `#${e.event.seq} ${e.subject} ${JSON.stringify({ level: e.event.level, up: e.event.up, reason: e.event.reason })}`)) : [h("span", { class: "muted" }, T("noEvents"))]));
     };
+    shadow.addEventListener("contextmenu", (e) => { if (e.target && e.target.closest && e.target.closest("button")) e.preventDefault(); });
     shadow.append(h("style", {}, STYLE), banner, head, inSec, outSec, evSec);
 
     const poll = async () => {

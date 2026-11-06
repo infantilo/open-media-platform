@@ -18,6 +18,7 @@
 // das `customElements.define(...)` in console-view.ts stillschweigend
 // entfernen (per Browser-Test gefunden: `view.setEntries is not a
 // function`, weil das Custom Element nie registriert wurde).
+import "./touch-guard.ts"; // Berührungsschutz (Kontextmenü auf Tasten) vor allen Elementen installieren
 import { t } from "./i18n.ts";
 import { installToastCodes } from "./errorcodes.ts";
 import "./upcoming.ts";

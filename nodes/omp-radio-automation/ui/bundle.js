@@ -118,6 +118,9 @@ const STYLE = `
     --bg: #1b1b1d; --bg2: #232326; --bg3: #2c2c30; --bd: #3a3a40; --mut: #8a8a92; --acc: #4a90d9; --ok: #3fae4b; --warn: #e0a030; --err: #e05050; }
   * { box-sizing: border-box; }
   button, select, input, textarea { font: inherit; color: inherit; }
+  /* Lange Berührung (Handy): kein Kontextmenü/keine Markierung auf Tasten — Hotkeys werden getippt und gehalten */
+  button { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .hkkey { touch-action: manipulation; }
   input, select, textarea { background: var(--bg); border: 1px solid var(--bd); border-radius: 3px; padding: 4px 6px; }
   button { cursor: pointer; background: var(--bg3); border: 1px solid var(--bd); border-radius: 4px; padding: 4px 9px; }
   button:hover:not(:disabled) { border-color: var(--acc); }
@@ -756,6 +759,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
       tabCnt.mod.textContent = cards.length ? String(cards.length) : "";
       tabCnt.log.textContent = asRun.length ? String(asRun.length) : "";
     };
+    shadow.addEventListener("contextmenu", (e) => { if (e.target && e.target.closest && e.target.closest("button")) e.preventDefault(); });
     shadow.append(h("style", {}, STYLE), banner, tp, head, nowBar, cardLive, tabBar, panes.live, panes.plan, panes.list, panes.mod, panes.log);
     updTabs();
     renderRows(); renderPlan(); renderAsRun(); renderNow(); renderCarts(); renderCards(); renderShowBar(); loadWeek(); refreshShows().then(async () => { const c = await api("GET", API + "/current"); if (c && c.show && c.show.status === "live" && !curShow) { showSel.value = c.show.id; await openShow(c.show.id); } });

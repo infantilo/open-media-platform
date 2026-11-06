@@ -49,6 +49,8 @@ const STYLE = `
     --bg: #1b1b1d; --bg2: #232326; --bg3: #2c2c30; --bd: #3a3a40; --mut: #8a8a92; --acc: #4a90d9; --ok: #3fae4b; --warn: #e0a030; --err: #e05050; }
   * { box-sizing: border-box; }
   button, select, input { font: inherit; color: inherit; }
+  /* Lange Berührung (Handy) darf kein Kontextmenü, keine Textmarkierung und keine Lupe öffnen — die Cough-Taste wird gehalten */
+  button { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
   input, select { background: var(--bg); border: 1px solid var(--bd); border-radius: 3px; padding: 4px 6px; }
   button { cursor: pointer; background: var(--bg3); border: 1px solid var(--bd); border-radius: 4px; padding: 5px 10px; }
   button:hover:not(:disabled) { border-color: var(--acc); } button:disabled { opacity: .45; cursor: default; }
@@ -64,7 +66,7 @@ const STYLE = `
   .grp .nm { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; min-height: 22px; } .grp .nm .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; } .grp .info { min-height: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lamp { width: 14px; height: 14px; border-radius: 50%; background: var(--bg3); border: 1px solid var(--bd); } .lamp.on { background: var(--err); border-color: var(--err); box-shadow: 0 0 8px var(--err); }
   .chip { padding: 1px 8px; border-radius: 10px; background: var(--bg3); font-size: 11px; white-space: nowrap; flex: none; min-width: 104px; text-align: center; } .chip.st-air { background: var(--err); color: #fff; } .chip.st-cough { background: var(--warn); color: #000; }
-  .cough { min-height: 56px; font-size: 14px; font-weight: 700; user-select: none; touch-action: none; } .cough.hold { background: var(--warn); color: #000; border-color: var(--warn); }
+  .cough { touch-action: none; min-height: 56px; font-size: 14px; font-weight: 700; user-select: none; touch-action: none; } .cough.hold { background: var(--warn); color: #000; border-color: var(--warn); }
   table { border-collapse: collapse; width: 100%; } th { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--mut); text-align: left; padding: 2px 4px; } td { padding: 2px 3px; } td input { width: 100%; min-width: 70px; }
   .muted, .hint { color: var(--mut); } .dirty { color: var(--warn); margin-left: 8px; display: inline-block; min-width: 150px; } .ev { font-variant-numeric: tabular-nums; font-family: monospace; padding: 1px 0; }
   .big { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; } .hstate { height: 30px; overflow: hidden; display: flex; align-items: center; } .hstate .big { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -178,6 +180,8 @@ class OmpStudioLogicPanel extends HTMLElement {
       h("div", { class: "muted", style: "margin:8px 0 2px" }, T("studios")), h("table", {}, th(T("sName"), T("sChannels")), sBody), h("div", { class: "bar", style: "margin-top:6px" }, h("button", { onclick: () => { cfg.studios.push({ name: "", channels: [] }); markDirty(); renderCfg(); } }, T("addStudio"))),
       h("div", { class: "bar" }, h("label", {}, T("maxCough"), maxC), h("label", {}, T("lightHold"), holdC), saveBtn, dirtyEl), chanList, h("p", { class: "hint" }, T("hintRules"))));
 
+    // Kontextmenü bei langem Drücken auf Tasten unterdrücken (Handy)
+    shadow.addEventListener("contextmenu", (e) => { if (e.target && e.target.closest && e.target.closest("button")) e.preventDefault(); });
     shadow.append(h("style", {}, STYLE), banner, head, groupsSec, handSec, rulesSec);
     renderGroups(); renderHandover(); renderCfg();
 

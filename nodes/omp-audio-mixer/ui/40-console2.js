@@ -37,7 +37,7 @@ const CSS2 = `
   display:flex;flex-direction:column;background:var(--bg);color:var(--txt);font:11px/1.2 var(--mono);height:max(var(--c2-min,622px),var(--c2-h,calc(100vh - 6px)));min-height:0;overflow:hidden;border:1px solid #000;position:relative;user-select:none}
 :host{display:block;overflow:auto;max-height:100vh}
 .c2[data-compact="1"]{--c2-min:346px}
-.c2 :where(button){font:inherit;color:inherit;cursor:pointer}
+.c2 :where(button){font:inherit;color:inherit;cursor:pointer;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 .c2 .pst-sel{background:#1c1c1c;color:#e0e0e0;border:1px solid #444;border-radius:2px;font:11px var(--mono)}.c2 .pst-btn{background:linear-gradient(#444,#2a2a2a);color:#dcdcdc;border:1px solid #000;border-radius:2px}.c2 .pst-btn:hover{background:#4a4a4a}
 .c2 *{box-sizing:border-box}
 .c2 [hidden]{display:none!important}
@@ -358,6 +358,8 @@ class ConsoleApp extends MixerApp {
     const style = h("style");
     style.textContent = CSS + CSS2;
     this.root = h("div", { class: "root c2", tabindex: "-1" });
+    // Lange Berührung (Handy) auf Tasten und Fadern: kein Kontextmenü, keine Lupe
+    this.root.addEventListener("contextmenu", (e) => { if (e.target && e.target.closest && e.target.closest("button,.st-fz,.st-range")) e.preventDefault(); });
     // Höhe = sichtbarer Bereich des Containers (Operator-Kachel oder Fenster) ab der Position der Oberfläche; die Fader füllen den Rest.
     // Unterhalb des Minimums (--c2-min = Platzbedarf des Inhalts, kompakt weniger) scrollt der Container, statt unten (SOLO) abzuschneiden.
     this.fitHeight = () => {
