@@ -43,6 +43,8 @@ Clients finden die Route über `GET /api/v1/ext` (Typ `intercom`, `roles`), nie 
 * `guest.create`: Körper `{"name":"Kamera 2","ttl_minutes":720,"routes":[{"ch":1,"talk":true,"listen":true}]}`, Antwort
   `{"id":100000,"url":"https://…/panel?token=…","expires":"…","routes":[…]}` — die `url` öffnet eine Sprechstelle ohne Konto.
   Sie darf mit `?embed=1` kompakt eingebettet werden (iframe, `allow="microphone; autoplay"`). Rechte: `<name>.guest` oder `.admin`.
+  Optional `"audio":true` (statt `routes`): Ton-Gast — der Dienst legt Rückweg- und Mikrofonkanal samt Programmeingang
+  (`ret_in`) und Mix-Ausgang (`mic_out`) an und liefert beide Nummern in `audio`; Widerruf/Ablauf räumt sie wieder ab.
 * Rechte: `deck.*` nur für Sprechstellen, die die Person bedienen darf (eigene bzw. mit Administrationsrecht alle).
 
 ## 3. Sicherheit (gilt für jeden Dienst)
