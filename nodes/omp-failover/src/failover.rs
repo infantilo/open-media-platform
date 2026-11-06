@@ -4,8 +4,9 @@
 
 use std::collections::VecDeque;
 
-/// Quellen: Hauptsignal, drei Notquellen (andere MXL-Flows) und der eingebaute Notclip.
-pub const SOURCES: [&str; 5] = ["main", "n1", "n2", "n3", "clip"];
+/// Quellen: Hauptsignal, drei Notquellen (andere MXL-Flows), der eingebaute Notclip (Datei in Schleife) und das Standbild (nur Bild).
+pub const SOURCES: [&str; 6] = ["main", "n1", "n2", "n3", "clip", "still"];
+pub const N: usize = SOURCES.len();
 
 pub fn label(id: &str) -> &'static str {
     match id {
@@ -14,6 +15,7 @@ pub fn label(id: &str) -> &'static str {
         "n2" => "Notquelle 2",
         "n3" => "Notquelle 3",
         "clip" => "Notclip",
+        "still" => "Standbild",
         _ => "?",
     }
 }
@@ -27,6 +29,8 @@ pub struct Rules {
     pub silence_ms: u64,
     /// Standbild länger als so viele ms → gestört (Bild; 0 = aus).
     pub freeze_ms: u64,
+    /// Schwarzbild länger als so viele ms → gestört (Bild; 0 = aus).
+    pub black_ms: u64,
     /// So lange in Ordnung, bis eine Quelle als gesund gilt (Vorbedingung zum Aufschalten und für die Rückkehr).
     pub healthy_ms: u64,
     /// Rückkehr zum Hauptsignal erst nach so langer Gesundheit.
@@ -45,18 +49,19 @@ impl Default for Rules {
             silence_db: -60.0,
             silence_ms: 5000,
             freeze_ms: 5000,
+            black_ms: 5000,
             healthy_ms: 500,
             return_ms: 3000,
             min_hold_ms: 2000,
             auto_return: true,
-            order: ["n1", "n2", "n3", "clip"].iter().map(|s| s.to_string()).collect(),
+            order: ["n1", "n2", "n3", "clip", "still"].iter().map(|s| s.to_string()).collect(),
         }
     }
 }
 
 impl Rules {
     pub fn validate(&self) -> Result<(), String> {
-        if !(100..=600_000).contains(&self.no_signal_ms) || !(500..=3_600_000).contains(&self.silence_ms) || self.freeze_ms > 3_600_000 {
+        if !(100..=600_000).contains(&self.no_signal_ms) || !(500..=3_600_000).contains(&self.silence_ms) || self.freeze_ms > 3_600_000 || self.black_ms > 3_600_000 {
             return Err("Haltezeiten außerhalb des Bereichs (Signal 0,1–600 s, Stille 0,5 s–1 h, Freeze ≤ 1 h)".to_string());
         }
         if !(-120.0..=-10.0).contains(&self.silence_db) {
@@ -85,6 +90,8 @@ pub struct Obs {
     pub level_db: Option<f64>,
     /// Bild unverändert (Freeze) — `None` = keine Bildquelle.
     pub frozen: Option<bool>,
+    /// Bild zu dunkel (Schwarzbild) — `None` = keine Bildquelle.
+    pub black: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +99,7 @@ pub enum Cause {
     NoSignal,
     Silence,
     Freeze,
+    Black,
 }
 
 impl Cause {
@@ -100,6 +108,7 @@ impl Cause {
             Cause::NoSignal => "kein Signal",
             Cause::Silence => "Stille",
             Cause::Freeze => "Standbild",
+            Cause::Black => "Schwarzbild",
         }
     }
 }
@@ -110,6 +119,7 @@ pub struct Health {
     pub no_signal_ms: u64,
     pub silent_ms: u64,
     pub frozen_ms: u64,
+    pub black_ms: u64,
     pub ok_ms: u64,
     pub last_level_db: f64,
     pub present: bool,
@@ -134,7 +144,11 @@ impl Health {
             Some(true) if o.present => self.frozen_ms += dt,
             _ => self.frozen_ms = 0,
         }
-        if bad_signal || self.silent_ms > 0 || self.frozen_ms > 0 {
+        match o.black {
+            Some(true) if o.present => self.black_ms += dt,
+            _ => self.black_ms = 0,
+        }
+        if bad_signal || self.silent_ms > 0 || self.frozen_ms > 0 || self.black_ms > 0 {
             self.ok_ms = 0;
         } else {
             self.ok_ms += dt;
@@ -149,6 +163,8 @@ impl Health {
             Some(Cause::Silence)
         } else if r.freeze_ms > 0 && self.frozen_ms >= r.freeze_ms {
             Some(Cause::Freeze)
+        } else if r.black_ms > 0 && self.black_ms >= r.black_ms {
+            Some(Cause::Black)
         } else {
             None
         }
@@ -283,7 +299,7 @@ impl Controller {
     }
 
     /// Ein Block (`dt_ms`) mit der Beobachtung je Quelle (Reihenfolge wie [`SOURCES`]).
-    pub fn step(&mut self, dt_ms: u64, obs: &[Obs; 5]) -> Vec<Event> {
+    pub fn step(&mut self, dt_ms: u64, obs: &[Obs; N]) -> Vec<Event> {
         self.now_ms += dt_ms;
         let silence_db = self.rules.silence_db;
         for (i, (_, h)) in self.health.iter_mut().enumerate() {
@@ -351,16 +367,56 @@ impl Controller {
     }
 }
 
+/// Überblendung beim Quellenwechsel: zwei Blöcke (20 ms) von der alten zur neuen Quelle, danach nur noch die neue.
+/// Wechselt die aktive Quelle mitten in der Überblendung, springt die Basis auf die bisherige Zielquelle (kein Rückfall auf die erste).
+#[derive(Debug)]
+pub struct Fader {
+    cur: usize,
+    to: usize,
+    left: u32,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Plan {
+    Solo(usize),
+    /// `block` 0 oder 1 der Überblendung von `from` nach `to`.
+    Fade { from: usize, to: usize, block: u32 },
+}
+
+impl Fader {
+    pub fn new(start: usize) -> Self {
+        Fader { cur: start, to: start, left: 0 }
+    }
+
+    pub fn update(&mut self, active: usize) -> Plan {
+        if active != self.to {
+            self.cur = self.to;
+            self.to = active;
+            self.left = 2;
+        }
+        if self.left == 0 {
+            return Plan::Solo(self.to);
+        }
+        let block = 2 - self.left;
+        self.left -= 1;
+        let from = self.cur;
+        if self.left == 0 {
+            self.cur = self.to;
+        }
+        Plan::Fade { from, to: self.to, block }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const OK: Obs = Obs { present: true, level_db: Some(-20.0), frozen: None };
-    const SILENT: Obs = Obs { present: true, level_db: Some(-90.0), frozen: None };
-    const GONE: Obs = Obs { present: false, level_db: None, frozen: None };
+    const OK: Obs = Obs { present: true, level_db: Some(-20.0), frozen: None, black: None };
+    const SILENT: Obs = Obs { present: true, level_db: Some(-90.0), frozen: None, black: None };
+    const GONE: Obs = Obs { present: false, level_db: None, frozen: None, black: None };
 
     /// Beobachtungen: main, n1, n2, n3, clip
-    fn run(c: &mut Controller, secs: u64, obs: [Obs; 5]) -> Vec<Event> {
+    fn run(c: &mut Controller, secs: u64, obs: [Obs; N]) -> Vec<Event> {
         let mut all = Vec::new();
         for _ in 0..secs * 100 {
             all.extend(c.step(10, &obs));
@@ -375,7 +431,7 @@ mod tests {
     #[test]
     fn healthy_main_stays() {
         let mut c = Controller::new(Rules::default());
-        let ev = run(&mut c, 30, [OK, OK, OK, OK, OK]);
+        let ev = run(&mut c, 30, [OK, OK, OK, OK, OK, OK]);
         assert!(ev.is_empty());
         assert_eq!(c.active, "main");
         assert_eq!(c.status(), Status::Normal);
@@ -384,11 +440,11 @@ mod tests {
     #[test]
     fn main_gone_switches_to_first_healthy_notquelle_after_hold() {
         let mut c = Controller::new(Rules::default());
-        run(&mut c, 3, [OK, OK, OK, OK, OK]);
+        run(&mut c, 3, [OK, OK, OK, OK, OK, OK]);
         // Hauptsignal weg: erst nach no_signal_ms (1,5 s) umschalten
-        let ev = run(&mut c, 1, [GONE, OK, OK, OK, OK]);
+        let ev = run(&mut c, 1, [GONE, OK, OK, OK, OK, OK]);
         assert!(switched(&ev).is_empty(), "noch innerhalb der Haltezeit");
-        let ev = run(&mut c, 1, [GONE, OK, OK, OK, OK]);
+        let ev = run(&mut c, 1, [GONE, OK, OK, OK, OK, OK]);
         assert_eq!(switched(&ev), vec![("main".to_string(), "n1".to_string())]);
         assert!(ev.iter().any(|e| matches!(e, Event::Alarm { kind: "havarie", .. })));
         assert_eq!(c.status(), Status::Havarie);
@@ -400,44 +456,44 @@ mod tests {
         let mut r = Rules::default();
         r.order = vec!["clip".into(), "n2".into()]; // Reihenfolge: zuerst Clip, dann Notquelle 2; n1 wird nicht benutzt
         let mut c = Controller::new(r);
-        run(&mut c, 2, [OK, OK, OK, OK, OK]);
-        let ev = run(&mut c, 4, [SILENT, OK, OK, OK, OK]);
+        run(&mut c, 2, [OK, OK, OK, OK, OK, OK]);
+        let ev = run(&mut c, 4, [SILENT, OK, OK, OK, OK, OK]);
         assert!(switched(&ev).is_empty(), "Stille < 5 s");
-        let ev = run(&mut c, 2, [SILENT, OK, OK, OK, OK]);
+        let ev = run(&mut c, 2, [SILENT, OK, OK, OK, OK, OK]);
         assert_eq!(switched(&ev), vec![("main".to_string(), "clip".to_string())]);
     }
 
     #[test]
     fn skips_unhealthy_notquelle() {
         let mut c = Controller::new(Rules::default());
-        run(&mut c, 2, [OK, OK, OK, OK, OK]);
-        let ev = run(&mut c, 3, [GONE, GONE, SILENT, OK, OK]); // n1 weg, n2 still → n3
+        run(&mut c, 2, [OK, OK, OK, OK, OK, OK]);
+        let ev = run(&mut c, 3, [GONE, GONE, SILENT, OK, OK, OK]); // n1 weg, n2 still → n3
         assert_eq!(switched(&ev), vec![("main".to_string(), "n3".to_string())]);
     }
 
     #[test]
     fn all_down_alarms_once_and_stays() {
         let mut c = Controller::new(Rules::default());
-        run(&mut c, 2, [OK, OK, OK, OK, OK]);
-        let ev = run(&mut c, 10, [GONE, GONE, GONE, GONE, GONE]);
+        run(&mut c, 2, [OK, OK, OK, OK, OK, OK]);
+        let ev = run(&mut c, 10, [GONE, GONE, GONE, GONE, GONE, GONE]);
         assert!(switched(&ev).is_empty());
         assert_eq!(ev.iter().filter(|e| matches!(e, Event::Alarm { kind: "allDown", .. })).count(), 1);
         assert_eq!(c.status(), Status::AllDown);
         // sobald eine Notquelle gesund ist, wird aufgeschaltet
-        let ev = run(&mut c, 1, [GONE, GONE, OK, GONE, GONE]);
+        let ev = run(&mut c, 1, [GONE, GONE, OK, GONE, GONE, GONE]);
         assert_eq!(switched(&ev), vec![("main".to_string(), "n2".to_string())]);
     }
 
     #[test]
     fn returns_to_main_only_after_stable_and_min_hold() {
         let mut c = Controller::new(Rules::default());
-        run(&mut c, 2, [OK, OK, OK, OK, OK]);
-        run(&mut c, 2, [GONE, OK, OK, OK, OK]);
+        run(&mut c, 2, [OK, OK, OK, OK, OK, OK]);
+        run(&mut c, 2, [GONE, OK, OK, OK, OK, OK]);
         assert_eq!(c.active, "n1");
         // Hauptsignal kommt zurück, ist aber noch nicht 3 s stabil
-        let ev = run(&mut c, 2, [OK, OK, OK, OK, OK]);
+        let ev = run(&mut c, 2, [OK, OK, OK, OK, OK, OK]);
         assert!(switched(&ev).is_empty());
-        let ev = run(&mut c, 2, [OK, OK, OK, OK, OK]);
+        let ev = run(&mut c, 2, [OK, OK, OK, OK, OK, OK]);
         assert_eq!(switched(&ev), vec![("n1".to_string(), "main".to_string())]);
         assert!(ev.iter().any(|e| matches!(e, Event::Alarm { kind: "recovered", .. })));
         assert_eq!(c.status(), Status::Normal);
@@ -446,11 +502,11 @@ mod tests {
     #[test]
     fn flapping_main_does_not_return() {
         let mut c = Controller::new(Rules::default());
-        run(&mut c, 2, [OK, OK, OK, OK, OK]);
-        run(&mut c, 2, [GONE, OK, OK, OK, OK]);
+        run(&mut c, 2, [OK, OK, OK, OK, OK, OK]);
+        run(&mut c, 2, [GONE, OK, OK, OK, OK, OK]);
         for _ in 0..5 {
-            run(&mut c, 2, [OK, OK, OK, OK, OK]); // 2 s gut …
-            run(&mut c, 1, [GONE, OK, OK, OK, OK]); // … dann wieder weg: setzt die Stabilitätszeit zurück
+            run(&mut c, 2, [OK, OK, OK, OK, OK, OK]); // 2 s gut …
+            run(&mut c, 1, [GONE, OK, OK, OK, OK, OK]); // … dann wieder weg: setzt die Stabilitätszeit zurück
         }
         assert_eq!(c.active, "n1");
     }
@@ -460,9 +516,9 @@ mod tests {
         let mut r = Rules::default();
         r.auto_return = false;
         let mut c = Controller::new(r);
-        run(&mut c, 2, [OK, OK, OK, OK, OK]);
-        run(&mut c, 2, [GONE, OK, OK, OK, OK]);
-        run(&mut c, 20, [OK, OK, OK, OK, OK]);
+        run(&mut c, 2, [OK, OK, OK, OK, OK, OK]);
+        run(&mut c, 2, [GONE, OK, OK, OK, OK, OK]);
+        run(&mut c, 20, [OK, OK, OK, OK, OK, OK]);
         assert_eq!(c.active, "n1");
         c.select("main").unwrap();
         assert_eq!(c.active, "main");
@@ -471,32 +527,32 @@ mod tests {
     #[test]
     fn failed_notquelle_moves_on_and_prefers_recovered_main() {
         let mut c = Controller::new(Rules::default());
-        run(&mut c, 2, [OK, OK, OK, OK, OK]);
-        run(&mut c, 2, [GONE, OK, OK, OK, OK]);
+        run(&mut c, 2, [OK, OK, OK, OK, OK, OK]);
+        run(&mut c, 2, [GONE, OK, OK, OK, OK, OK]);
         assert_eq!(c.active, "n1");
-        let ev = run(&mut c, 3, [GONE, GONE, OK, OK, OK]); // n1 fällt aus → n2
+        let ev = run(&mut c, 3, [GONE, GONE, OK, OK, OK, OK]); // n1 fällt aus → n2
         assert_eq!(switched(&ev), vec![("n1".to_string(), "n2".to_string())]);
         assert!(ev.iter().any(|e| matches!(e, Event::Alarm { kind: "sourceFailed", .. })));
-        let ev = run(&mut c, 3, [OK, GONE, GONE, OK, OK]); // n2 fällt aus, Hauptsignal inzwischen gesund → zurück zum Hauptsignal
+        let ev = run(&mut c, 3, [OK, GONE, GONE, OK, OK, OK]); // n2 fällt aus, Hauptsignal inzwischen gesund → zurück zum Hauptsignal
         assert_eq!(switched(&ev), vec![("n2".to_string(), "main".to_string())]);
     }
 
     #[test]
     fn manual_overrides_and_alarms_on_bad_selection() {
         let mut c = Controller::new(Rules::default());
-        run(&mut c, 2, [OK, OK, OK, OK, OK]);
+        run(&mut c, 2, [OK, OK, OK, OK, OK, OK]);
         let ev = c.select("n3").unwrap();
         assert_eq!(switched(&ev), vec![("main".to_string(), "n3".to_string())]);
         // Hauptsignal weg: bleibt auf n3 (manuell)
-        let ev = run(&mut c, 5, [GONE, OK, OK, OK, OK]);
+        let ev = run(&mut c, 5, [GONE, OK, OK, OK, OK, OK]);
         assert!(switched(&ev).is_empty());
         // n3 gestört: nur Alarm, keine Umschaltung
-        let ev = run(&mut c, 3, [GONE, OK, OK, GONE, OK]);
+        let ev = run(&mut c, 3, [GONE, OK, OK, GONE, OK, OK]);
         assert!(switched(&ev).is_empty());
         assert_eq!(ev.iter().filter(|e| matches!(e, Event::Alarm { kind: "manualBad", .. })).count(), 1);
         // Automatik: sofort auf eine gesunde Quelle
         c.auto();
-        let ev = run(&mut c, 1, [GONE, OK, OK, GONE, OK]);
+        let ev = run(&mut c, 1, [GONE, OK, OK, GONE, OK, OK]);
         assert_eq!(switched(&ev), vec![("n3".to_string(), "n1".to_string())]);
         assert!(c.select("quatsch").is_err());
     }
@@ -504,15 +560,53 @@ mod tests {
     #[test]
     fn freeze_is_a_failure_for_video_sources() {
         let mut c = Controller::new(Rules::default());
-        let frozen = Obs { present: true, level_db: Some(-20.0), frozen: Some(true) };
-        let live = Obs { present: true, level_db: Some(-20.0), frozen: Some(false) };
+        let frozen = Obs { present: true, level_db: Some(-20.0), frozen: Some(true), black: None };
+        let live = Obs { present: true, level_db: Some(-20.0), frozen: Some(false), black: None };
         for _ in 0..200 {
-            c.step(10, &[live, live, live, live, live]);
+            c.step(10, &[live, live, live, live, live, live]);
         }
-        let ev = run(&mut c, 4, [frozen, live, live, live, live]);
+        let ev = run(&mut c, 4, [frozen, live, live, live, live, live]);
         assert!(switched(&ev).is_empty());
-        let ev = run(&mut c, 2, [frozen, live, live, live, live]);
+        let ev = run(&mut c, 2, [frozen, live, live, live, live, live]);
         assert_eq!(switched(&ev), vec![("main".to_string(), "n1".to_string())]);
+    }
+
+    #[test]
+    fn black_picture_is_a_failure_and_still_image_can_be_the_last_resort() {
+        let mut r = Rules::default();
+        r.order = vec!["still".into()];
+        let mut c = Controller::new(r);
+        let black = Obs { present: true, level_db: Some(-20.0), frozen: Some(false), black: Some(true) };
+        let ok = Obs { present: true, level_db: Some(-20.0), frozen: Some(false), black: Some(false) };
+        for _ in 0..200 {
+            c.step(10, &[ok, GONE, GONE, GONE, GONE, ok]);
+        }
+        let ev = run(&mut c, 4, [black, GONE, GONE, GONE, GONE, ok]);
+        assert!(switched(&ev).is_empty(), "Schwarz < 5 s");
+        let ev = run(&mut c, 2, [black, GONE, GONE, GONE, GONE, ok]);
+        assert_eq!(switched(&ev), vec![("main".to_string(), "still".to_string())]);
+        assert_eq!(c.health_of("main").failure(&c.rules), Some(Cause::Black));
+    }
+
+    #[test]
+    fn fader_completes_the_crossfade_and_then_stays_on_the_target() {
+        let mut f = Fader::new(0);
+        assert_eq!(f.update(0), Plan::Solo(0));
+        assert_eq!(f.update(5), Plan::Fade { from: 0, to: 5, block: 0 });
+        // die Zielquelle bleibt gleich: zweiter Block, danach nur noch die neue Quelle (Regression: die Überblendung blieb am Anfang hängen)
+        assert_eq!(f.update(5), Plan::Fade { from: 0, to: 5, block: 1 });
+        for _ in 0..10 {
+            assert_eq!(f.update(5), Plan::Solo(5));
+        }
+    }
+
+    #[test]
+    fn fader_switch_during_fade_restarts_from_the_previous_target() {
+        let mut f = Fader::new(0);
+        f.update(1);
+        assert_eq!(f.update(2), Plan::Fade { from: 1, to: 2, block: 0 });
+        assert_eq!(f.update(2), Plan::Fade { from: 1, to: 2, block: 1 });
+        assert_eq!(f.update(2), Plan::Solo(2));
     }
 
     #[test]

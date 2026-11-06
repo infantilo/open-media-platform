@@ -14,6 +14,9 @@ use omp_mediaio::mxl::{MxlAudioInput, MxlAudioOutput, MxlContext};
 use omp_node_sdk::connection::{ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::RegistryClient;
 
+use crate::failover::N;
+use crate::video::VideoIo;
+
 pub const SAMPLE_RATE: u32 = 48_000;
 pub const CH: usize = 2;
 /// Taktlänge: 10 ms.
@@ -55,7 +58,7 @@ pub struct MxlIo {
     out_appsrc: gst_app::AppSrc,
     out_flowed: Arc<AtomicBool>,
     _output: MxlAudioOutput,
-    base: Mutex<(Option<u64>, u64)>,
+    base: Mutex<(Option<u64>, u64, Option<(u64, u64)>)>,
 }
 
 impl Drop for MxlIo {
@@ -119,14 +122,18 @@ impl MxlIo {
         output.set_active(true);
         let flowed = output.flowed_handle();
         pipeline.set_state(gst::State::Playing).map_err(|e| format!("Ausgang: {e}"))?;
-        let slots = (0..=CLIP_SLOT)
+        let slots = (0..N)
             .map(|_| Slot { last_data_ms: Arc::new(AtomicU64::new(0)), ring: Arc::new(Mutex::new(VecDeque::new())), source: Mutex::new(String::new()), active: Mutex::new(None) })
             .collect();
-        Ok(Arc::new(Self { ctx, slots, out_pipeline: pipeline, out_appsrc: appsrc, out_flowed: flowed, _output: output, base: Mutex::new((None, 0)) }))
+        Ok(Arc::new(Self { ctx, slots, out_pipeline: pipeline, out_appsrc: appsrc, out_flowed: flowed, _output: output, base: Mutex::new((None, 0, None)) }))
     }
 
     pub fn out_flowed(&self) -> bool {
         self.out_flowed.load(Ordering::Relaxed)
+    }
+
+    pub fn context(&self) -> Arc<MxlContext> {
+        self.ctx.clone()
     }
 
     pub fn source_of(&self, slot: usize) -> String {
@@ -199,7 +206,7 @@ impl MxlIo {
     }
 
     /// Notclip: Datei decodieren und in Schleife in Echtzeit in den Ring der Quelle `CLIP_SLOT` schieben (leer = aus).
-    pub fn set_clip(self: &Arc<Self>, path: String) {
+    pub fn set_clip(self: &Arc<Self>, path: String, video: Option<Arc<VideoIo>>) {
         let me = self.clone();
         std::thread::spawn(move || {
             let s = &me.slots[CLIP_SLOT];
@@ -213,7 +220,7 @@ impl MxlIo {
             let wanted = || *s.source.lock().expect("lock poisoned") == path;
             let mut warned = false;
             while wanted() {
-                match me.build_clip(&path) {
+                match me.build_clip(&path, video.clone()) {
                     Ok(a) => {
                         warned = false;
                         let bus = a.pipeline.bus().expect("Bus");
@@ -249,7 +256,7 @@ impl MxlIo {
         });
     }
 
-    fn build_clip(&self, path: &str) -> Result<ActiveInput, String> {
+    fn build_clip(&self, path: &str, video: Option<Arc<VideoIo>>) -> Result<ActiveInput, String> {
         let s = &self.slots[CLIP_SLOT];
         let uri = gst::glib::filename_to_uri(path, None).map_err(|e| e.to_string())?;
         let pipeline = gst::Pipeline::new();
@@ -262,13 +269,29 @@ impl MxlIo {
         pipeline.add_many([&src, &conv, &resample, &filter, sink.upcast_ref::<gst::Element>()]).map_err(|e| e.to_string())?;
         gst::Element::link_many([&conv, &resample, &filter, sink.upcast_ref::<gst::Element>()]).map_err(|e| format!("link: {e}"))?;
         let conv_sink = conv.static_pad("sink").ok_or("audioconvert ohne sink")?;
+        let pl = pipeline.clone();
         src.connect_pad_added(move |_, pad| {
-            if conv_sink.is_linked() {
-                return;
-            }
-            let is_audio = pad.current_caps().or_else(|| Some(pad.query_caps(None))).map(|c| c.structure(0).is_some_and(|st| st.name().starts_with("audio/"))).unwrap_or(false);
-            if is_audio {
-                let _ = pad.link(&conv_sink);
+            let name = pad.current_caps().or_else(|| Some(pad.query_caps(None))).and_then(|c| c.structure(0).map(|st| st.name().to_string())).unwrap_or_default();
+            if name.starts_with("audio/") {
+                if !conv_sink.is_linked() {
+                    let _ = pad.link(&conv_sink);
+                }
+            } else if name.starts_with("video/") {
+                // Bild des Notclips: in den Bildspeicher der Notclip-Quelle (Echtzeit, Schleife wie der Ton)
+                if let Some(v) = &video {
+                    if let Ok(q) = gst::ElementFactory::make("queue").build() {
+                        if pl.add(&q).is_ok() {
+                            let _ = q.sync_state_with_parent();
+                            if let Some(qs) = q.static_pad("sink") {
+                                if !qs.is_linked() && pad.link(&qs).is_ok() {
+                                    if let Err(e) = v.attach_branches(&pl, CLIP_SLOT, &q, true) {
+                                        eprintln!("omp-failover: Notclip-Bild: {e}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         });
         pipeline.set_state(gst::State::Playing).map_err(|e| format!("Playing: {e}"))?;
@@ -285,6 +308,25 @@ impl MxlIo {
             out[i] = v;
         }
         n / CH
+    }
+
+    /// Block mit Ursprungszeit auf dem MXL-Raster (Fernsehbetrieb: Bild und Ton liegen damit auf demselben Zeitraster).
+    pub fn push_output_origin(&self, block: &[f32], ts_ns: u64) {
+        let mut bytes = Vec::with_capacity(block.len() * 4);
+        for v in block {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut buffer = gst::Buffer::from_slice(bytes);
+        {
+            let now_ns = self.out_pipeline.current_running_time().map(|t| t.nseconds()).unwrap_or(0);
+            let mut c = self.base.lock().expect("lock poisoned");
+            let (t0_run, t0_ts) = *c.2.get_or_insert((now_ns, ts_ns));
+            let b = buffer.get_mut().expect("neuer Puffer");
+            b.set_pts(gst::ClockTime::from_nseconds(t0_run + ts_ns.saturating_sub(t0_ts)));
+            b.set_duration(gst::ClockTime::from_nseconds(10_000_000));
+            gst::ReferenceTimestampMeta::add(b, &omp_mediaio::mxl::tai_reference_caps(), gst::ClockTime::from_nseconds(ts_ns), gst::ClockTime::NONE);
+        }
+        let _ = self.out_appsrc.push_buffer(buffer);
     }
 
     pub fn push_output(&self, block: &[f32]) {

@@ -31,7 +31,7 @@ Alle Haltezeiten und Schwellen sind **Eigenlösung** (keine Norm legt sie fest);
 ## 3. Aufbau und Scheiben
 
 1. **Kern + Audio (Radio)** — `omp-failover` mit MXL-Audio-Eingängen Haupt + Notquelle 1–3 + Notclip (Datei in Schleife), ein dauerhafter MXL-Audio-Ausgang, Alarm, Ereignisprotokoll, Bedienfeld.
-2. **Bild (Fernsehen)** — Video-Eingänge/-Ausgang im Zielformat, Freeze- und Schwarzerkennung, Standbild als Notquelle, Umschaltung auf Bildgrenze, Bild und Ton gemeinsam (eine Entscheidung, ein Umschaltpunkt).
+2. **Bild (Fernsehen)** — *umgesetzt 2026-11-06 (UMSETZUNG RH2)* — Video-Eingänge/-Ausgang im Zielformat, Freeze- und Schwarzerkennung, Standbild als Notquelle, Umschaltung auf Bildgrenze, Bild und Ton gemeinsam (eine Entscheidung, ein Umschaltpunkt).
 3. **Betrieb** — Anschluss an Alarmwege/Stream Deck, Prüfmuster zum Testen der Kette („Havarie proben“), Kennzahlen für `/metrics`, Doppelung (zwei Wächter hintereinander ist zu vermeiden).
 
 ## 4. Annahmen (bitte bestätigen oder korrigieren)

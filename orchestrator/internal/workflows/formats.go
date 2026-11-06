@@ -133,6 +133,13 @@ var allowedRoleEnv = map[string][]string{
 	"OMP_STUDIO_GPIO_LABEL":  nil,
 	"OMP_GPIO_INPUTS":        nil,
 	"OMP_GPIO_OUTPUTS":       nil,
+	// Havarieumschalter (Kapitel 89): Fernsehbetrieb, Ausgangsformat, Notclip, Standbild
+	"OMP_FAILOVER_VIDEO":  {"0", "1"},
+	"OMP_FAILOVER_WIDTH":  nil,
+	"OMP_FAILOVER_HEIGHT": nil,
+	"OMP_FAILOVER_FPS":    nil,
+	"OMP_FAILOVER_CLIP":   nil,
+	"OMP_FAILOVER_STILL":  nil,
 }
 
 // validateRoleEnv prüft Role.Env gegen die Allowlist.

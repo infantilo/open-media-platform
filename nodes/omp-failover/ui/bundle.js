@@ -10,7 +10,7 @@ const T = (() => {
       order: "Reihenfolge der Notquellen", orderHint: "Die erste gesunde Quelle von oben übernimmt. Nicht angehakte werden nicht benutzt.", clip: "Notclip (Datei auf dem Host, Schleife)", save: "Speichern", dirty: "ungespeicherte Änderungen", saved: "Einstellungen gespeichert.",
       events: "Protokoll", noEvents: "Noch keine Ereignisse.", fail: "{m} fehlgeschlagen: {d}", up: "nach oben", down: "nach unten",
       askTake: "Hauptsignal ist in Ordnung. Wirklich auf „{n}“ umschalten?", askGo: "Umschalten", hint: "Alle Zeiten sind Eigenwerte (keine Norm). Automatik schaltet nach Ablauf der Haltezeiten auf die erste gesunde Quelle der Reihenfolge und kehrt nach stabiler Rückkehr des Hauptsignals zurück.",
-      cNo: "kein Signal", cSi: "Stille", cFr: "Standbild",
+      cNo: "kein Signal", cSi: "Stille", cFr: "Standbild", cBl: "Schwarzbild", freeze: "Standbild (s)", black: "Schwarzbild (s)", still: "Standbild als Notquelle (Bilddatei auf dem Host)",
     },
     en: {
       st_normal: "NORMAL", st_havarie: "EMERGENCY — fallback active", st_allDown: "ALL SOURCES FAILED", on: "on air", since: "for {t}", modeAuto: "AUTO", modeManual: "MANUAL",
@@ -20,7 +20,7 @@ const T = (() => {
       order: "Order of fallback sources", orderHint: "The first healthy source from the top takes over. Unchecked sources are not used.", clip: "Fallback clip (file on the host, loop)", save: "Save", dirty: "unsaved changes", saved: "Settings saved.",
       events: "Log", noEvents: "No events yet.", fail: "{m} failed: {d}", up: "up", down: "down",
       askTake: "The main signal is fine. Really switch to “{n}”?", askGo: "Switch", hint: "All times are our own values (no standard). Automatic mode switches to the first healthy source of the order after the hold times and returns after the main signal has been stable again.",
-      cNo: "no signal", cSi: "silence", cFr: "freeze",
+      cNo: "no signal", cSi: "silence", cFr: "freeze", cBl: "black", freeze: "Freeze (s)", black: "Black (s)", still: "Still image as fallback (image file on the host)",
     },
   };
   const lang = document.documentElement.lang === "en" ? "en" : "de";
@@ -110,10 +110,11 @@ class OmpFailoverPanel extends HTMLElement {
       show(T("fail", { m: method, d: d || r.status })); return false;
     };
     let st = { status: "normal", mode: "auto", active: "main", activeSinceMs: 0 }, sources = [], events = [];
-    let cfg = { noSignalMs: 1500, silenceDb: -60, silenceMs: 5000, healthyMs: 500, returnMs: 3000, minHoldMs: 2000, autoReturn: true, order: ["n1", "n2", "n3", "clip"], clipFile: "" };
+    let cfg = { noSignalMs: 1500, silenceDb: -60, silenceMs: 5000, freezeMs: 5000, blackMs: 5000, healthyMs: 500, returnMs: 3000, minHoldMs: 2000, autoReturn: true, order: ["n1", "n2", "n3", "clip"], clipFile: "", stillFile: "" };
     let dirty = false, initialised = false;
-    const NAMES = { main: "Hauptsignal", n1: "Notquelle 1", n2: "Notquelle 2", n3: "Notquelle 3", clip: "Notclip" };
-    const ALL = ["n1", "n2", "n3", "clip"];
+    const NAMES = { main: "Hauptsignal", n1: "Notquelle 1", n2: "Notquelle 2", n3: "Notquelle 3", clip: "Notclip", still: "Standbild" };
+    let videoMode = false;
+    const allSources = () => (videoMode ? ["n1", "n2", "n3", "clip", "still"] : ["n1", "n2", "n3", "clip"]);
 
     // ---- Zustand ----
     const bigEl = h("div", { class: "big" }), subEl = h("div", { class: "sub" }), modeChip = h("span", { class: "chip" });
@@ -124,10 +125,11 @@ class OmpFailoverPanel extends HTMLElement {
     const tbody = h("tbody");
     let rowSig = "", rowEls = {};
     const renderSources = () => {
-      const sig = JSON.stringify(sources.map((s) => [s.id, s.priority]));
+      const shown = sources.filter((s) => s.id !== "still" || videoMode);
+      const sig = JSON.stringify(shown.map((s) => [s.id, s.priority]));
       if (sig !== rowSig) {
         rowSig = sig; rowEls = {};
-        tbody.replaceChildren(...sources.map((s) => {
+        tbody.replaceChildren(...shown.map((s) => {
           const lvl = h("div"), db = h("span", { class: "db" }), stEl = h("span", { class: "st" });
           const btn = h("button", { class: "take", onclick: async () => {
             const main = sources.find((x) => x.id === "main");
@@ -143,7 +145,7 @@ class OmpFailoverPanel extends HTMLElement {
         const e = rowEls[s.id]; if (!e) continue;
         e.lvl.style.width = `${Math.max(0, Math.min(100, ((s.levelDb + 60) / 60) * 100))}%`;
         e.db.textContent = s.levelDb <= -119 ? "−∞" : s.levelDb.toFixed(1);
-        const cause = s.cause && s.state !== "nichtverbunden" ? ` (${({ "kein Signal": T("cNo"), Stille: T("cSi"), Standbild: T("cFr") })[s.cause] || s.cause})` : "";
+        const cause = s.cause && s.state !== "nichtverbunden" ? ` (${({ "kein Signal": T("cNo"), Stille: T("cSi"), Standbild: T("cFr"), Schwarzbild: T("cBl") })[s.cause] || s.cause})` : "";
         e.stEl.textContent = T("s." + s.state) + cause; e.stEl.className = `st ${s.state}`;
         e.tr.className = `${s.active ? "act" : ""}${s.active && s.state === "gestoert" ? " bad" : ""}`;
         e.btn.textContent = s.active ? T("live") : T("take"); e.btn.disabled = !!s.active || !s.connected;
@@ -154,12 +156,14 @@ class OmpFailoverPanel extends HTMLElement {
     const dirtyEl = h("span", { class: "dirty" }), markDirty = () => { dirty = true; dirtyEl.textContent = T("dirty"); };
     const num = (key, scale = 1, step = "1", w = "90px") => h("input", { type: "number", step, style: `width:${w}`, "data-k": key, oninput: (e) => { cfg[key] = e.target.value === "" ? 0 : Number(e.target.value) * scale; markDirty(); } });
     const inNo = num("noSignalMs", 1000, "0.1"), inSd = num("silenceDb", 1, "1"), inSm = num("silenceMs", 1000, "0.5"), inHe = num("healthyMs", 1000, "0.1"), inRe = num("returnMs", 1000, "0.5"), inMh = num("minHoldMs", 1000, "0.5");
+    const inFr = num("freezeMs", 1000, "0.5"), inBl = num("blackMs", 1000, "0.5");
+    const inStill = h("input", { type: "text", style: "width:340px", placeholder: "/pfad/notbild.png", oninput: (e) => { cfg.stillFile = e.target.value; markDirty(); } });
     const inAuto = h("input", { type: "checkbox", style: "width:auto", onchange: (e) => { cfg.autoReturn = e.target.checked; markDirty(); } });
     const inClip = h("input", { type: "text", style: "width:340px", placeholder: "/pfad/notclip.wav", oninput: (e) => { cfg.clipFile = e.target.value; markDirty(); } });
     const ordEl = h("div", { class: "ord" });
     let ordUsed = [];
     const renderOrder = () => {
-      const rest = ALL.filter((x) => !ordUsed.includes(x));
+      const rest = allSources().filter((x) => !ordUsed.includes(x));
       const rows = [...ordUsed.map((id) => [id, true]), ...rest.map((id) => [id, false])];
       ordEl.replaceChildren(...rows.map(([id, used], i) => h("div", { class: "r" },
         h("input", { type: "checkbox", style: "width:auto", checked: used, onchange: (e) => { if (e.target.checked) ordUsed.push(id); else ordUsed = ordUsed.filter((x) => x !== id); cfg.order = [...ordUsed]; markDirty(); renderOrder(); } }),
@@ -168,20 +172,22 @@ class OmpFailoverPanel extends HTMLElement {
         h("button", { title: T("down"), disabled: !used || i >= ordUsed.length - 1, onclick: () => { [ordUsed[i + 1], ordUsed[i]] = [ordUsed[i], ordUsed[i + 1]]; cfg.order = [...ordUsed]; markDirty(); renderOrder(); } }, "↓"))));
     };
     const fillCfg = () => {
-      inNo.value = cfg.noSignalMs / 1000; inSd.value = cfg.silenceDb; inSm.value = cfg.silenceMs / 1000; inHe.value = cfg.healthyMs / 1000; inRe.value = cfg.returnMs / 1000; inMh.value = cfg.minHoldMs / 1000;
+      inNo.value = cfg.noSignalMs / 1000; inSd.value = cfg.silenceDb; inSm.value = cfg.silenceMs / 1000; inFr.value = cfg.freezeMs / 1000; inBl.value = cfg.blackMs / 1000; inStill.value = cfg.stillFile || ""; inHe.value = cfg.healthyMs / 1000; inRe.value = cfg.returnMs / 1000; inMh.value = cfg.minHoldMs / 1000;
       inAuto.checked = cfg.autoReturn; inClip.value = cfg.clipFile || ""; ordUsed = [...cfg.order]; renderOrder();
     };
     const saveBtn = h("button", { class: "primary", onclick: async () => {
-      const w = [["noSignalMs", cfg.noSignalMs], ["silenceDb", cfg.silenceDb], ["silenceMs", cfg.silenceMs], ["healthyMs", cfg.healthyMs], ["returnMs", cfg.returnMs], ["minHoldMs", cfg.minHoldMs], ["autoReturn", cfg.autoReturn], ["order", JSON.stringify(cfg.order)], ["clipFile", cfg.clipFile || ""]];
+      const w = [["noSignalMs", cfg.noSignalMs], ["silenceDb", cfg.silenceDb], ["silenceMs", cfg.silenceMs], ["freezeMs", cfg.freezeMs], ["blackMs", cfg.blackMs], ["healthyMs", cfg.healthyMs], ["returnMs", cfg.returnMs], ["minHoldMs", cfg.minHoldMs], ["autoReturn", cfg.autoReturn], ["order", JSON.stringify(cfg.order)], ["clipFile", cfg.clipFile || ""]].concat(videoMode ? [["stillFile", cfg.stillFile || ""]] : []);
       for (const [k, v] of w) { const r = await setParam(k, v); if (!r.ok) { show(T("fail", { m: k, d: r.status })); return; } }
       dirty = false; dirtyEl.textContent = ""; show(T("saved"), true); poll();
     } }, T("save"));
     const lab = (txt, el) => h("label", {}, txt, el);
+    const videoBar = h("div", { class: "bar", style: "display:none" }, lab(T("freeze"), inFr), lab(T("black"), inBl));
+    const stillBar = h("div", { class: "bar", style: "display:none" }, lab(T("still"), inStill));
     const settingsSec = h("details", { class: "sec" }, h("summary", {}, T("settings")), h("div", { class: "body" },
       h("div", { class: "bar" }, lab(T("noSignal"), inNo), lab(T("silenceDb"), inSd), lab(T("silenceMs"), inSm), lab(T("healthy"), inHe), lab(T("returnT"), inRe), lab(T("minHold"), inMh),
         h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, inAuto, T("autoReturn"))),
       h("div", { class: "muted", style: "margin:6px 0 4px" }, T("order")), ordEl, h("p", { class: "hint" }, T("orderHint")),
-      h("div", { class: "bar" }, lab(T("clip"), inClip)), h("div", { class: "bar" }, saveBtn, dirtyEl), h("p", { class: "hint" }, T("hint"))));
+      h("div", { class: "bar" }, lab(T("clip"), inClip)), videoBar, stillBar, h("div", { class: "bar" }, saveBtn, dirtyEl), h("p", { class: "hint" }, T("hint"))));
 
     // ---- Protokoll ----
     const evEl = h("div", { class: "evbox" });
@@ -196,11 +202,12 @@ class OmpFailoverPanel extends HTMLElement {
 
     const poll = async () => {
       try {
-        const [stt, mode, active, since, src, ev, no, sd, sm, he, re, mh, ar, ord, clip] = await Promise.all(["status", "mode", "active", "activeSinceMs", "sources", "events", "noSignalMs", "silenceDb", "silenceMs", "healthyMs", "returnMs", "minHoldMs", "autoReturn", "order", "clipFile"].map(getParam));
+        const [stt, mode, active, since, src, ev, no, sd, sm, he, re, mh, ar, ord, clip, vm, fr, bl, stl] = await Promise.all(["status", "mode", "active", "activeSinceMs", "sources", "events", "noSignalMs", "silenceDb", "silenceMs", "healthyMs", "returnMs", "minHoldMs", "autoReturn", "order", "clipFile", "videoMode", "freezeMs", "blackMs", "stillFile"].map(getParam));
+        videoMode = !!vm; videoBar.style.display = stillBar.style.display = videoMode ? "" : "none";
         st = { status: stt || "normal", mode: mode || "auto", active: active || "main", activeSinceMs: since || 0 };
         if (src) sources = JSON.parse(src);
         if (ev) events = JSON.parse(ev);
-        if (!initialised || !dirty) { cfg = { noSignalMs: no, silenceDb: sd, silenceMs: sm, healthyMs: he, returnMs: re, minHoldMs: mh, autoReturn: ar, order: JSON.parse(ord || "[]"), clipFile: clip || "" }; if (!initialised || !shadow.activeElement) fillCfg(); initialised = true; }
+        if (!initialised || !dirty) { cfg = { noSignalMs: no, silenceDb: sd, silenceMs: sm, freezeMs: fr ?? 5000, blackMs: bl ?? 5000, healthyMs: he, returnMs: re, minHoldMs: mh, autoReturn: ar, order: JSON.parse(ord || "[]"), clipFile: clip || "", stillFile: stl || "" }; if (!initialised || !shadow.activeElement) fillCfg(); initialised = true; }
         statusEl.className = `status ${st.status}`;
         bigEl.textContent = T("st_" + st.status);
         subEl.textContent = `${NAMES[st.active] || st.active} — ${T("on")} ${T("since", { t: fmtDur(st.activeSinceMs) })}`;
