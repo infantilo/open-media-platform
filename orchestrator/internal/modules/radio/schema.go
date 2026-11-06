@@ -48,3 +48,14 @@ CREATE TABLE IF NOT EXISTS radio_show_skips (
     PRIMARY KEY (source_template_id, slot_start)
 );
 `
+
+// Version 3: weiche Bearbeitungssperre (wer bearbeitet gerade) — ein Halter je Sendung, verfällt ohne Herzschlag.
+const schemaV3 = `
+CREATE TABLE IF NOT EXISTS radio_show_locks (
+    show_id  TEXT PRIMARY KEY REFERENCES radio_shows(id) ON DELETE CASCADE,
+    holder   TEXT NOT NULL,
+    session  TEXT NOT NULL,
+    since    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    beat     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+`

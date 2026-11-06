@@ -3,6 +3,7 @@ package radio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -146,5 +147,60 @@ func TestAutoTransitions(t *testing.T) {
 	m.Transition(ctx, now.Add(90*time.Minute))
 	if status(running.ID) != StatusDone || status(later.ID) != StatusLive {
 		t.Fatalf("Ende: %s %s", status(running.ID), status(later.ID))
+	}
+}
+
+func TestLockLifecycle(t *testing.T) {
+	st, _ := newStore(t)
+	ctx := context.Background()
+	sh, err := st.Create(ctx, Input{Title: "Sperre"}, "anna")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if l, err := st.Acquire(ctx, sh.ID, "anna", "tab1", false, now); err != nil || l.Holder != "anna" {
+		t.Fatalf("Anna holt: %+v %v", l, err)
+	}
+	// Erneuerung durch dieselbe Sitzung, since bleibt
+	l, err := st.Acquire(ctx, sh.ID, "anna", "tab1", false, now.Add(10*time.Second))
+	if err != nil || !l.Since.Equal(now.Truncate(time.Microsecond)) {
+		t.Fatalf("Herzschlag: %+v %v", l, err)
+	}
+	// derselbe Nutzer in anderem Tab und andere Personen werden abgewiesen, mit Halter
+	for _, who := range [][2]string{{"anna", "tab2"}, {"ben", "x"}} {
+		l, err := st.Acquire(ctx, sh.ID, who[0], who[1], false, now.Add(15*time.Second))
+		if err != ErrLocked || l == nil || l.Holder != "anna" || l.Session != "tab1" {
+			t.Fatalf("%v: %+v %v", who, l, err)
+		}
+	}
+	if g, _ := st.GetLock(ctx, sh.ID, now.Add(15*time.Second)); g == nil || !g.Active {
+		t.Fatal("Sperre aktiv")
+	}
+	// Übernahme
+	if l, err := st.Acquire(ctx, sh.ID, "ben", "x", true, now.Add(16*time.Second)); err != nil || l.Holder != "ben" {
+		t.Fatalf("Übernahme: %+v %v", l, err)
+	}
+	// Anna merkt es beim nächsten Herzschlag
+	if _, err := st.Acquire(ctx, sh.ID, "anna", "tab1", false, now.Add(20*time.Second)); err != ErrLocked {
+		t.Fatalf("Anna hat die Sperre verloren: %v", err)
+	}
+	// ohne Herzschlag verfällt sie
+	if g, _ := st.GetLock(ctx, sh.ID, now.Add(16*time.Second+lockTTL+time.Second)); g == nil || g.Active {
+		t.Fatalf("verfallen: %+v", g)
+	}
+	if l, err := st.Acquire(ctx, sh.ID, "anna", "tab1", false, now.Add(16*time.Second+lockTTL+time.Second)); err != nil || l.Holder != "anna" {
+		t.Fatalf("nach Verfall frei: %+v %v", l, err)
+	}
+	// Freigabe nur durch den Halter
+	_ = st.Release(ctx, sh.ID, "ben", "x")
+	if g, _ := st.GetLock(ctx, sh.ID, time.Now()); g == nil || g.Holder != "anna" {
+		t.Fatalf("fremde Freigabe wirkt nicht: %+v", g)
+	}
+	_ = st.Release(ctx, sh.ID, "anna", "tab1")
+	if g, _ := st.GetLock(ctx, sh.ID, time.Now()); g != nil {
+		t.Fatalf("freigegeben: %+v", g)
+	}
+	if _, err := st.Acquire(ctx, "gibtsnicht", "anna", "t", false, now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unbekannte Sendung: %v", err)
 	}
 }

@@ -2034,6 +2034,24 @@
     "domain": "core"
   },
   {
+    "method": "DELETE",
+    "path": "/api/v1/radio/shows/{id}/lock",
+    "auth": "feature:FeatPrepare",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/radio/shows/{id}/lock",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/radio/shows/{id}/lock",
+    "auth": "feature:FeatPrepare",
+    "domain": "core"
+  },
+  {
     "method": "POST",
     "path": "/api/v1/radio/shows/{id}/status",
     "auth": "feature:FeatPrepare|FeatRelease",

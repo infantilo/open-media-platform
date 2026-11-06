@@ -34,6 +34,8 @@ const T = (() => {
       "wd.MO": "Mo", "wd.TU": "Di", "wd.WE": "Mi", "wd.TH": "Do", "wd.FR": "Fr", "wd.SA": "Sa", "wd.SU": "So",
       recur: "Wiederkehr (aus dieser Vorlage Sendungen im Voraus anlegen)", recurOn: "Wiederkehr an", recurDays: "Wochentage", recurTime: "Beginn (Uhr)", recurDur: "Dauer (min)", recurTz: "Zeitzone", recurHorizon: "Vorlauf (Tage)", recurUntil: "Bis (Datum, leer = unbegrenzt)", recurBad: "Wiederkehr unvollständig: Wochentage, Beginn und Dauer angeben.",
       autoLive: "Status automatisch nach dem Zeitfenster (live/gesendet)", autoLoad: "Automatisch laden und zum Sendebeginn starten", autoLead: "Vorlauf (min)",
+      lockedBy: "{u} bearbeitet diese Sendung gerade — schreibgeschützt.", lockTake: "Bearbeitung übernehmen", lockLost: "Die Bearbeitung wurde von {u} übernommen — schreibgeschützt.", lockMine: "Du bearbeitest",
+      tp: "Teleprompter", tpClose: "Schließen", tpMirror: "Spiegeln", tpSpeed: "Auto-Scroll", tpSize: "Schrift", tpEmpty: "Keine Karten in dieser Sendung.", readTime: "Lesezeit ≈ {t}", readOver: "länger als geplant ({m} min)",
       hint: "Eine harte Marke (Uhrzeit) lässt das Element zu dieser Zeit einsetzen: beim Start werden Füller weggelassen/eingefügt und Segue-Punkte verschoben (Entscheidungen im As-Run). Der Segue-Punkt ist die Stelle in der Datei, ab der der Nachfolger starten darf; ohne Angabe 3 s vor Dateiende. Der Log wird erst mit „Log laden“ übernommen.",
     },
     en: {
@@ -67,6 +69,8 @@ const T = (() => {
       "wd.MO": "Mon", "wd.TU": "Tue", "wd.WE": "Wed", "wd.TH": "Thu", "wd.FR": "Fri", "wd.SA": "Sat", "wd.SU": "Sun",
       recur: "Recurrence (create shows from this template in advance)", recurOn: "Recurrence on", recurDays: "Weekdays", recurTime: "Start (time)", recurDur: "Duration (min)", recurTz: "Time zone", recurHorizon: "Lead (days)", recurUntil: "Until (date, empty = unlimited)", recurBad: "Recurrence incomplete: give weekdays, start and duration.",
       autoLive: "Status automatically after the time window (live/aired)", autoLoad: "Load automatically and start at show start", autoLead: "Lead (min)",
+      lockedBy: "{u} is editing this show — read only.", lockTake: "Take over editing", lockLost: "Editing was taken over by {u} — read only.", lockMine: "You are editing",
+      tp: "Teleprompter", tpClose: "Close", tpMirror: "Mirror", tpSpeed: "Auto-scroll", tpSize: "Size", tpEmpty: "No cards in this show.", readTime: "Reading time ≈ {t}", readOver: "longer than planned ({m} min)",
       hint: "A hard mark (time of day) makes the item start at that time: at start, fillers are dropped/inserted and segue points are moved (decisions in the as-run). The segue point is the position in the file from which the next item may start; without it, 3 s before the end. The log only takes effect with “Load log”.",
     },
   };
@@ -153,6 +157,11 @@ const STYLE = `
   .wday h5 { margin: 0 0 4px; font-size: 11px; color: var(--mut); display: flex; justify-content: space-between; align-items: center; } .wday h5 button { padding: 0 6px; font-size: 11px; }
   .wshow { display: block; width: 100%; text-align: left; margin-bottom: 4px; padding: 3px 5px; border-radius: 4px; border: 1px solid var(--bd); background: var(--bg3); font-size: 11px; } .wshow.ready { background: #1f3f66; } .wshow.live { background: #2a6a30; } .wshow.done { opacity: .55; } .wshow.sel { outline: 2px solid #fff; } .wshow.overlap { border-color: var(--err); }
   .wshow .wt { color: var(--mut); font-variant-numeric: tabular-nums; } .recur { margin-top: 8px; padding: 8px; border: 1px dashed var(--bd); border-radius: 5px; display: none; } .recur.show { display: block; } .recur .days { display: flex; gap: 8px; flex-wrap: wrap; } .recur .days label { flex-direction: row; align-items: center; gap: 3px; }
+  .card .rt { grid-column: 1 / -1; font-size: 11px; color: var(--mut); } .card .rt.over { color: var(--err); }
+  .tp { position: fixed; inset: 0; z-index: 99999; background: #000; color: #fff; display: none; flex-direction: column; font-family: system-ui, sans-serif; } .tp.open { display: flex; }
+  .tp .bar2 { display: flex; gap: 14px; align-items: center; padding: 8px 14px; background: #111; border-bottom: 1px solid #333; font-size: 14px; } .tp .bar2 .grow { flex: 1; } .tp .bar2 button, .tp .bar2 input { font-size: 14px; }
+  .tp .scroll { flex: 1; overflow-y: auto; padding: 5vh 8vw 40vh; scroll-behavior: smooth; } .tp .scroll.mirror { transform: scaleX(-1); }
+  .tp .tc { margin-bottom: 4vh; opacity: .45; } .tp .tc.active { opacity: 1; } .tp .tc h3 { margin: 0 0 1vh; font-size: .55em; color: #8ab4ff; text-transform: uppercase; letter-spacing: .06em; } .tp .tc .tx { white-space: pre-wrap; line-height: 1.5; }
   .hk { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
   .hkkey { position: relative; min-height: 58px; padding: 6px 8px; border-radius: 5px; border: 1px solid rgba(255,255,255,.2); color: #fff; text-align: left; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; }
   .hkkey .nm { font-weight: 700; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,.6); } .hkkey .tm { font-variant-numeric: tabular-nums; font-size: 11px; opacity: .9; }
@@ -161,6 +170,7 @@ const STYLE = `
   .hked { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; align-items: end; padding: 6px; border: 1px solid var(--bd); border-radius: 5px; margin-bottom: 6px; } .hked label { display: flex; flex-direction: column; gap: 2px; color: var(--mut); }
 `;
 
+const readSeconds = (text) => { const w = (text || "").trim().split(/\s+/).filter(Boolean).length; return w ? Math.round(w / 2.5) : 0; }; // ≈ 150 Wörter/min (Sprechtempo Moderation)
 const fmtMs = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const blankItem = () => ({ id: "", kind: "song", file: "", durationMs: 180000, somMs: 0, introMs: null, outroMs: null, gainDb: 0, optional: false, fixText: "", title: "", block: "" });
 const fixToUnix = (text) => { const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(text.trim()); if (!m || +m[1] > 23 || +m[2] > 59 || +(m[3] || 0) > 59) return null; const d = new Date(); d.setHours(+m[1], +m[2], +(m[3] || 0), 0); if (d.getTime() < Date.now()) d.setDate(d.getDate() + 1); return d.getTime(); };
@@ -363,6 +373,37 @@ class OmpRadioAutomationPanel extends HTMLElement {
       }));
     };
 
+    // ---- Teleprompter (Vollbild): alle Karten als fortlaufender Text, die aktive hervorgehoben und mitgeführt ----
+    let tpSize = 48, tpActive = null, tpTimer = null;
+    const tpScroll = h("div", { class: "scroll" });
+    const tpTitle = h("span", { class: "grow" }), tpClock = h("span", {});
+    const tpSpeed = h("input", { type: "range", min: "0", max: "120", value: "0", title: T("tpSpeed") });
+    const tpMirror = h("input", { type: "checkbox", onchange: () => tpScroll.classList.toggle("mirror", tpMirror.checked) });
+    const tp = h("div", { class: "tp" },
+      h("div", { class: "bar2" }, tpTitle, tpClock, h("label", {}, T("tpSpeed") + " ", tpSpeed), h("label", {}, tpMirror, " " + T("tpMirror")),
+        h("button", { onclick: () => { tpSize = Math.max(20, tpSize - 4); renderTp(); } }, "A−"), h("button", { onclick: () => { tpSize = Math.min(120, tpSize + 4); renderTp(); } }, "A+"),
+        h("button", { onclick: () => closeTp() }, T("tpClose"))), tpScroll);
+    const scriptOrder = () => {
+      const idx = (c) => { const a = c.atItem || ""; if (!a) return -1; const k = rows.findIndex((r, i) => (r.id || `e${i + 1}`) === a); return k < 0 ? rows.length : k; };
+      return cards.map((c, i) => ({ c, i })).sort((a, b) => idx(a.c) - idx(b.c) || a.i - b.i).map((x) => x.c);
+    };
+    const curItemId = () => { const its = view.items || []; const el = view.startUnixMs > 0 ? view.nowUnixMs - view.startUnixMs : null; const i = el === null ? -1 : its.findIndex((x) => el >= x.startMs && el < x.endMs); return i >= 0 ? its[i].id : (el === null ? "" : null); };
+    const renderTp = () => {
+      tpScroll.style.fontSize = tpSize + "px"; tpTitle.textContent = curShow ? curShow.title : "";
+      tpClock.textContent = new Date(view.nowUnixMs || Date.now()).toLocaleTimeString(LOCALE);
+      const list = scriptOrder(); const cur = curItemId();
+      if (!list.length) { tpScroll.replaceChildren(h("div", { class: "tc active" }, h("div", { class: "tx" }, T("tpEmpty")))); return; }
+      const els = list.map((c) => { const active = cur !== null && (c.atItem || "") === cur; return h("div", { class: `tc${active ? " active" : ""}`, "data-id": c.id }, h("h3", {}, `${c.title || ""}${c.minutes ? ` · ${c.minutes} ${T("cardMin")}` : ""}`), h("div", { class: "tx" }, c.text || "")); });
+      const sy = tpScroll.scrollTop; tpScroll.replaceChildren(...els); tpScroll.scrollTop = sy;
+      const act = els.find((e) => e.classList.contains("active")); const key = act ? act.dataset.id : null;
+      if (key && key !== tpActive) { tpActive = key; act.scrollIntoView({ block: "center" }); }
+    };
+    const openTp = () => { tp.classList.add("open"); tpActive = null; renderTp(); try { tp.requestFullscreen && tp.requestFullscreen(); } catch { /* ohne Vollbild */ }
+      clearInterval(tpTimer); tpTimer = setInterval(() => { renderTp(); if (Number(tpSpeed.value) > 0) tpScroll.scrollBy({ top: Number(tpSpeed.value) / 4 }); }, 250); };
+    const closeTp = () => { tp.classList.remove("open"); clearInterval(tpTimer); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); };
+    addEventListener("keydown", (e) => { if (e.key === "Escape" && tp.classList.contains("open")) closeTp(); });
+    const tpBtn = h("button", { onclick: openTp }, T("tp"));
+
     // ---- Wochenplan ----
     let weekStart = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; })();
     let weekShows = [];
@@ -479,8 +520,8 @@ class OmpRadioAutomationPanel extends HTMLElement {
       statChip.textContent = curShow ? (curShow.template ? T("showTpl") : T("ss." + curShow.status)) : T("showNone"); statChip.className = `sstat ${curShow ? curShow.status : ""}`;
       const st = curShow ? curShow.status : "";
       const editable = open && (st === "draft" || st === "ready");
-      for (const el of [f_title, f_desc, f_pres, f_start, f_end, f_tpl, f_reason, f_auto, r_on, r_time, r_dur, r_tz, r_hor, r_until, ...r_days]) el.disabled = !editable;
-      saveBtn.disabled = !editable; saveTplBtn.disabled = !open;
+      for (const el of [f_title, f_desc, f_pres, f_start, f_end, f_tpl, f_reason, f_auto, r_on, r_time, r_dur, r_tz, r_hor, r_until, ...r_days]) el.disabled = !editable || !!lockedBy;
+      saveBtn.disabled = !editable || !!lockedBy; saveTplBtn.disabled = !open;
       relBtn.style.display = open && !curShow.template && st === "draft" ? "" : "none";
       unrelBtn.style.display = open && !curShow.template && st === "ready" ? "" : "none";
       liveBtn.style.display = open && !curShow.template && (st === "ready" || st === "live") ? "" : "none";
@@ -492,9 +533,11 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const loadVersions = async () => { if (!curShow) return; const v = await api("GET", `${API}/${curShow.id}/versions`); if (!v) return; versions = v;
       verSel.replaceChildren(...v.map((x) => h("option", { value: x.version }, `v${x.version} · ${new Date(x.createdAt).toLocaleString(LOCALE)} · ${x.createdBy}${x.reason ? " · " + x.reason : ""}`))); };
     const openShow = async (id) => {
+      if (curShow) releaseLock(curShow.id);
+      setReadOnly("");
       if (!id) { curShow = null; applyDoc(null); clearShowDirty(); return; }
       const sh = await api("GET", `${API}/${id}`); if (!sh) return;
-      curShow = sh; applyDoc(sh.content); if (sh.status !== "live") markDirty(); else { dirty = false; dirtyEl.textContent = ""; } clearShowDirty(); await loadVersions(); renderShowBar();
+      curShow = sh; applyDoc(sh.content); if (sh.status !== "live") markDirty(); else { dirty = false; dirtyEl.textContent = ""; } clearShowDirty(); await loadVersions(); renderShowBar(); await acquireLock(false);
     };
     const needSaved = async () => { if (showDirty) { show_(T("showUnsaved")); return false; } return true; };
     const saveShow = async (reason) => {
@@ -506,6 +549,35 @@ class OmpRadioAutomationPanel extends HTMLElement {
       const r = await api("PUT", `${API}/${curShow.id}`, body); if (!r) return false;
       curShow = r; clearShowDirty(); f_reason.value = ""; show_(T("showSaved", { v: r.rowVersion }), true); await refreshShows(); loadWeek(); await loadVersions(); renderShowBar(); return true;
     };
+    // ---- Bearbeitungssperre (weich): wer bearbeitet gerade ----
+    const session = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    let lockedBy = "", lockBeat = null;
+    const lockBanner = h("div", { class: "banner note", style: "display:none;margin:6px 0 0" });
+    const takeBtn = h("button", { onclick: async () => { if (curShow) await acquireLock(true); } }, T("lockTake"));
+    const setReadOnly = (who, lost) => {
+      lockedBy = who; logSec.inert = !!who; cardsSec.inert = !!who; hkEditBtn.disabled = !!who;
+      lockBanner.style.display = who ? "flex" : "none"; lockBanner.style.gap = "10px"; lockBanner.style.alignItems = "center";
+      lockBanner.replaceChildren(h("span", {}, T(lost ? "lockLost" : "lockedBy", { u: who })), takeBtn); renderShowBar();
+    };
+    const lockUrl = () => `${API}/${curShow.id}/lock`;
+    const acquireLock = async (takeover) => {
+      if (!curShow || !(curShow.status === "draft" || curShow.status === "ready")) { stopBeat(); setReadOnly(""); return; }
+      const r = await fetch(lockUrl(), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session, takeover: !!takeover }) });
+      if (r.ok) { setReadOnly(""); startBeat(); return true; }
+      stopBeat();
+      if (r.status === 409) { let j = {}; try { j = await r.json(); } catch { /* leer */ } setReadOnly((j.lock && j.lock.holder) || "?"); return false; }
+      if (r.status === 403) { setReadOnly(""); return false; } // kein Bearbeitungsrecht: der Server lehnt das Speichern ohnehin ab
+      return false;
+    };
+    const startBeat = () => { stopBeat(); lockBeat = setInterval(async () => {
+      if (!curShow) return stopBeat();
+      const r = await fetch(lockUrl(), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session }) });
+      if (r.status === 409) { let j = {}; try { j = await r.json(); } catch { /* leer */ } stopBeat(); setReadOnly((j.lock && j.lock.holder) || "?", true); }
+    }, 10000); };
+    const stopBeat = () => { if (lockBeat) { clearInterval(lockBeat); lockBeat = null; } };
+    const releaseLock = (id) => { stopBeat(); if (id) fetch(`${API}/${id}/lock`, { method: "DELETE", keepalive: true, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session }) }).catch(() => {}); };
+    addEventListener("pagehide", () => { if (curShow) releaseLock(curShow.id); });
+
     const saveBtn = h("button", { class: "primary", onclick: () => saveShow() }, T("showSave"));
     const newBtn = h("button", { onclick: async () => {
       const t = f_title.value.trim() || "Neue Sendung";
@@ -520,8 +592,8 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const relBtn = h("button", { onclick: async () => { if (!(await needSaved())) return; const r = await api("POST", `${API}/${curShow.id}/status`, { status: "ready" }); if (r) { curShow = { ...show, ...r, content: curShow.content }; await refreshShows(); renderShowBar(); } } }, T("showRelease"));
     const unrelBtn = h("button", { onclick: async () => { const r = await api("POST", `${API}/${curShow.id}/status`, { status: "draft" }); if (r) { curShow = { ...show, ...r, content: curShow.content }; await refreshShows(); renderShowBar(); } } }, T("showUnrelease"));
     const finBtn = h("button", { onclick: async () => { const r = await api("POST", `${API}/${curShow.id}/status`, { status: "done" }); if (r) { curShow = { ...show, ...r, content: curShow.content }; await refreshShows(); renderShowBar(); } } }, T("showFinish"));
-    const archBtn = h("button", { onclick: async () => { const r = await api("POST", `${API}/${curShow.id}/status`, { status: "archived" }); if (r) { curShow = null; applyDoc(null); await refreshShows(); renderShowBar(); } } }, T("showArchive"));
-    const delBtn = h("button", { class: "danger", onclick: async () => { if (!curShow || !(await confirmDialog(T("showDeleteAsk", { t: curShow.title }), T("showDeleteGo")))) return; const r = await api("DELETE", `${API}/${curShow.id}`); if (r) { curShow = null; applyDoc(null); clearShowDirty(); await refreshShows(); renderShowBar(); } } }, T("showDelete"));
+    const archBtn = h("button", { onclick: async () => { const r = await api("POST", `${API}/${curShow.id}/status`, { status: "archived" }); if (r) { releaseLock(curShow.id); setReadOnly(""); curShow = null; applyDoc(null); await refreshShows(); renderShowBar(); } } }, T("showArchive"));
+    const delBtn = h("button", { class: "danger", onclick: async () => { if (!curShow || !(await confirmDialog(T("showDeleteAsk", { t: curShow.title }), T("showDeleteGo")))) return; const r = await api("DELETE", `${API}/${curShow.id}`); if (r) { releaseLock(curShow.id); setReadOnly(""); curShow = null; applyDoc(null); clearShowDirty(); await refreshShows(); renderShowBar(); } } }, T("showDelete"));
     // Auf Sendung laden: Log und Hotkeys der freigegebenen Sendung gehen in die Automation, die Sendung wird „live“
     const liveBtn = h("button", { class: "primary", onclick: async () => {
       if (!curShow || !(await needSaved())) return;
@@ -550,7 +622,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
     };
     const showSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("show")),
       h("div", { class: "body" }, h("div", { class: "showbar" }, h("label", {}, T("show"), showSel), tplSel, tplOpenSel, newBtn, statChip, unsavedEl),
-        h("div", { class: "showmeta" }, h("label", {}, T("showTitle"), f_title), h("label", {}, T("showStart"), f_start), h("label", {}, T("showEnd"), f_end), h("label", {}, T("showPres"), f_pres), h("label", {}, T("showDesc"), f_desc), h("label", {}, T("showTpl"), f_tpl), h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, f_auto, T("autoLive"))), recurBox,
+        h("div", { class: "showmeta" }, h("label", {}, T("showTitle"), f_title), h("label", {}, T("showStart"), f_start), h("label", {}, T("showEnd"), f_end), h("label", {}, T("showPres"), f_pres), h("label", {}, T("showDesc"), f_desc), h("label", {}, T("showTpl"), f_tpl), h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, f_auto, T("autoLive"))), lockBanner, recurBox,
         h("div", { class: "showbar", style: "margin-top:8px" }, f_reason, saveBtn, saveTplBtn, relBtn, unrelBtn, liveBtn, finBtn, archBtn, delBtn, verBox)));
 
     // ---- Moderationskarten und Notizen (je Sendung) ----
@@ -561,15 +633,19 @@ class OmpRadioAutomationPanel extends HTMLElement {
       cardsEl.replaceChildren(...cards.map((c, i) => {
         const at = h("select", { onchange: (e) => { c.atItem = e.target.value; markShow(); } }, h("option", { value: "" }, T("cardAtStart")), ...rows.map((r, k) => h("option", { value: r.id || `e${k + 1}` }, (r.title && r.title.trim()) || r.id || `#${k + 1}`)));
         at.value = c.atItem || "";
+        const rtEl = h("div", { class: "rt" });
+        const updRt = () => { const sec = readSeconds(c.text); rtEl.textContent = sec ? T("readTime", { t: fmtMs(sec * 1000) }) + (c.minutes && sec > c.minutes * 60 ? " — " + T("readOver", { m: c.minutes }) : "") : ""; rtEl.classList.toggle("over", !!(c.minutes && sec > c.minutes * 60)); };
+        updRt();
         return h("div", { class: "card" },
           h("input", { type: "text", value: c.title || "", placeholder: T("cardTitle"), oninput: (e) => { c.title = e.target.value; markShow(); } }), at,
           h("input", { type: "number", min: "0", value: c.minutes ?? "", placeholder: T("cardMin"), oninput: (e) => { c.minutes = e.target.value === "" ? null : Number(e.target.value); markShow(); } }),
           h("span", {}, h("button", { onclick: () => { if (i > 0) { [cards[i - 1], cards[i]] = [cards[i], cards[i - 1]]; markShow(); renderCards(); } } }, "↑"), h("button", { onclick: () => { if (i < cards.length - 1) { [cards[i + 1], cards[i]] = [cards[i], cards[i + 1]]; markShow(); renderCards(); } } }, "↓"), h("button", { onclick: () => { cards.splice(i, 1); markShow(); renderCards(); } }, "✕")),
-          h("textarea", { placeholder: T("cardText"), oninput: (e) => { c.text = e.target.value; markShow(); } }, c.text || ""));
+          h("textarea", { placeholder: T("cardText"), oninput: (e) => { c.text = e.target.value; markShow(); updRt(); } }, c.text || ""),
+          rtEl);
       }));
     };
     const cardsSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("cards")),
-      h("div", { class: "body" }, h("div", { class: "bar" }, h("button", { onclick: () => { cards.push({ id: "c" + Date.now().toString(36), title: "", text: "", atItem: "", minutes: null }); markShow(); renderCards(); } }, T("cardAdd"))), cardsEl,
+      h("div", { class: "body" }, h("div", { class: "bar" }, tpBtn, h("button", { onclick: () => { cards.push({ id: "c" + Date.now().toString(36), title: "", text: "", atItem: "", minutes: null }); markShow(); renderCards(); } }, T("cardAdd"))), cardsEl,
         h("div", { class: "muted", style: "margin:8px 0 2px" }, T("notes")), notesArea));
     // Live: Karten zum laufenden bzw. nächsten Element, groß lesbar
     const cardLive = h("div", { class: "cardlive" });
@@ -650,7 +726,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
     };
     const cartSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("hot")), h("div", { class: "body" }, h("div", { class: "bar" }, hkEditBtn, hkAdd, hkSave), hkEdit, hkGrid));
 
-    shadow.append(h("style", {}, STYLE), banner, head, weekSec, showSec, nowBar, cardLive, cartSec, cardsSec, logSec, planSec, asRunSec);
+    shadow.append(h("style", {}, STYLE), banner, tp, head, weekSec, showSec, nowBar, cardLive, cartSec, cardsSec, logSec, planSec, asRunSec);
     renderRows(); renderPlan(); renderAsRun(); renderNow(); renderCarts(); renderCards(); renderShowBar(); loadWeek(); refreshShows().then(async () => { const c = await api("GET", API + "/current"); if (c && c.show && c.show.status === "live" && !curShow) { showSel.value = c.show.id; await openShow(c.show.id); } });
 
     const loadTargets = async () => {

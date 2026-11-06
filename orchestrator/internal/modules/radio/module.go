@@ -28,7 +28,7 @@ func New() *Module { return &Module{} }
 func (*Module) Name() string { return "radio" }
 
 func (*Module) Migrations() []module.Migration {
-	return []module.Migration{{Version: 1, Name: "radio_shows", SQL: schema}, {Version: 2, Name: "radio_recurrence_autolive", SQL: schemaV2}}
+	return []module.Migration{{Version: 1, Name: "radio_shows", SQL: schema}, {Version: 2, Name: "radio_recurrence_autolive", SQL: schemaV2}, {Version: 3, Name: "radio_show_locks", SQL: schemaV3}}
 }
 
 func (m *Module) store() *Store {
@@ -61,6 +61,9 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	r.Handle("GET /api/v1/radio/shows/{id}", module.Authenticated(), a.get())
 	r.Handle("PUT /api/v1/radio/shows/{id}", module.Feature(FeatPrepare), a.update())
 	r.Handle("DELETE /api/v1/radio/shows/{id}", module.Feature(FeatPrepare), a.delete())
+	r.Handle("GET /api/v1/radio/shows/{id}/lock", module.Authenticated(), a.getLock())
+	r.Handle("POST /api/v1/radio/shows/{id}/lock", module.Feature(FeatPrepare), a.acquireLock())
+	r.Handle("DELETE /api/v1/radio/shows/{id}/lock", module.Feature(FeatPrepare), a.releaseLock())
 	r.Handle("POST /api/v1/radio/shows/{id}/status", module.Feature(FeatPrepare, FeatRelease), a.setStatus())
 	r.Handle("POST /api/v1/radio/shows/{id}/duplicate", module.Feature(FeatPrepare), a.duplicate())
 	r.Handle("GET /api/v1/radio/shows/{id}/versions", module.Authenticated(), a.versions())
