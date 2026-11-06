@@ -362,6 +362,14 @@ impl Publisher {
         self.client.flush().await.map_err(PublishError::Flush)
     }
 
+    /// Veröffentlicht eine beliebige JSON-Nachricht auf `subject` und wartet auf `flush()`
+    /// (diskretes, zeitkritisches Ereignis, z. B. ein Kontakt-Wechsel von `omp-gpio`).
+    pub async fn publish_json(&self, subject: String, payload: &serde_json::Value) -> Result<(), PublishError> {
+        let bytes = serde_json::to_vec(payload).map_err(PublishError::Encode)?;
+        self.client.publish(subject, bytes.into()).await.map_err(PublishError::Nats)?;
+        self.client.flush().await.map_err(PublishError::Flush)
+    }
+
     /// Veröffentlicht ein `ItemEnded`-Event auf
     /// `omp.player.<node_id>.itemEnded` und wartet auf `flush()` — ein
     /// EOS ist wie ein Tally-Wechsel ein diskretes, zeitkritisches

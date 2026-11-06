@@ -1,0 +1,11 @@
+[package]
+name = "omp-gpio"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+libc = "0.2"
+omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync"] }

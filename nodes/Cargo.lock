@@ -1466,6 +1466,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-gpio"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "omp-node-sdk",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-intercom"
 version = "0.1.0"
 dependencies = [

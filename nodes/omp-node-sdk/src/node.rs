@@ -325,6 +325,24 @@ impl NodeHandle {
         }
     }
 
+    /// Veröffentlicht eine JSON-Nachricht auf `subject` (Ereignisse eigener Node-Typen, z. B.
+    /// `omp.gpio.<node_id>.in.<pin>`). Kein NATS verbunden ⇒ `false`, sonst Ergebnis des Sendens.
+    pub async fn publish_json(&self, subject: String, payload: &Value) -> bool {
+        let Some(publisher) = &self.publisher else { return false };
+        match publisher.publish_json(subject, payload).await {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("omp-node-sdk: event publish failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// Eigene Node-ID (für Betreffzeilen eigener Ereignisse).
+    pub fn node_id(&self) -> &str {
+        &self.node_id
+    }
+
     /// Veröffentlicht ein `ItemEnded`-Event auf
     /// `omp.player.<node_id>.itemEnded` (K2-Teil-1) — gilt dem eigenen
     /// Node (anders als `publish_tally`), gleiches No-Op-Verhalten ohne

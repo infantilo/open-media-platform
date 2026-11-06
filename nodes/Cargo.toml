@@ -20,6 +20,7 @@ members = [
     "omp-playout-automation",
     "omp-playout-core",
     "omp-radio-automation",
+    "omp-gpio",
     "omp-srt-gateway",
     "omp-ograf",
     "omp-2110-gateway",

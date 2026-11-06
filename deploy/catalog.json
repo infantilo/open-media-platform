@@ -406,6 +406,17 @@
     "expectedResources": "sehr gering (keine Medienverarbeitung)"
   },
   {
+    "type": "omp-gpio",
+    "label": "GPIO (Kontakte)",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-gpio"],
+    "env": {},
+    "mediaKind": "audio",
+    "description": "Generische Ein- und Ausgänge (Taster, Fernstart, Rotlicht, Relais) als Node. Eingänge werden entprellt (Standard 20 ms) und als NATS-Ereignis `omp.gpio.<node>.in.<pin>` gemeldet; Ausgänge setzt die Methode `setOutput` (optional mit Haltezeit `holdMs`: wird sie nicht erneuert, fällt der Ausgang auf seinen Fail-Safe-Pegel). Bei Verbindungsverlust zum Gerät gehen alle Ausgänge sofort auf Fail-Safe. In dieser Stufe ist der Simulator das Gerät (`simulateInput`, `simulateLink`); echte Geräte kommen als Treiber hinter dieselbe Zustandsmaschine. Vertrag: docs/CONTRACT-GPIO.md.",
+    "i18n": { "en": {"label": "GPIO (contacts)", "description": "Generic inputs and outputs (buttons, remote start, on-air light, relays) as a node. Inputs are debounced (default 20 ms) and reported as NATS event `omp.gpio.<node>.in.<pin>`; outputs are set by method `setOutput` (optionally with hold time `holdMs`: if it is not renewed, the output falls back to its fail-safe level). On loss of the device link all outputs go to fail-safe immediately. At this stage the simulator is the device (`simulateInput`, `simulateLink`); real devices come as drivers behind the same state machine. Contract: docs/CONTRACT-GPIO.md.", "expectedResources": "very low"} },
+    "expectedResources": "sehr gering"
+  },
+  {
     "type": "omp-playout-buffer",
     "label": "Playout-Puffer",
     "anchor": true,
