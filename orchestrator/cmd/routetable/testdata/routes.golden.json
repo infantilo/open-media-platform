@@ -1687,6 +1687,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/nodes/{id}/ui/segue-editor.js",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/organizations",
     "auth": "verb:Admin",
     "when": "options.organizations != nil",

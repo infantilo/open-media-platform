@@ -465,6 +465,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// daher requireAuth wie params-GET.
 	mux.HandleFunc("GET /api/v1/nodes/{id}/measurements", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/measurements", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/manifest.json", nodeLogs)))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/segue-editor.js", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/segue-editor.js", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/bundle.js", nodeLogs)))
 	// Node-eigener Vollzustand (`GET`/`POST /state`, bisher NUR vom
 	// Snapshot-Service serverseitig direkt gegen node.APIBaseURL genutzt,

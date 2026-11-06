@@ -82,6 +82,17 @@ gegen `Placed` ≤ 1 ms; Sendeweg gegen Plan weiter wie RB4 (`lateMs`).
   der Demo-Datei geprüft: Demo-Übergang ergibt Einsatz 52 381 ms (Segue 52 881 − 500), Ausklang in den Spitzen sichtbar abfallend. 19 Tests grün.
   **Offen:** Zugriff aus dem Browser über den Orchestrator-Proxy (Regel für `POST /segue/plan`/`GET /segue/peaks` prüfen, Isolations-Typ) — vor RB7.3.
 
+* **RB7.3 weitgehend erledigt (2026-11-06):** Element `omp-segue-editor` (`ui/modules/segue-editor/`: `logic.ts` mit 6 Tests, `element.ts`):
+  zwei Wellenformen auf gemeinsamer Zeitachse, Griffe für Segue-Punkt A, Einsatz B, Intro B, SOM B und beide Blendenden (je eigene Höhe, damit
+  gleichzeitige Marken einzeln greifbar sind), Blendkurven als Linien, Zahlenfelder, Zoom (Mausrad), Verschieben (Umschalt + Ziehen), Übernehmen/
+  Abbrechen/Standardblende. Planung und Spitzenwerte vom Node. Im Panel der Radio-Automation: Knopf „⇄“ je Zeile (ab Zeile 2) öffnet den Editor als
+  Dialog, Übernehmen schreibt Marken + `transition` in beide Zeilen (Speichern des Logs bleibt ausdrücklich). Bau: `make ui` kopiert das Bundle nach
+  `nodes/omp-radio-automation/ui/segue-editor.js` (`include_str!`); neue Proxy-Route `GET /api/v1/nodes/{id}/ui/segue-editor.js`.
+  **Geprüft:** Klicktest mit echter Maus (`tools/segue-editor-e2e/editor.mjs`, Headless-Chromium gegen eigene Node-Instanz): Einsatz B ziehen →
+  `startShiftMs` −1040 ms, Marke folgt nach neuer Planung, Zahlenfeld gleich, Übernehmen liefert beide Elemente, Dateien unverändert.
+  **Nicht geprüft:** der Dialog im echten Panel hinter dem Orchestrator-Proxy (Import des Elements über `ui/segue-editor.js` im isolierten Ursprung);
+  Radio-Automation-Node + Orchestrator neu starten nötig. Kachel im Radio-Modul folgt mit RB7.5.
+
 ## 9. Frühere offene Fragen (Rest)
 
 1. **Wohin mit den Marken?** Am Asset (setzt die Bibliothek-/MAM-Entscheidung voraus, die für die Woche ab 2026-11-09 erwartet wird) oder

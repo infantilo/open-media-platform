@@ -37,6 +37,8 @@ ui:
 	# die gebauten Bundles liegen als eingecheckte Kopien im Node (`include_str!`), damit `cargo build` ohne deno läuft.
 	cp ui/dist/modules/intercom.js nodes/omp-intercom/ui/admin.js
 	deno bundle ui/modules/intercom/panel.ts -o nodes/omp-intercom/ui/bundle.js
+	# Segue-Editor (RB7.3): gebaute Kopie im Radio-Automation-Node (`include_str!`), vom Panel per Import geladen.
+	deno bundle ui/modules/segue-editor/element.ts -o nodes/omp-radio-automation/ui/segue-editor.js
 	# OGraf-Editor (Kapitel 90.4): gebaute Kopie im Node (`include_str!`), hängt hinter dem Panel-Bundle.
 	deno bundle ui/modules/ograf-editor/library.ts -o nodes/omp-ograf/ui/library.js
 

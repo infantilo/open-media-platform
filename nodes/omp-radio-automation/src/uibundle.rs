@@ -6,6 +6,8 @@ use omp_node_sdk::RawResponse;
 
 const MANIFEST: &str = include_str!("../ui/manifest.json");
 const BUNDLE: &str = include_str!("../ui/bundle.js");
+/// Segue-Editor (RB7.3): eingecheckte, gebaute Kopie von `ui/modules/segue-editor` (Makefile `ui`), damit `cargo build` ohne deno läuft.
+const SEGUE_EDITOR: &str = include_str!("../ui/segue-editor.js");
 
 pub fn route(method: &str, path: &str) -> Option<RawResponse> {
     if method != "GET" {
@@ -25,6 +27,11 @@ pub fn route(method: &str, path: &str) -> Option<RawResponse> {
             status: 200,
             content_type: "text/javascript",
             body: BUNDLE.as_bytes().to_vec(),
+        }),
+        "/ui/segue-editor.js" => Some(RawResponse {
+            status: 200,
+            content_type: "text/javascript",
+            body: SEGUE_EDITOR.as_bytes().to_vec(),
         }),
         _ => None,
     }

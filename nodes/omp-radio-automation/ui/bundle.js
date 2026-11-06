@@ -15,7 +15,7 @@ const T = (() => {
       sent: "gesendet", waiting: "wartet", playing: "läuft", done: "vorbei", elapsed: "Zeit",
       asRun: "As-Run", noAsRun: "Noch keine Einträge.", evSched: "geplant", evStop: "Stopp", evBack: "Backtiming", evBackRes: "Backtiming-Ergebnis: Rest {ms} ms", badFix: "Marke ungültig (HH:MM[:SS]): {v}", lead: "Vorlauf {s} s",
       loaded: "Log geladen.", started: "Gestartet.", stopped: "Gestoppt.", badTime: "Uhrzeit ungültig (HH:MM[:SS]).", badLog: "Log ungültig: {e}", fail: "{m} fehlgeschlagen: {d}",
-      colTitle: "Titel", colBlock: "Block", colTime: "Zeit", drag: "ziehen zum Sortieren", dup: "Duplizieren", insertAbove: "Element davor einfügen",
+      colTitle: "Titel", colBlock: "Block", colTime: "Zeit", drag: "ziehen zum Sortieren", dup: "Duplizieren", segueEdit: "Übergang bearbeiten", segueNeedsFiles: "Beide Zeilen brauchen Datei und Dauer", segueLoadFailed: "Übergangs-Editor nicht ladbar", insertAbove: "Element davor einfügen",
       blockTarget: "Soll (s)", blockSum: "Summe", blockDiff: "Differenz", blockOver: "zu lang", blockUnder: "zu kurz", blockOk: "passt", blockFill: "Füller anhängen", noFiller: "Kein Füller passt (Füller im JSON unter „fillers“)",
       now: "Jetzt", next: "Nächstes", remain: "Rest", nothing: "—", notRunning: "Kein Log läuft.",
       hot: "Hotkeys", hotEdit: "Bearbeiten", hotDone: "Fertig", hotAdd: "+ Taste", hotSave: "Speichern", hotDel: "Taste löschen", hotLabel: "Beschriftung", hotColor: "Farbe", hotFile: "Datei", hotDur: "Dauer (ms)", hotGain: "Pegel (dB)", hotEmpty: "Keine Tasten. „Bearbeiten“ → „+ Taste“.", hotNoTarget: "Erst oben einen Segue-Player als Ziel wählen.", hotSaved: "Hotkeys gespeichert.",
@@ -51,7 +51,7 @@ const T = (() => {
       sent: "sent", waiting: "waiting", playing: "playing", done: "done", elapsed: "Time",
       asRun: "As-run", noAsRun: "No entries yet.", evSched: "scheduled", evStop: "stop", evBack: "Backtiming", evBackRes: "Backtiming result: remainder {ms} ms", badFix: "Invalid mark (HH:MM[:SS]): {v}", lead: "lead {s} s",
       loaded: "Log loaded.", started: "Started.", stopped: "Stopped.", badTime: "Invalid time (HH:MM[:SS]).", badLog: "Invalid log: {e}", fail: "{m} failed: {d}",
-      colTitle: "Title", colBlock: "Block", colTime: "Time", drag: "drag to reorder", dup: "Duplicate", insertAbove: "Insert item above",
+      colTitle: "Title", colBlock: "Block", colTime: "Time", drag: "drag to reorder", dup: "Duplicate", segueEdit: "Edit transition", segueNeedsFiles: "Both rows need a file and duration", segueLoadFailed: "Transition editor unavailable", insertAbove: "Insert item above",
       blockTarget: "Target (s)", blockSum: "Total", blockDiff: "Difference", blockOver: "too long", blockUnder: "too short", blockOk: "fits", blockFill: "Append filler", noFiller: "No filler fits (fillers in the JSON under “fillers”)",
       now: "Now", next: "Next", remain: "Remaining", nothing: "—", notRunning: "No log running.",
       hot: "Hotkeys", hotEdit: "Edit", hotDone: "Done", hotAdd: "+ Key", hotSave: "Save", hotDel: "Delete key", hotLabel: "Label", hotColor: "Colour", hotFile: "File", hotDur: "Duration (ms)", hotGain: "Level (dB)", hotEmpty: "No keys. “Edit” → “+ Key”.", hotNoTarget: "Choose a segue player as target above first.", hotSaved: "Hotkeys saved.",
@@ -271,11 +271,33 @@ class OmpRadioAutomationPanel extends HTMLElement {
           h("td", { class: "handle", title: T("drag") }, "⠿"), h("td", { class: "muted" }, i + 1), cell("", inp("id", "text")), cell("", inp("title", "text")), cell("", kind), cell("", inp("block", "text")), cell("file", inp("file", "text")), cell("num", inp("durationMs", "number")), cell("num", inp("introMs", "number")), cell("num", inp("outroMs", "number")), cell("num", inp("somMs", "number")), cell("num", inp("gainDb", "number")), cell("", inp("fixText", "text")),
           cell("", h("input", { type: "checkbox", style: "width:auto", checked: !!r.optional, onchange: (e) => { r.optional = e.target.checked; markDirty(); } })),
           timeCell,
-          cell("act", [h("button", { title: T("insertAbove"), onclick: () => { const n = blankItem(); n.block = r.block; rows.splice(i, 0, n); markDirty(); renderRows(); } }, "＋"), h("button", { title: T("dup"), onclick: () => { rows.splice(i + 1, 0, { ...r, id: r.id ? r.id + "-2" : "" }); markDirty(); renderRows(); } }, "⧉"), h("button", { title: T("del"), onclick: () => { rows.splice(i, 1); markDirty(); renderRows(); } }, "✕")]));
+          cell("act", [h("button", { title: T("insertAbove"), onclick: () => { const n = blankItem(); n.block = r.block; rows.splice(i, 0, n); markDirty(); renderRows(); } }, "＋"), h("button", { title: T("dup"), onclick: () => { rows.splice(i + 1, 0, { ...r, id: r.id ? r.id + "-2" : "" }); markDirty(); renderRows(); } }, "⧉"), i > 0 ? h("button", { title: T("segueEdit"), class: "seguebtn", onclick: () => openSegueEditor(i) }, "⇄") : null, h("button", { title: T("del"), onclick: () => { rows.splice(i, 1); markDirty(); renderRows(); } }, "✕")]));
         out.push(tr);
       });
       tbody.replaceChildren(...out);
       updateTimes();
+    };
+    // Segue-Editor (RB7): Dialog über der Tabelle; das Element kommt vom Node (`ui/segue-editor.js`), der Editor ändert nur Marken + Übergang
+    let segueLoad = null;
+    const openSegueEditor = async (i) => {
+      const a = rows[i - 1], b = rows[i];
+      if (!a.file || !b.file || !(Number(a.durationMs) > 0) || !(Number(b.durationMs) > 0)) return show(T("segueNeedsFiles"));
+      try { segueLoad = segueLoad || import(`${base}/ui/segue-editor.js`); await segueLoad; } catch { segueLoad = null; return show(T("segueLoadFailed")); }
+      const toEdit = (r) => ({ ...r, durationMs: Number(r.durationMs) || 0, somMs: Number(r.somMs) || 0, introMs: r.introMs === "" ? null : r.introMs ?? null, outroMs: r.outroMs === "" ? null : r.outroMs ?? null });
+      const ed = document.createElement("omp-segue-editor");
+      ed.base = base;
+      const back = h("div", { style: "position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px" }, h("div", { style: "width:min(1100px,100%);max-height:100%;overflow:auto" }, ed));
+      const close = () => back.remove();
+      ed.addEventListener("cancel", close);
+      ed.addEventListener("save", (e) => {
+        const { a: na, b: nb } = e.detail;
+        Object.assign(a, { somMs: na.somMs, introMs: na.introMs, outroMs: na.outroMs });
+        Object.assign(b, { somMs: nb.somMs, introMs: nb.introMs, outroMs: nb.outroMs });
+        if (nb.transition) b.transition = nb.transition; else delete b.transition;
+        markDirty(); renderRows(); close();
+      });
+      shadow.append(back);
+      ed.load(toEdit(a), toEdit(b));
     };
     // Blockkopf: Summe gegen Soll-Länge, Füller-Vorschlag
     const blockHead = (name, startIdx) => {
