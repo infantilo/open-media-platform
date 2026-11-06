@@ -34,8 +34,9 @@ const CSS2 = `
 .c2{--bg:#111;--panel:#1a1a1a;--panel2:#202020;--line:#2c2c2c;--line2:#3a3a3a;--txt:#d8dde2;--dim:#7d848c;
   --cyan:#27e0f0;--blue:#1fa4e6;--green:#25d366;--pink:#ff4f9a;--orange:#ff9f1c;--amber:#ffb000;--red:#ff4040;--violet:#b57bff;
   --mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
-  display:flex;flex-direction:column;background:var(--bg);color:var(--txt);font:11px/1.2 var(--mono);height:max(var(--c2-min,520px),calc(100vh - var(--c2-off,0px) - 6px));min-height:0;overflow:hidden;border:1px solid #000;position:relative;user-select:none}
+  display:flex;flex-direction:column;background:var(--bg);color:var(--txt);font:11px/1.2 var(--mono);height:max(var(--c2-min,622px),var(--c2-h,calc(100vh - 6px)));min-height:0;overflow:hidden;border:1px solid #000;position:relative;user-select:none}
 :host{display:block;overflow:auto;max-height:100vh}
+.c2[data-compact="1"]{--c2-min:346px}
 .c2 :where(button){font:inherit;color:inherit;cursor:pointer}
 .c2 .pst-sel{background:#1c1c1c;color:#e0e0e0;border:1px solid #444;border-radius:2px;font:11px var(--mono)}.c2 .pst-btn{background:linear-gradient(#444,#2a2a2a);color:#dcdcdc;border:1px solid #000;border-radius:2px}.c2 .pst-btn:hover{background:#4a4a4a}
 .c2 *{box-sizing:border-box}
@@ -357,14 +358,33 @@ class ConsoleApp extends MixerApp {
     const style = h("style");
     style.textContent = CSS + CSS2;
     this.root = h("div", { class: "root c2", tabindex: "-1" });
-    // Höhe = Fensterhöhe abzüglich der Position im Fenster (kein Seiten-Scrollbalken); die Fader füllen den Rest, unterhalb von --c2-min (520 px) wird gescrollt.
+    // Höhe = sichtbarer Bereich des Containers (Operator-Kachel oder Fenster) ab der Position der Oberfläche; die Fader füllen den Rest.
+    // Unterhalb des Minimums (--c2-min = Platzbedarf des Inhalts, kompakt weniger) scrollt der Container, statt unten (SOLO) abzuschneiden.
     this.fitHeight = () => {
       if (!this.root.isConnected) return;
-      const top = Math.max(0, Math.round(this.root.getBoundingClientRect().top + window.scrollY));
-      if (this.root.dataset.off !== String(top)) { this.root.dataset.off = String(top); this.root.style.setProperty("--c2-off", top + "px"); }
+      const hostEl = this.root.getRootNode().host || this.root;
+      let limit = window.innerHeight;
+      let el = hostEl.parentElement || (hostEl.getRootNode() && hostEl.getRootNode().host) || null;
+      this.fitBox = null;
+      while (el && el !== document.body && el !== document.documentElement) {
+        const cs = getComputedStyle(el);
+        if (/(auto|scroll|hidden|clip)/.test(cs.overflowY) && el.clientHeight > 0) {
+          limit = Math.min(limit, el.getBoundingClientRect().top + el.clientHeight - (parseFloat(cs.paddingBottom) || 0));
+          this.fitBox = el;
+          break;
+        }
+        const rn = el.parentElement ? null : el.getRootNode();
+        el = el.parentElement || (rn && rn.host) || null;
+      }
+      const avail = Math.max(0, Math.floor(limit - hostEl.getBoundingClientRect().top - 2));
+      if (this.root.dataset.avail !== String(avail)) { this.root.dataset.avail = String(avail); this.root.style.setProperty("--c2-h", avail + "px"); }
     };
     window.addEventListener("resize", this.fitHeight);
-    for (const ms of [0, 200, 800, 2000]) setTimeout(this.fitHeight, ms);
+    if (typeof ResizeObserver !== "undefined") {
+      this.fitRO = new ResizeObserver(() => this.fitHeight());
+      queueMicrotask(() => { this.fitHeight(); if (this.fitBox) this.fitRO.observe(this.fitBox); });
+    }
+    for (const ms of [0, 200, 800, 2000]) setTimeout(() => { this.fitHeight(); if (this.fitBox && this.fitRO) this.fitRO.observe(this.fitBox); }, ms);
     this.fitTimer = setInterval(this.fitHeight, 1000);
     this.stripViews = new Map(); // Gruppen/Busse
     this.binds = [];
@@ -433,7 +453,7 @@ class ConsoleApp extends MixerApp {
   }
 
   destroy() {
-    clearInterval(this.clockTimer); clearInterval(this.fitTimer); window.removeEventListener("resize", this.fitHeight);
+    clearInterval(this.clockTimer); clearInterval(this.fitTimer); window.removeEventListener("resize", this.fitHeight); if (this.fitRO) this.fitRO.disconnect();
     window.removeEventListener("resize", this.onWinResize);
     super.destroy();
   }
@@ -721,11 +741,8 @@ class ConsoleApp extends MixerApp {
   layoutNow() {
     this.width = this.host.clientWidth || this.width || 1000;
     this.root.dataset.layout = "c2";
-    // Höhe = verfügbarer Platz unter dem Panel-Anfang (kein senkrechter Scrollbalken der Seite).
-    const top = this.host.getBoundingClientRect().top;
-    const min = this.ui.compact ? 380 : 600;
-    const h = Math.max(min, Math.floor(window.innerHeight - top - 8));
-    if (this.c2h !== h) { this.c2h = h; this.root.style.height = h + "px"; }
+    // Höhe = sichtbarer Bereich des Containers (Kachel/Fenster), s. fitHeight; Minimum und Kompaktwert kommen aus dem CSS (--c2-min).
+    if (this.fitHeight) this.fitHeight();
   }
   applyLayoutVars() {}
   centerIsOpen() { return !this.drawer.hidden; }
