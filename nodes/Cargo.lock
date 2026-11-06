@@ -1762,6 +1762,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-studio-logic"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "omp-node-sdk",
+ "omp-playout-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-subtitle-asr"
 version = "0.1.0"
 dependencies = [
