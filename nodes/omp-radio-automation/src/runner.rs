@@ -238,4 +238,20 @@ mod tests {
         assert_eq!(a["gainDb"], -1.5);
         assert_eq!(a["startAt"], 5_000_000_000u64);
     }
+
+    #[test]
+    fn demo_log_with_transition_parses_and_plans() {
+        let raw = r#"{"logId":"d","items":[
+          {"id":"a","kind":"song","file":"/m/a.wav","durationMs":60000,"somMs":0,"introMs":8000,"outroMs":50000,"gainDb":0.0,"optional":false,"fixAtUnixMs":null,"title":"A"},
+          {"id":"b","kind":"song","file":"/m/b.wav","durationMs":60000,"somMs":0,"introMs":null,"outroMs":null,"gainDb":0.0,"optional":false,"fixAtUnixMs":null,
+           "transition":{"fadeOutMs":2000,"fadeInMs":1500,"curveOut":"linear","curveIn":"linear","startShiftMs":-500}}],"fillers":[],"blocks":[]}"#;
+        let log: Log = serde_json::from_str(raw).unwrap();
+        let p = plan(&log, &Config::default()).unwrap();
+        assert_eq!(p[1].start_ms, 49_500);
+        assert_eq!(p[0].fade_out_ms, 2000);
+        assert_eq!(p[1].fade_in_ms, 1500);
+        let back = serde_json::to_value(&log).unwrap();
+        assert_eq!(back["items"][1]["transition"]["startShiftMs"], -500);
+        assert!(back["items"][0].get("transition").is_none());
+    }
 }
