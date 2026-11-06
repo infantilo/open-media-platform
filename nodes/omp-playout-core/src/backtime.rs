@@ -137,10 +137,10 @@ mod tests {
     use super::*;
 
     fn song(id: &str, dur: i64, outro: i64) -> Item {
-        Item { id: id.into(), kind: Kind::Song, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: Some(outro), gain_db: 0.0, optional: false }
+        Item { id: id.into(), kind: Kind::Song, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: Some(outro), gain_db: 0.0, optional: false, transition: Default::default() }
     }
     fn news() -> Item {
-        Item { id: "news".into(), kind: Kind::Speech, duration_ms: 120_000, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0, optional: false }
+        Item { id: "news".into(), kind: Kind::Speech, duration_ms: 120_000, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0, optional: false, transition: Default::default() }
     }
     fn cfg() -> Config {
         Config::default()
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn early_inserts_filler_then_shifts_segue() {
-        let filler = Item { id: "jingle".into(), kind: Kind::Speech, duration_ms: 20_000, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0, optional: true };
+        let filler = Item { id: "jingle".into(), kind: Kind::Speech, duration_ms: 20_000, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0, optional: true, transition: Default::default() };
         // Marke 23 s später: 20-s-Füller einfügen, Rest 3 s über Segue-Punkt nach hinten
         let f = fit(&base(), 2, 373_000, 0, &[filler], &cfg(), &Params::default()).unwrap();
         assert_eq!(f.items.len(), 4);

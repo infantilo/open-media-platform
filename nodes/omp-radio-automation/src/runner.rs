@@ -25,6 +25,9 @@ pub struct LogItem {
     pub gain_db: f64,
     #[serde(default)]
     pub optional: bool,
+    /// Übergang vom Vorgänger in dieses Element (Segue-Editor, RB7); leer = Standardblende.
+    #[serde(default, skip_serializing_if = "segue::Transition::is_empty")]
+    pub transition: segue::Transition,
     /// Harte Marke: dieses Element soll zu dieser Uhrzeit (Unix-ms) einsetzen (Backtiming, RB5).
     #[serde(default)]
     pub fix_at_unix_ms: Option<i64>,
@@ -90,7 +93,7 @@ impl PlayCall {
 }
 
 fn to_item(i: &LogItem) -> Item {
-    Item { id: i.id.clone(), kind: i.kind, duration_ms: i.duration_ms, som_ms: i.som_ms, intro_ms: i.intro_ms, outro_ms: i.outro_ms, gain_db: i.gain_db, optional: i.optional }
+    Item { id: i.id.clone(), kind: i.kind, duration_ms: i.duration_ms, som_ms: i.som_ms, intro_ms: i.intro_ms, outro_ms: i.outro_ms, gain_db: i.gain_db, optional: i.optional, transition: i.transition.clone() }
 }
 
 /// Backtiming beim Start: Für jede harte Marke (`fixAtUnixMs`) wird der Ablauf davor angepasst (Füllkandidaten weglassen/einfügen, Segue-Punkte
@@ -165,7 +168,7 @@ mod tests {
     use segue::Kind;
 
     fn item(id: &str, kind: Kind, dur: i64, outro: Option<i64>) -> LogItem {
-        LogItem { id: id.into(), kind, file: format!("/m/{id}.wav"), duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: outro, gain_db: -1.5, optional: false, fix_at_unix_ms: None, title: None, block: None }
+        LogItem { id: id.into(), kind, file: format!("/m/{id}.wav"), duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: outro, gain_db: -1.5, optional: false, transition: Default::default(), fix_at_unix_ms: None, title: None, block: None }
     }
     fn log() -> Log {
         Log { log_id: "tag 1".into(), fillers: vec![], blocks: vec![], items: vec![item("a", Kind::Song, 200_000, Some(195_000)), item("j", Kind::Jingle, 6_000, None), item("b", Kind::Song, 180_000, None)] }

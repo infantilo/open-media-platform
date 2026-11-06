@@ -33,6 +33,32 @@ impl Curve {
     }
 }
 
+/// Abweichung des Übergangs **in** dieses Element vom Vorgänger (Segue-Editor, RB7). Alles optional: fehlt ein Wert, gilt die
+/// Standardrechnung aus [`Config`]. Nur Zahlen — die Audiodateien bleiben unverändert (nicht-destruktiv).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Transition {
+    /// Länge des Ausblendens des Vorgängers (statt der Standardblende); wird vom Ausklang des Vorgängers begrenzt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_out_ms: Option<i64>,
+    /// Länge des Einblendens dieses Elements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_in_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve_out: Option<Curve>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve_in: Option<Curve>,
+    /// Verschiebt den Einsatz dieses Elements gegenüber dem Segue-Punkt des Vorgängers (negativ = früher, positiv = später).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_shift_ms: Option<i64>,
+}
+
+impl Transition {
+    pub fn is_empty(&self) -> bool {
+        *self == Transition::default()
+    }
+}
+
 /// Ein Element des Logs mit seinen Marken (Millisekunden in der Datei).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Item {
@@ -54,6 +80,9 @@ pub struct Item {
     /// Füllkandidat: darf das Backtiming weglassen (RB5).
     #[serde(default)]
     pub optional: bool,
+    /// Übergang vom Vorgänger in dieses Element (Segue-Editor); leer = Standard.
+    #[serde(default, skip_serializing_if = "Transition::is_empty")]
+    pub transition: Transition,
 }
 
 #[derive(Clone, Debug)]
@@ -100,6 +129,11 @@ fn outro_of(it: &Item, cfg: &Config) -> i64 {
     o.clamp(it.som_ms, it.duration_ms)
 }
 
+/// Einsatz des Nachfolgers: Segue-Punkt des Vorgängers plus Verschiebung, nie vor dem Start des Vorgängers.
+fn shifted_start(cursor: i64, until_segue: i64, t: &Transition) -> i64 {
+    (cursor + until_segue + t.start_shift_ms.unwrap_or(0)).max(cursor)
+}
+
 /// Plant eine Folge ab `start_ms`. Fehlerhafte Eingaben (Dauer ≤ 0) werden abgelehnt.
 pub fn plan(items: &[Item], start_ms: i64, cfg: &Config) -> Result<Vec<Placed>, String> {
     for it in items {
@@ -134,27 +168,36 @@ pub fn plan(items: &[Item], start_ms: i64, cfg: &Config) -> Result<Vec<Placed>, 
                 (Kind::Song, Kind::Song) => {
                     let o = outro_of(it, cfg);
                     let tail = it.duration_ms - o;
-                    let xf = cfg.crossfade_ms.min(tail.max(0));
-                    p.next_start_ms = cursor + (o - it.som_ms);
+                    let t = &n.transition;
+                    let xf_out = t.fade_out_ms.unwrap_or(cfg.crossfade_ms).clamp(0, tail.max(0));
+                    let xf_in = t.fade_in_ms.unwrap_or(xf_out).max(0);
+                    p.next_start_ms = shifted_start(cursor, o - it.som_ms, t);
                     p.stop_at_ms = Some(o);
-                    p.fade_out_ms = xf;
-                    p.end_ms = p.next_start_ms + xf;
-                    pending_in = (xf, cfg.curve);
+                    p.fade_out_ms = xf_out;
+                    p.fade_out_curve = t.curve_out.unwrap_or(cfg.curve);
+                    p.end_ms = (cursor + (o - it.som_ms)).max(p.next_start_ms) + xf_out;
+                    pending_in = (xf_in, t.curve_in.unwrap_or(cfg.curve));
                 }
                 (Kind::Song, Kind::Jingle | Kind::Speech) => {
                     let o = outro_of(it, cfg);
                     let tail = it.duration_ms - o;
-                    let f = cfg.under_jingle_fade_ms.min(tail.max(0));
-                    p.next_start_ms = cursor + (o - it.som_ms);
+                    let t = &n.transition;
+                    let f = t.fade_out_ms.unwrap_or(cfg.under_jingle_fade_ms).clamp(0, tail.max(0));
+                    p.next_start_ms = shifted_start(cursor, o - it.som_ms, t);
                     p.stop_at_ms = Some(o);
                     p.fade_out_ms = f;
-                    p.end_ms = p.next_start_ms + f;
+                    p.fade_out_curve = t.curve_out.unwrap_or(cfg.curve);
+                    p.end_ms = (cursor + (o - it.som_ms)).max(p.next_start_ms) + f;
+                    if let Some(fi) = t.fade_in_ms {
+                        pending_in = (fi.max(0), t.curve_in.unwrap_or(cfg.curve));
+                    }
                 }
                 (Kind::Jingle, Kind::Song) => {
                     // Der Titel startet unter dem Ende des Jingles (Outro-Marke, sonst 500 ms vor Ende).
                     let o = it.outro_ms.unwrap_or(it.duration_ms - 500).clamp(it.som_ms, it.duration_ms);
-                    p.next_start_ms = cursor + (o - it.som_ms);
-                    pending_in = (cfg.after_jingle_fade_ms, Curve::Linear);
+                    let t = &n.transition;
+                    p.next_start_ms = shifted_start(cursor, o - it.som_ms, t);
+                    pending_in = (t.fade_in_ms.unwrap_or(cfg.after_jingle_fade_ms).max(0), t.curve_in.unwrap_or(Curve::Linear));
                 }
                 _ => {}
             }
@@ -170,13 +213,13 @@ mod tests {
     use super::*;
 
     fn song(id: &str, dur: i64, outro: Option<i64>) -> Item {
-        Item { id: id.into(), kind: Kind::Song, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: outro, gain_db: 0.0, optional: false }
+        Item { id: id.into(), kind: Kind::Song, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: outro, gain_db: 0.0, optional: false, transition: Transition::default() }
     }
     fn jingle(id: &str, dur: i64) -> Item {
-        Item { id: id.into(), kind: Kind::Jingle, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0, optional: false }
+        Item { id: id.into(), kind: Kind::Jingle, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0, optional: false, transition: Transition::default() }
     }
     fn speech(id: &str, dur: i64) -> Item {
-        Item { id: id.into(), kind: Kind::Speech, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0, optional: false }
+        Item { id: id.into(), kind: Kind::Speech, duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: None, gain_db: 0.0, optional: false, transition: Transition::default() }
     }
 
     #[test]
@@ -243,5 +286,51 @@ mod tests {
     #[test]
     fn invalid_duration_is_rejected() {
         assert!(plan(&[song("a", 0, None)], 0, &Config::default()).is_err());
+    }
+
+    #[test]
+    fn empty_transition_changes_nothing() {
+        let a = [song("a", 200_000, Some(195_000)), song("b", 180_000, None)];
+        let mut b = a.clone();
+        b[1].transition = Transition::default();
+        assert_eq!(plan(&a, 0, &Config::default()).unwrap(), plan(&b, 0, &Config::default()).unwrap());
+        assert!(!serde_json::to_string(&b[1]).unwrap().contains("transition"), "leerer Übergang wird nicht geschrieben");
+    }
+
+    #[test]
+    fn transition_overrides_blend_curves_and_start() {
+        let mut items = [song("a", 200_000, Some(195_000)), song("b", 180_000, None)];
+        items[1].transition = Transition {
+            fade_out_ms: Some(2000),
+            fade_in_ms: Some(500),
+            curve_out: Some(Curve::Linear),
+            curve_in: Some(Curve::Log),
+            start_shift_ms: Some(-1000),
+        };
+        let p = plan(&items, 0, &Config::default()).unwrap();
+        assert_eq!(p[0].fade_out_ms, 2000);
+        assert_eq!(p[0].fade_out_curve, Curve::Linear);
+        assert_eq!(p[0].stop_at_ms, Some(195_000), "Segue-Punkt des Vorgängers bleibt");
+        assert_eq!(p[1].start_ms, 194_000);
+        assert_eq!(p[1].fade_in_ms, 500);
+        assert_eq!(p[1].fade_in_curve, Curve::Log);
+        assert_eq!(p[0].end_ms, 197_000, "Ausblenden beginnt am Segue-Punkt");
+    }
+
+    #[test]
+    fn transition_is_limited_by_tail_and_by_predecessor_start() {
+        let mut items = [song("a", 100_000, Some(99_000)), song("b", 60_000, None)];
+        items[0].som_ms = 0;
+        items[1].transition = Transition { fade_out_ms: Some(9000), start_shift_ms: Some(-500_000), ..Default::default() };
+        let p = plan(&items, 5000, &Config::default()).unwrap();
+        assert_eq!(p[0].fade_out_ms, 1000, "durch den Ausklang begrenzt");
+        assert_eq!(p[1].start_ms, 5000, "nie vor dem Vorgänger");
+    }
+
+    #[test]
+    fn transition_deserializes_from_camel_case_json() {
+        let it: Item = serde_json::from_str(r#"{"id":"b","kind":"song","duration_ms":1000,"transition":{"startShiftMs":250}}"#).unwrap();
+        assert_eq!(it.transition.start_shift_ms, Some(250));
+        assert!(it.transition.fade_out_ms.is_none());
     }
 }

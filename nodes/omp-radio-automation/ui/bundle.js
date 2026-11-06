@@ -225,6 +225,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
         outroMs: r.outroMs === null || r.outroMs === "" ? null : Number(r.outroMs), gainDb: Number(r.gainDb) || 0,
         optional: !!r.optional, fixAtUnixMs: r.fixText && r.fixText.trim() ? fixToUnix(r.fixText) : null,
         title: r.title && r.title.trim() ? r.title.trim() : null, block: r.block && r.block.trim() ? r.block.trim() : null,
+        ...(r.transition && Object.keys(r.transition).length ? { transition: r.transition } : {}),
       })),
       fillers,
       blocks: Object.entries(blockTargets).filter(([n]) => rows.some((r) => (r.block || "").trim() === n)).map(([name, targetMs]) => ({ name, targetMs })),

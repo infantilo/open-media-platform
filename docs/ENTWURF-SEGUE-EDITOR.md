@@ -61,7 +61,22 @@ gegen `Placed` ≤ 1 ms; Sendeweg gegen Plan weiter wie RB4 (`lateMs`).
 | RB7.4 | Vorhören (WebAudio nach Plan), Schleife, A/B-Einzeln | Headless mit Testton: Onset gegen Plan ≤ 1 ms |
 | RB7.5 | „Sendequalität prüfen“ (Render) + Einbindung ins Radio-Log-Panel (Doppelklick auf Übergang) | Vergleich Render ↔ Sendeweg |
 
-## 7. Offene Fragen (vor RB7.1 klären)
+## 7. Entscheidungen (Nutzer, 2026-11-06)
+
+1. **Marken zuerst im Log** (Asset-Marken später, nur anderer Speicherort).
+2. **Editor an beiden Orten:** Kachel im Radio-Modul **und** im Log-Panel der Radio-Automation (ein Element, zwei Einbettungen).
+3. **Markervorschläge: alle drei Quellen, dynamisch** — Stille am Ende, Lautstärkeverlauf, Beat-Raster; jeweils als Vorschlag zum
+   Übernehmen (nie stillschweigend), die Erkennung richtet sich nach dem Material (Parameter sichtbar und einstellbar).
+4. Offen geblieben: dritte Spur (Moderation/Jingle) — zunächst nur A→B.
+
+## 8. Umsetzungsstand
+
+* **RB7.1 erledigt (2026-11-06):** `segue::Transition` (`fadeOutMs`, `fadeInMs`, `curveOut`, `curveIn`, `startShiftMs`) am Element des
+  *Nachfolgers*; `plan()` wertet sie für Titel→Titel, Titel→Jingle/Gesprochenes und Jingle→Titel aus (Blende vom Ausklang begrenzt,
+  Einsatz nie vor dem Vorgänger). Ohne Wert unverändert (Test), leerer Übergang wird nicht geschrieben. `LogItem.transition` im Radio-Log;
+  das Bedienfeld lässt das Feld beim Speichern stehen.
+
+## 9. Frühere offene Fragen (Rest)
 
 1. **Wohin mit den Marken?** Am Asset (setzt die Bibliothek-/MAM-Entscheidung voraus, die für die Woche ab 2026-11-09 erwartet wird) oder
    zunächst nur im Log? Empfehlung: Log zuerst, Asset-Marken später ergänzen — der Editor ändert dann nur den Speicherort.
