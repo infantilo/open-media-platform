@@ -90,12 +90,13 @@ var allowedExtraEnvKeys = map[string]bool{
 	"OMP_FRAMERATE_DEN":      true,
 	"OMP_ME_LEVELS":          true,
 	// Playout-Puffer (Kapitel 39, Role.Env): Tiefe, Wiederaufnahme, Haltebild, Speichergrenze, Kanäle.
-	"OMP_BUFFER_MS":       true,
-	"OMP_RESUME_MS":       true,
-	"OMP_REFILL_PERMILLE": true,
-	"OMP_HOLD_MODE":       true,
-	"OMP_BUFFER_MAX_MIB":  true,
-	"OMP_AUDIO_CHANNELS":  true,
+	"OMP_BUFFER_MS":          true,
+	"OMP_RESUME_MS":          true,
+	"OMP_REFILL_PERMILLE":    true,
+	"OMP_RADIO_TARGET_LABEL": true, "OMP_STUDIO_MIXER_LABEL": true, "OMP_STUDIO_GPIO_LABEL": true, "OMP_GPIO_INPUTS": true, "OMP_GPIO_OUTPUTS": true, // Radio-Moderationsplatz (Kap. 89)
+	"OMP_HOLD_MODE":      true,
+	"OMP_BUFFER_MAX_MIB": true,
+	"OMP_AUDIO_CHANNELS": true,
 	// Ziele der Playout-Automation, aus den Rollen des Workflows vorbelegt (workflows/autotargets.go).
 	"OMP_PLAYOUT_TARGET_PLAYER_A_LABEL":    true,
 	"OMP_PLAYOUT_TARGET_PLAYER_B_LABEL":    true,

@@ -127,6 +127,12 @@ var allowedRoleEnv = map[string][]string{
 	"OMP_BUFFER_MAX_MIB":  nil,
 	"OMP_AUDIO_CHANNELS":  nil,
 	"OMP_HOLD_MODE":       {"last", "black"},
+	// Radio-Moderationsplatz (Kapitel 89): Ziele der Steuer-Nodes (Namen anderer Rollen) und Kontaktzahl des GPIO-Nodes.
+	"OMP_RADIO_TARGET_LABEL": nil,
+	"OMP_STUDIO_MIXER_LABEL": nil,
+	"OMP_STUDIO_GPIO_LABEL":  nil,
+	"OMP_GPIO_INPUTS":        nil,
+	"OMP_GPIO_OUTPUTS":       nil,
 }
 
 // validateRoleEnv prüft Role.Env gegen die Allowlist.
