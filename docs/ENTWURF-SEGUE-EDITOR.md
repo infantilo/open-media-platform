@@ -102,6 +102,19 @@ gegen `Placed` ≤ 1 ms; Sendeweg gegen Plan weiter wie RB4 (`lateMs`).
   exakt still. **Nicht geprüft:** echtes Hören über Lautsprecher (Headless), Verhalten bei sehr langen Dateien (Ausschnitte nur ≈ 30 s, aber nicht gemessen).
   Logik-Tests: 7 (`deno test ui/modules/segue-editor`).
 
+* **RB7.5 erledigt (2026-11-06):**
+  * **Sendequalität prüfen:** `POST /segue/render` (`{items:[a,b], t0Ms, t1Ms}`) mischt die beiden Elemente im Fenster mit dem **unveränderten Mischer des Segue-Players**
+    (`omp-segue-player/src/mix.rs` per `#[path]` eingebunden, kein zweiter Code) und liefert s16le-Stereo; der Editor spielt das Ergebnis und vergleicht es mit der
+    Browser-Vorschau. Gemessen: Abweichung −91,2 dB, Spitze 0,0000 (Ziel < −40 dB). Rust-Test: Mischung gegen Planwerte (0,8/0,4-Konstanten → 0,6 in der Blendmitte)
+    und Fenster mitten in der Blende = Ausschnitt der vollen Mischung.
+  * **Reiter „Übergänge“** im Radio-Panel (neben Playlist): alle Titelpaare mit Kurzfassung des Übergangs (aus/ein/Einsatz/Kurven) und „Bearbeiten“.
+  * **Doppelklick** auf die Zeitzelle einer Playlist-Zeile öffnet den Editor für den Übergang von der Vorzeile.
+  * Proxy: `POST …/segue/render` neu; alle fünf Routen (`plan`, `peaks`, `audio`, `render`, `ui/segue-editor.js`) über den echten Orchestrator geprüft (ohne Anmeldung 401).
+  * Panel-Klicktest `tools/segue-editor-e2e/panel.mjs` (Panel-Bundle gegen den Node, Aufrufe wie vom Proxy umgeleitet): Demo-Log importieren, Doppelklick → Editor mit
+    Nachtfahrt → Strandgut, Änderung übernehmen, Reiter zeigt „aus 1.0 s · Einsatz −0.5 s“, Knopf öffnet den Editor.
+  * **Nicht geprüft:** Panel im echten Browser-Shell (isolierter Ursprung/iframe); die laufende Radio-Automation des Radio-Workflows hat noch den alten Stand (Neustart nötig).
+  * **Kachel im Radio-Modul:** Das Radio-Modul hat keine eigene Oberfläche außer diesem Panel; der Reiter „Übergänge“ ist die Kachel dazu.
+
 ## 9. Frühere offene Fragen (Rest)
 
 1. **Wohin mit den Marken?** Am Asset (setzt die Bibliothek-/MAM-Entscheidung voraus, die für die Woche ab 2026-11-09 erwartet wird) oder

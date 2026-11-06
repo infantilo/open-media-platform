@@ -3,6 +3,10 @@
 //! ein As-Run. Kein Medien-I/O; Fernaufrufe laufen über den Orchestrator-Proxy (wie `omp-playout-automation`).
 
 mod autoload;
+/// Mischlogik des Segue-Players unverändert eingebunden: „Sendequalität prüfen“ rechnet mit exakt demselben Code wie die Sendung.
+#[path = "../../omp-segue-player/src/mix.rs"]
+#[allow(dead_code)]
+mod mix;
 mod runner;
 mod segue_api;
 mod uibundle;
@@ -363,6 +367,10 @@ impl ParamStore for Store {
         if method == "GET" && path.starts_with("/segue/peaks") {
             let (status, v) = segue_api::peaks_response(path.split_once('?').map(|(_, q)| q).unwrap_or(""));
             return Some(RawResponse { status, content_type: "application/json", body: serde_json::to_vec(&v).unwrap_or_default() });
+        }
+        if method == "POST" && path == "/segue/render" {
+            let (status, body, content_type) = segue_api::render_response(body);
+            return Some(RawResponse { status, content_type, body });
         }
         if method == "GET" && path.starts_with("/segue/audio") {
             let (status, body, content_type) = segue_api::audio_response(path.split_once('?').map(|(_, q)| q).unwrap_or(""));

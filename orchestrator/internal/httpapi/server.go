@@ -480,6 +480,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Segue-Editor (RB7.2): reine Rechnung (Plan) und Lesen von Spitzenwerten einer Mediendatei im Node — verändern nichts,
 	// daher requireAuth wie params-GET. Nodes ohne diese Endpunkte antworten 404 aus dem Node selbst.
 	mux.HandleFunc("POST /api/v1/nodes/{id}/segue/plan", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/segue/plan", nodeLogs)))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/segue/render", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/segue/render", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/segue/audio", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/segue/audio", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/segue/peaks", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/segue/peaks", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/state", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/state", nodeLogs)))

@@ -216,6 +216,12 @@ var DE = {
   playB: "\u25B6 nur B",
   stop: "\u25A0",
   loop: "Schleife",
+  verify: "Sendequalit\xE4t pr\xFCfen",
+  verifyRunning: "Rechne mit dem Sende-Mischer \u2026",
+  verifyResult: "Sendequalit\xE4t: Abweichung zur Vorschau {d} dB (Spitze {p}) \u2014 {v}",
+  verifyOk: "gleich",
+  verifyWarn: "weicht ab",
+  verifyFailed: "Pr\xFCfung nicht m\xF6glich",
   pre: "Vorlauf (s)",
   post: "Nachlauf (s)",
   audioFailed: "Vorh\xF6ren nicht m\xF6glich",
@@ -248,6 +254,12 @@ var EN = {
   playB: "\u25B6 B only",
   stop: "\u25A0",
   loop: "Loop",
+  verify: "Check broadcast quality",
+  verifyRunning: "Rendering with the playout mixer \u2026",
+  verifyResult: "Broadcast quality: deviation from preview {d} dB (peak {p}) \u2014 {v}",
+  verifyOk: "identical",
+  verifyWarn: "differs",
+  verifyFailed: "Check failed",
   pre: "Lead-in (s)",
   post: "Tail (s)",
   audioFailed: "Preview unavailable",
@@ -448,7 +460,7 @@ var SegueEditor = class extends HTMLElement {
     loopBox.style.minHeight = "0";
     loopBox.addEventListener("change", () => this.#loop = loopBox.checked);
     loopLabel.append(loopBox, T("loop"));
-    transport.append(mk(T("playBoth"), "primary", () => void this.preview("both")), mk(T("playA"), "", () => void this.preview("a")), mk(T("playB"), "", () => void this.preview("b")), mk(T("stop"), "", () => this.stopPreview()), loopLabel, small(T("pre"), this.#pre, (v) => this.#pre = v), small(T("post"), this.#post, (v) => this.#post = v));
+    transport.append(mk(T("playBoth"), "primary", () => void this.preview("both")), mk(T("playA"), "", () => void this.preview("a")), mk(T("playB"), "", () => void this.preview("b")), mk(T("stop"), "", () => this.stopPreview()), mk(T("verify"), "", () => void this.verifyBroadcast()), loopLabel, small(T("pre"), this.#pre, (v) => this.#pre = v), small(T("post"), this.#post, (v) => this.#post = v));
     wrap.append(this.#canvas, transport, this.#status, this.#fields, buttons);
     const c = this.#canvas;
     c.addEventListener("pointerdown", (e) => this.#down(e));
@@ -658,6 +670,88 @@ var SegueEditor = class extends HTMLElement {
       this.#setStatus(T("audioFailed"), true);
     }
   }
+  /**
+   * „Sendequalität prüfen“ (RB7.5): derselbe Übergang, gerechnet vom Node mit dem Mischer des Segue-Players (`POST …/segue/render`), wird
+   * abgespielt und gegen die Browser-Vorschau verglichen (Pegel der Abweichung in dB gegen den Pegel des Signals).
+   */
+  async verifyBroadcast() {
+    if (!this.#placed) return null;
+    this.stopPreview(false);
+    this.#setStatus(T("verifyRunning"));
+    try {
+      const w = previewWindow(this.#placed[0], this.#placed[1], this.#pre, this.#post);
+      const t0 = Math.round(w.t0);
+      const t1 = Math.round(w.t1);
+      const strip = (i, id) => ({
+        ...i,
+        id
+      });
+      const b = strip(this.#b, "b");
+      if (isEmptyTransition(b.transition)) delete b.transition;
+      const r = await this.fetcher(`${this.base}/segue/render`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          items: [
+            strip(this.#a, "a"),
+            b
+          ],
+          t0Ms: t0,
+          t1Ms: t1
+        })
+      });
+      if (!r.ok) throw new Error(String(r.status));
+      const [rl, rr] = pcmToChannels(new Uint8Array(await r.arrayBuffer()));
+      const mine = await this.renderPreview("both", t0, t1);
+      const n = Math.min(rl.length, mine.left.length);
+      let sig = 0;
+      let dif = 0;
+      let peak = 0;
+      for (let i = 0; i < n; i++) {
+        const d = rl[i] - mine.left[i];
+        sig += rl[i] * rl[i];
+        dif += d * d;
+        peak = Math.max(peak, Math.abs(d), Math.abs(rr[i] - mine.right[i]));
+      }
+      const deviationDb = sig > 0 ? 10 * Math.log10(Math.max(dif, 1e-30) / sig) : -200;
+      this.#setStatus(T("verifyResult").replace("{d}", deviationDb.toFixed(1)).replace("{p}", peak.toFixed(4)).replace("{v}", deviationDb < -40 ? T("verifyOk") : T("verifyWarn")), deviationDb >= -40);
+      const ctx = new AudioContext({
+        sampleRate: 48e3
+      });
+      const buf = ctx.createBuffer(2, rl.length, 48e3);
+      buf.copyToChannel(rl, 0);
+      buf.copyToChannel(rr, 1);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      this.#audio = ctx;
+      this.#win = {
+        t0,
+        t1
+      };
+      this.#ctxStart = ctx.currentTime + 0.05;
+      this.#playMs = t0;
+      src.start(this.#ctxStart);
+      const tick = () => {
+        if (this.#audio !== ctx) return;
+        const t = t0 + (ctx.currentTime - this.#ctxStart) * 1e3;
+        if (t >= t1) return this.stopPreview();
+        this.#playMs = Math.max(t0, t);
+        this.#draw();
+        this.#raf = requestAnimationFrame(tick);
+      };
+      this.#raf = requestAnimationFrame(tick);
+      return {
+        deviationDb,
+        peak
+      };
+    } catch {
+      this.#setStatus(T("verifyFailed"), true);
+      return null;
+    }
+  }
   stopPreview(redraw = true) {
     cancelAnimationFrame(this.#raf);
     const c = this.#audio;
@@ -668,9 +762,12 @@ var SegueEditor = class extends HTMLElement {
     if (redraw) this.#draw();
   }
   /** Dasselbe Vorhören ohne Lautsprecher in einen Puffer gerechnet (Tests, später „Sendequalität prüfen“). */
-  async renderPreview(mode = "both") {
+  async renderPreview(mode = "both", fromMs, toMs) {
     if (!this.#placed) throw new Error("kein Plan");
-    const w = previewWindow(this.#placed[0], this.#placed[1], this.#pre, this.#post);
+    const w = fromMs !== void 0 && toMs !== void 0 ? {
+      t0: fromMs,
+      t1: toMs
+    } : previewWindow(this.#placed[0], this.#placed[1], this.#pre, this.#post);
     const frames = Math.ceil((w.t1 - w.t0) / 1e3 * 48e3);
     const off = new OfflineAudioContext(2, frames, 48e3);
     await this.#schedule(off, w.t0, w.t1, mode, 0);

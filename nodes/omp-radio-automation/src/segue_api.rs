@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 use omp_playout_core::segue::{self, Config, Curve, Placed};
 use serde_json::{Value, json};
 
+use crate::mix;
 use crate::runner::{self, Log};
 
 const SAMPLE_RATE: u64 = 48_000;
@@ -193,6 +194,110 @@ pub fn peaks_response(query: &str) -> (u16, Value) {
     (200, json!({"fromMs": from, "toMs": to, "bins": bins, "peaks": acc.finish()}))
 }
 
+/// ffmpeg → f32 interleaved Stereo 48 kHz für einen Dateiausschnitt.
+fn decode_f32(path: &Path, from_ms: i64, to_ms: i64) -> Result<Vec<f32>, String> {
+    let out = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-ss", &format!("{:.3}", from_ms as f64 / 1000.0), "-t", &format!("{:.3}", (to_ms - from_ms) as f64 / 1000.0)])
+        .arg("-i")
+        .arg(path)
+        .args(["-vn", "-ac", "2", "-ar", "48000", "-f", "f32le", "-"])
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| format!("ffmpeg nicht startbar: {e}"))?;
+    if out.stdout.is_empty() {
+        return Err("Datei nicht lesbar".to_string());
+    }
+    Ok(out.stdout.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+}
+
+fn mix_curve(c: Curve) -> mix::Curve {
+    match c {
+        Curve::Linear => mix::Curve::Linear,
+        Curve::Cosine => mix::Curve::Cosine,
+        Curve::Log => mix::Curve::Log,
+    }
+}
+
+/// Mischt eine Folge geplanter Stimmen im Zeitfenster [t0, t1] (ms der Planachse) mit dem Mischer des Segue-Players.
+/// `voices`: (Datei, Plan, Pegelkorrektur dB, Ausschnitt als f32-Stereo ab Dateizeit `file_from`). Gibt s16le-Stereo zurück.
+pub fn mix_window(voices: Vec<(Placed, f64, Vec<f32>)>, t0: i64, t1: i64) -> Vec<u8> {
+    let sr = mix::SR as i64;
+    let mut mx = mix::Mixer::new(8);
+    for (p, gain_db, samples) in voices {
+        let frames = samples.len() / mix::CH;
+        if frames == 0 {
+            continue;
+        }
+        // Die Stimme beginnt auf der Planachse bei p.start; liegt t0 dahinter, beginnt der Ausschnitt mitten in ihr (virtueller Start vor Frame 0).
+        let start_n = (p.start_ms - t0) * sr / 1000;
+        let Some(id) = mx.add(std::sync::Arc::new(samples), 0, start_n, mix::db_to_gain(gain_db)) else { continue };
+        if p.fade_in_ms > 0 {
+            mx.fade_in(id, p.fade_in_ms * sr / 1000, mix_curve(p.fade_in_curve));
+        }
+        if let Some(stop) = p.stop_at_ms.filter(|s| *s > p.offset_ms) {
+            let at = start_n + (stop - p.offset_ms) * sr / 1000;
+            mx.stop(id, at, p.fade_out_ms * sr / 1000, mix_curve(p.fade_out_curve));
+        }
+    }
+    let total = ((t1 - t0).max(0) * sr / 1000) as usize;
+    let mut out = Vec::with_capacity(total * mix::CH * 2);
+    let mut block = vec![0f32; mix::BLOCK * mix::CH];
+    let mut n = 0usize;
+    while n < total {
+        mx.render(n as i64, &mut block);
+        let take = mix::BLOCK.min(total - n);
+        for v in &block[..take * mix::CH] {
+            out.extend_from_slice(&((v.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes());
+        }
+        n += take;
+    }
+    out
+}
+
+/// `POST /segue/render` `{items:[a,b], t0Ms, t1Ms}` → s16le-Stereo 48 kHz der Mischung beider Elemente im Fenster, gerechnet mit dem
+/// Mischer des Segue-Players („Sendequalität“). Plan wie `/segue/plan`. Höchstens 120 s.
+pub fn render_response(body: &[u8]) -> (u16, Vec<u8>, &'static str) {
+    let err = |status: u16, msg: &str| (status, serde_json::to_vec(&json!({"error": msg})).unwrap_or_default(), "application/json");
+    let v: Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => return err(400, "invalid JSON body"),
+    };
+    let (Some(t0), Some(t1)) = (v.get("t0Ms").and_then(Value::as_i64), v.get("t1Ms").and_then(Value::as_i64)) else { return err(400, "t0Ms/t1Ms fehlen") };
+    if t1 <= t0 || t1 - t0 > MAX_AUDIO_MS {
+        return err(400, "Fenster ungültig oder länger als 120 s");
+    }
+    let log: Log = match serde_json::from_value(json!({"logId": "editor", "items": v.get("items").cloned().unwrap_or(Value::Null)})) {
+        Ok(l) => l,
+        Err(e) => return err(400, &format!("items: {e}")),
+    };
+    if log.items.len() != 2 {
+        return err(400, "genau zwei Elemente");
+    }
+    let items: Vec<segue::Item> = log.items.iter().map(runner::to_item).collect();
+    let placed = match segue::plan(&items, 0, &Config::default()) {
+        Ok(p) => p,
+        Err(e) => return err(400, &e),
+    };
+    let roots = media_roots();
+    let mut voices = Vec::new();
+    for (it, p) in log.items.iter().zip(placed.iter()) {
+        let a = t0.max(p.start_ms);
+        let b = t1.min(p.end_ms);
+        if b <= a {
+            continue;
+        }
+        let Some(path) = allowed_file(&it.file, &roots) else { return err(403, "Datei liegt nicht im Medienverzeichnis") };
+        let from = p.offset_ms + (a - p.start_ms);
+        let to = p.offset_ms + (b - p.start_ms);
+        let samples = match decode_f32(&path, from, to) {
+            Ok(s) => s,
+            Err(e) => return err(422, &e),
+        };
+        voices.push((p.clone(), it.gain_db, samples));
+    }
+    (200, mix_window(voices, t0, t1), "application/octet-stream")
+}
+
 /// Längster Vorhörausschnitt einer Datei (Schutz gegen riesige Antworten): 2 Minuten Stereo 48 kHz s16 ≈ 23 MB.
 const MAX_AUDIO_MS: i64 = 120_000;
 
@@ -297,6 +402,46 @@ mod tests {
         // Medienverzeichnis ist hier nicht gesetzt → Datei außerhalb von data/media
         assert_eq!(audio_response(&format!("file={}&fromMs=0&toMs=1000", f.display())).0, 403);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn const_voice(p: &Placed, t0: i64, t1: i64, v: f32) -> (Placed, f64, Vec<f32>) {
+        let a = t0.max(p.start_ms);
+        let b = t1.min(p.end_ms);
+        let frames = ((b - a).max(0) * 48) as usize;
+        (p.clone(), 0.0, vec![v; frames * 2])
+    }
+    fn at(pcm: &[u8], t_ms: i64, t0: i64) -> f32 {
+        let i = ((t_ms - t0) * 48) as usize * 4;
+        i16::from_le_bytes([pcm[i], pcm[i + 1]]) as f32 / 32767.0
+    }
+
+    #[test]
+    fn mix_window_follows_the_plan_with_the_players_mixer() {
+        let item = |id: &str, outro: Option<i64>, tr: Option<segue::Transition>| segue::Item {
+            id: id.into(), kind: segue::Kind::Song, duration_ms: 30_000, som_ms: 0, intro_ms: None, outro_ms: outro, gain_db: 0.0, optional: false,
+            transition: tr.unwrap_or_default(),
+        };
+        let tr = segue::Transition { fade_out_ms: Some(2000), fade_in_ms: Some(2000), curve_out: Some(Curve::Linear), curve_in: Some(Curve::Linear), start_shift_ms: Some(0) };
+        let placed = segue::plan(&[item("a", Some(20_000), None), item("b", None, Some(tr))], 0, &Config::default()).unwrap();
+        let (t0, t1) = (15_000, 25_000);
+        let full = mix_window(vec![const_voice(&placed[0], t0, t1, 0.8), const_voice(&placed[1], t0, t1, 0.4)], t0, t1);
+        assert_eq!(full.len(), ((t1 - t0) * 48 * 4) as usize);
+        assert!((at(&full, 19_000, t0) - 0.8).abs() < 1e-3, "A allein vor dem Segue-Punkt");
+        assert!((at(&full, 21_000, t0) - 0.6).abs() < 2e-3, "Mitte der linearen Blende: 0,8·0,5 + 0,4·0,5");
+        assert!((at(&full, 23_000, t0) - 0.4).abs() < 1e-3, "B allein nach der Blende");
+        // Fenster, das mitten in der Blende beginnt, liefert dieselben Samples wie der Ausschnitt des vollen Fensters
+        let (u0, u1) = (20_500, 24_000);
+        let part = mix_window(vec![const_voice(&placed[0], u0, u1, 0.8), const_voice(&placed[1], u0, u1, 0.4)], u0, u1);
+        for t in [20_500, 21_000, 21_999, 22_500, 23_999] {
+            assert!((at(&part, t, u0) - at(&full, t, t0)).abs() < 1e-4, "bei {t} ms");
+        }
+    }
+
+    #[test]
+    fn render_route_validates_input() {
+        assert_eq!(render_response(b"x").0, 400);
+        assert_eq!(render_response(br#"{"items":[],"t0Ms":0,"t1Ms":1000}"#).0, 400);
+        assert_eq!(render_response(br#"{"items":[],"t0Ms":0,"t1Ms":900000}"#).0, 400);
     }
 
     #[test]

@@ -92,6 +92,10 @@ check(stats.aEnd / stats.aBefore < 0.2, 'A am Ende der Blende fast still (Verhä
 check(stats.aAfter < 1e-4, 'A nach der Blende still (' + stats.aAfter + ')');
 check(stats.bBefore < 1e-4, 'B vor seinem Einsatz still (' + stats.bBefore + ')');
 check(stats.bOnset !== null && Math.abs(stats.bOnset - pb.startMs) <= 1, 'Einsatz von B gegen Plan ' + pb.startMs + ' ms: ' + (stats.bOnset && stats.bOnset.toFixed(2)) + ' ms (Abweichung ' + (stats.bOnset - pb.startMs).toFixed(2) + ')');
+// ---- Sendequalität (RB7.5): Node-Mischung mit dem Mischer des Segue-Players gegen die Browser-Vorschau ----
+const ver = JSON.parse(await tab.evaluate(`window.__ed.verifyBroadcast().then((r) => JSON.stringify(r))`));
+check(ver && ver.deviationDb < -40, 'Sende-Mischer gleich Vorschau: Abweichung ' + (ver && ver.deviationDb.toFixed(1)) + ' dB, Spitze ' + (ver && ver.peak.toFixed(4)));
+await tab.evaluate(`[...window.__ed.shadowRoot.querySelectorAll('button')].find(b => b.textContent === '■').click()`);
 // echtes Abspielen (AudioContext): Schaltfläche löst es aus, Wiedergabekopf läuft, Stopp beendet es
 await tab.evaluate(`[...window.__ed.shadowRoot.querySelectorAll('button')].find(b => b.textContent.includes('▶ ')).click()`);
 await sleep(2500);

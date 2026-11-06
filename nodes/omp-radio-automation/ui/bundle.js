@@ -36,7 +36,7 @@ const T = (() => {
       autoLive: "Status automatisch nach dem Zeitfenster (live/gesendet)", autoLoad: "Automatisch laden und zum Sendebeginn starten", autoLead: "Vorlauf (min)",
       lockedBy: "{u} bearbeitet diese Sendung gerade — schreibgeschützt.", lockTake: "Bearbeitung übernehmen", lockLost: "Die Bearbeitung wurde von {u} übernommen — schreibgeschützt.", lockMine: "Du bearbeitest",
       tp: "Teleprompter", tpClose: "Schließen", tpMirror: "Spiegeln", tpSpeed: "Auto-Scroll", tpSize: "Schrift", tpEmpty: "Keine Karten in dieser Sendung.", readTime: "Lesezeit ≈ {t}", readOver: "länger als geplant ({m} min)",
-      tabLive: "Sendebetrieb", tabPlan: "Planung", tabList: "Playlist", tabMod: "Moderation", tabLog: "Protokoll", tabsLabel: "Bereiche",
+      tabLive: "Sendebetrieb", tabPlan: "Planung", tabList: "Playlist", tabMod: "Moderation", tabLog: "Protokoll", tabTrans: "Übergänge", transHint: "Die Übergänge der Playlist: Segue-Punkt, Blenden und Einsatz je Titelpaar. „Bearbeiten“ öffnet den Segue-Editor (auch per Doppelklick auf die Zeit in der Playlist).", transStd: "Standardblende", transEdit: "Bearbeiten", transNone: "Weniger als zwei Zeilen in der Playlist.", transFadeOut: "aus", transFadeIn: "ein", transShift: "Einsatz", tabsLabel: "Bereiche",
       hint: "Eine harte Marke (Uhrzeit) lässt das Element zu dieser Zeit einsetzen: beim Start werden Füller weggelassen/eingefügt und Segue-Punkte verschoben (Entscheidungen im As-Run). Der Segue-Punkt ist die Stelle in der Datei, ab der der Nachfolger starten darf; ohne Angabe 3 s vor Dateiende. Der Log wird erst mit „Log laden“ übernommen.",
     },
     en: {
@@ -72,7 +72,7 @@ const T = (() => {
       autoLive: "Status automatically after the time window (live/aired)", autoLoad: "Load automatically and start at show start", autoLead: "Lead (min)",
       lockedBy: "{u} is editing this show — read only.", lockTake: "Take over editing", lockLost: "Editing was taken over by {u} — read only.", lockMine: "You are editing",
       tp: "Teleprompter", tpClose: "Close", tpMirror: "Mirror", tpSpeed: "Auto-scroll", tpSize: "Size", tpEmpty: "No cards in this show.", readTime: "Reading time ≈ {t}", readOver: "longer than planned ({m} min)",
-      tabLive: "On air", tabPlan: "Planning", tabList: "Playlist", tabMod: "Presenter", tabLog: "Log", tabsLabel: "Sections",
+      tabLive: "On air", tabPlan: "Planning", tabList: "Playlist", tabMod: "Presenter", tabLog: "Log", tabTrans: "Transitions", transHint: "The playlist transitions: segue point, blends and start per pair. “Edit” opens the segue editor (also by double-clicking the time cell in the playlist).", transStd: "Default blend", transEdit: "Edit", transNone: "Fewer than two playlist rows.", transFadeOut: "out", transFadeIn: "in", transShift: "start", tabsLabel: "Sections",
       hint: "A hard mark (time of day) makes the item start at that time: at start, fillers are dropped/inserted and segue points are moved (decisions in the as-run). The segue point is the position in the file from which the next item may start; without it, 3 s before the end. The log only takes effect with “Load log”.",
     },
   };
@@ -261,7 +261,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
         const inp = (key, type) => h("input", { type, value: r[key] ?? "", oninput: (e) => { r[key] = type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value; markDirty(); }, onchange: () => { if (key === "block" || key === "durationMs") renderRows(); } });
         const kind = h("select", { onchange: (e) => { r.kind = e.target.value; markDirty(); } }, ...["song", "jingle", "speech"].map((k) => h("option", { value: k }, T("kind." + k))));
         kind.value = r.kind;
-        const timeCell = h("td", { class: "muted tcol" }); timeCells.push([i, timeCell]);
+        const timeCell = h("td", { class: "muted tcol", title: i > 0 ? T("segueEdit") : "", ondblclick: () => { if (i > 0) openSegueEditor(i); } }); timeCells.push([i, timeCell]);
         const tr = h("tr", { draggable: "true",
           ondragstart: (e) => { dragFrom = i; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(i)); },
           ondragover: (e) => { if (dragFrom === null) return; e.preventDefault(); tr.classList.add("dragover"); },
@@ -276,13 +276,14 @@ class OmpRadioAutomationPanel extends HTMLElement {
       });
       tbody.replaceChildren(...out);
       updateTimes();
+      if (typeof renderTrans === "function") renderTrans();
     };
     // Segue-Editor (RB7): Dialog über der Tabelle; das Element kommt vom Node (`ui/segue-editor.js`), der Editor ändert nur Marken + Übergang
     let segueLoad = null;
     const openSegueEditor = async (i) => {
       const a = rows[i - 1], b = rows[i];
       if (!a.file || !b.file || !(Number(a.durationMs) > 0) || !(Number(b.durationMs) > 0)) return show(T("segueNeedsFiles"));
-      try { segueLoad = segueLoad || import(`${base}/ui/segue-editor.js`); await segueLoad; } catch { segueLoad = null; return show(T("segueLoadFailed")); }
+      if (!customElements.get("omp-segue-editor")) { try { segueLoad = segueLoad || import(`${base}/ui/segue-editor.js`); await segueLoad; } catch { segueLoad = null; return show(T("segueLoadFailed")); } }
       const toEdit = (r) => ({ ...r, durationMs: Number(r.durationMs) || 0, somMs: Number(r.somMs) || 0, introMs: r.introMs === "" ? null : r.introMs ?? null, outroMs: r.outroMs === "" ? null : r.outroMs ?? null });
       const ed = document.createElement("omp-segue-editor");
       ed.base = base;
@@ -764,8 +765,27 @@ class OmpRadioAutomationPanel extends HTMLElement {
     // ---- Reiter: Sendebetrieb · Planung · Playlist · Moderation · Protokoll ----
     // Oben bleiben Einstellungen, „Jetzt“ und die Live-Karte stehen (immer sichtbar im Betrieb); darunter wechselt der Bereich.
     const mkPane = (...els) => h("div", { class: "pane" }, ...els);
-    const panes = { live: mkPane(cartSec, planSec), plan: mkPane(weekSec, showSec), list: mkPane(logSec), mod: mkPane(cardsSec), log: mkPane(asRunSec) };
-    const TABS = [["live", "tabLive"], ["plan", "tabPlan"], ["list", "tabList"], ["mod", "tabMod"], ["log", "tabLog"]];
+    // Reiter „Übergänge“: Liste der Titelpaare der Playlist mit Kurzfassung des Übergangs; der Segue-Editor öffnet von hier und aus der Playlist
+    const transBody = h("div", { class: "body" });
+    const renderTrans = () => {
+      const fmtS = (v) => (v / 1000).toFixed(1) + " s";
+      const sum = (t) => {
+        if (!t || !Object.keys(t).length) return T("transStd");
+        const parts = [];
+        if (t.fadeOutMs !== undefined) parts.push(`${T("transFadeOut")} ${fmtS(t.fadeOutMs)}`);
+        if (t.fadeInMs !== undefined) parts.push(`${T("transFadeIn")} ${fmtS(t.fadeInMs)}`);
+        if (t.startShiftMs !== undefined) parts.push(`${T("transShift")} ${t.startShiftMs > 0 ? "+" : ""}${fmtS(t.startShiftMs)}`);
+        if (t.curveOut || t.curveIn) parts.push([t.curveOut, t.curveIn].filter(Boolean).join("/"));
+        return parts.join(" · ");
+      };
+      const name = (r) => r.title || r.id || r.file.split("/").pop() || "—";
+      const list = rows.slice(1).map((r, k) => h("tr", {}, h("td", { class: "muted" }, k + 1), h("td", {}, `${name(rows[k])}  →  ${name(r)}`), h("td", { class: r.transition ? "" : "muted" }, sum(r.transition)),
+        h("td", {}, h("button", { onclick: () => openSegueEditor(k + 1) }, T("transEdit")))));
+      transBody.replaceChildren(h("p", { class: "hint" }, T("transHint")), rows.length < 2 ? h("p", { class: "muted" }, T("transNone")) : h("table", {}, h("tbody", {}, ...list)));
+    };
+    const transSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("tabTrans")), transBody);
+    const panes = { live: mkPane(cartSec, planSec), plan: mkPane(weekSec, showSec), list: mkPane(logSec), trans: mkPane(transSec), mod: mkPane(cardsSec), log: mkPane(asRunSec) };
+    const TABS = [["live", "tabLive"], ["plan", "tabPlan"], ["list", "tabList"], ["trans", "tabTrans"], ["mod", "tabMod"], ["log", "tabLog"]];
     const tabKey = `omp-radio-tab-${nodeId}`;
     let tab = (() => { try { const v = localStorage.getItem(tabKey); return TABS.some(([k]) => k === v) ? v : "live"; } catch { return "live"; } })();
     const tabBtns = {}, tabMk = {}, tabCnt = {};
@@ -783,7 +803,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
       tabCnt.log.textContent = asRun.length ? String(asRun.length) : "";
     };
     shadow.addEventListener("contextmenu", (e) => { if (e.target && e.target.closest && e.target.closest("button")) e.preventDefault(); });
-    shadow.append(h("style", {}, STYLE), banner, tp, head, nowBar, cardLive, tabBar, panes.live, panes.plan, panes.list, panes.mod, panes.log);
+    shadow.append(h("style", {}, STYLE), banner, tp, head, nowBar, cardLive, tabBar, panes.live, panes.plan, panes.list, panes.trans, panes.mod, panes.log);
     updTabs();
     renderRows(); renderPlan(); renderAsRun(); renderNow(); renderCarts(); renderCards(); renderShowBar(); loadWeek(); refreshShows().then(async () => { const c = await api("GET", API + "/current"); if (c && c.show && c.show.status === "live" && !curShow) { showSel.value = c.show.id; await openShow(c.show.id); } });
 

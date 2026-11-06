@@ -26,13 +26,13 @@ export interface EditItem {
 const DE: Record<string, string> = {
   title: "Übergang", save: "Übernehmen", cancel: "Abbrechen", reset: "Standardblende", outro: "Segue-Punkt A", start: "Einsatz B (Verschiebung)",
   fadeOut: "Ausblenden A (ms)", fadeIn: "Einblenden B (ms)", curveOut: "Kurve A", curveIn: "Kurve B", intro: "Intro-Ende B", som: "Beginn B (SOM)",
-  loading: "Lade …", planFailed: "Planung nicht möglich", peaksFailed: "Wellenform nicht lesbar", hint: "Marken ziehen · Mausrad = Zoom · Umschalt + Ziehen = Verschieben", playBoth: "▶ Übergang", playA: "▶ nur A", playB: "▶ nur B", stop: "■", loop: "Schleife", pre: "Vorlauf (s)", post: "Nachlauf (s)", audioFailed: "Vorhören nicht möglich",
+  loading: "Lade …", planFailed: "Planung nicht möglich", peaksFailed: "Wellenform nicht lesbar", hint: "Marken ziehen · Mausrad = Zoom · Umschalt + Ziehen = Verschieben", playBoth: "▶ Übergang", playA: "▶ nur A", playB: "▶ nur B", stop: "■", loop: "Schleife", verify: "Sendequalität prüfen", verifyRunning: "Rechne mit dem Sende-Mischer …", verifyResult: "Sendequalität: Abweichung zur Vorschau {d} dB (Spitze {p}) — {v}", verifyOk: "gleich", verifyWarn: "weicht ab", verifyFailed: "Prüfung nicht möglich", pre: "Vorlauf (s)", post: "Nachlauf (s)", audioFailed: "Vorhören nicht möglich",
   m_aOutro: "Segue A", m_bStart: "Einsatz B", m_bIntro: "Intro B", m_bSom: "SOM B", m_fadeOutEnd: "Ende Blende A", m_fadeInEnd: "Ende Blende B",
 };
 const EN: Record<string, string> = {
   title: "Transition", save: "Apply", cancel: "Cancel", reset: "Default blend", outro: "Segue point A", start: "Start of B (shift)",
   fadeOut: "Fade out A (ms)", fadeIn: "Fade in B (ms)", curveOut: "Curve A", curveIn: "Curve B", intro: "Intro end B", som: "Start of B (SOM)",
-  loading: "Loading …", planFailed: "Planning failed", peaksFailed: "Waveform unreadable", hint: "Drag markers · wheel = zoom · Shift + drag = pan", playBoth: "▶ Transition", playA: "▶ A only", playB: "▶ B only", stop: "■", loop: "Loop", pre: "Lead-in (s)", post: "Tail (s)", audioFailed: "Preview unavailable",
+  loading: "Loading …", planFailed: "Planning failed", peaksFailed: "Waveform unreadable", hint: "Drag markers · wheel = zoom · Shift + drag = pan", playBoth: "▶ Transition", playA: "▶ A only", playB: "▶ B only", stop: "■", loop: "Loop", verify: "Check broadcast quality", verifyRunning: "Rendering with the playout mixer …", verifyResult: "Broadcast quality: deviation from preview {d} dB (peak {p}) — {v}", verifyOk: "identical", verifyWarn: "differs", verifyFailed: "Check failed", pre: "Lead-in (s)", post: "Tail (s)", audioFailed: "Preview unavailable",
   m_aOutro: "Segue A", m_bStart: "Start B", m_bIntro: "Intro B", m_bSom: "SOM B", m_fadeOutEnd: "End blend A", m_fadeInEnd: "End blend B",
 };
 const T = (k: string): string => ((document.documentElement.lang || navigator.language || "de").startsWith("en") ? EN : DE)[k] ?? k;
@@ -195,6 +195,7 @@ export class SegueEditor extends HTMLElement {
       mk(T("playA"), "", () => void this.preview("a")),
       mk(T("playB"), "", () => void this.preview("b")),
       mk(T("stop"), "", () => this.stopPreview()),
+      mk(T("verify"), "", () => void this.verifyBroadcast()),
       loopLabel,
       small(T("pre"), this.#pre, (v) => (this.#pre = v)),
       small(T("post"), this.#post, (v) => (this.#post = v)),
@@ -357,6 +358,70 @@ export class SegueEditor extends HTMLElement {
     }
   }
 
+  /**
+   * „Sendequalität prüfen“ (RB7.5): derselbe Übergang, gerechnet vom Node mit dem Mischer des Segue-Players (`POST …/segue/render`), wird
+   * abgespielt und gegen die Browser-Vorschau verglichen (Pegel der Abweichung in dB gegen den Pegel des Signals).
+   */
+  async verifyBroadcast(): Promise<{ deviationDb: number; peak: number } | null> {
+    if (!this.#placed) return null;
+    this.stopPreview(false);
+    this.#setStatus(T("verifyRunning"));
+    try {
+      const w = previewWindow(this.#placed[0], this.#placed[1], this.#pre, this.#post);
+      const t0 = Math.round(w.t0);
+      const t1 = Math.round(w.t1);
+      const strip = (i: EditItem, id: string) => ({ ...i, id });
+      const b = strip(this.#b, "b");
+      if (isEmptyTransition(b.transition)) delete b.transition;
+      const r = await this.fetcher(`${this.base}/segue/render`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: [strip(this.#a, "a"), b], t0Ms: t0, t1Ms: t1 }),
+      });
+      if (!r.ok) throw new Error(String(r.status));
+      const [rl, rr] = pcmToChannels(new Uint8Array(await r.arrayBuffer()));
+      const mine = await this.renderPreview("both", t0, t1);
+      const n = Math.min(rl.length, mine.left.length);
+      let sig = 0;
+      let dif = 0;
+      let peak = 0;
+      for (let i = 0; i < n; i++) {
+        const d = rl[i] - mine.left[i];
+        sig += rl[i] * rl[i];
+        dif += d * d;
+        peak = Math.max(peak, Math.abs(d), Math.abs(rr[i] - mine.right[i]));
+      }
+      const deviationDb = sig > 0 ? 10 * Math.log10(Math.max(dif, 1e-30) / sig) : -200;
+      this.#setStatus(T("verifyResult").replace("{d}", deviationDb.toFixed(1)).replace("{p}", peak.toFixed(4)).replace("{v}", deviationDb < -40 ? T("verifyOk") : T("verifyWarn")), deviationDb >= -40);
+      // das Ergebnis des Sende-Mischers anhören
+      const ctx = new AudioContext({ sampleRate: 48000 });
+      const buf = ctx.createBuffer(2, rl.length, 48000);
+      buf.copyToChannel(rl as Float32Array<ArrayBuffer>, 0);
+      buf.copyToChannel(rr as Float32Array<ArrayBuffer>, 1);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      this.#audio = ctx;
+      this.#win = { t0, t1 };
+      this.#ctxStart = ctx.currentTime + 0.05;
+      this.#playMs = t0;
+      src.start(this.#ctxStart);
+      const tick = () => {
+        if (this.#audio !== ctx) return;
+        const t = t0 + (ctx.currentTime - this.#ctxStart) * 1000;
+        if (t >= t1) return this.stopPreview();
+        this.#playMs = Math.max(t0, t);
+        this.#draw();
+        this.#raf = requestAnimationFrame(tick);
+      };
+      this.#raf = requestAnimationFrame(tick);
+      return { deviationDb, peak };
+    } catch {
+      this.#setStatus(T("verifyFailed"), true);
+      return null;
+    }
+  }
+
   stopPreview(redraw = true): void {
     cancelAnimationFrame(this.#raf);
     const c = this.#audio;
@@ -367,9 +432,9 @@ export class SegueEditor extends HTMLElement {
   }
 
   /** Dasselbe Vorhören ohne Lautsprecher in einen Puffer gerechnet (Tests, später „Sendequalität prüfen“). */
-  async renderPreview(mode: PreviewMode = "both"): Promise<{ t0: number; sampleRate: number; left: Float32Array; right: Float32Array }> {
+  async renderPreview(mode: PreviewMode = "both", fromMs?: number, toMs?: number): Promise<{ t0: number; sampleRate: number; left: Float32Array; right: Float32Array }> {
     if (!this.#placed) throw new Error("kein Plan");
-    const w = previewWindow(this.#placed[0], this.#placed[1], this.#pre, this.#post);
+    const w = fromMs !== undefined && toMs !== undefined ? { t0: fromMs, t1: toMs } : previewWindow(this.#placed[0], this.#placed[1], this.#pre, this.#post);
     const frames = Math.ceil(((w.t1 - w.t0) / 1000) * 48000);
     const off = new OfflineAudioContext(2, frames, 48000);
     await this.#schedule(off, w.t0, w.t1, mode, 0);
