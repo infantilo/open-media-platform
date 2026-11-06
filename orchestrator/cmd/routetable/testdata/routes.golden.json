@@ -1992,6 +1992,72 @@
     "domain": "core"
   },
   {
+    "method": "GET",
+    "path": "/api/v1/radio/shows",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/radio/shows",
+    "auth": "feature:FeatPrepare",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/radio/shows/current",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/radio/shows/{id}",
+    "auth": "feature:FeatPrepare",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/radio/shows/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/radio/shows/{id}",
+    "auth": "feature:FeatPrepare",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/radio/shows/{id}/duplicate",
+    "auth": "feature:FeatPrepare",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/radio/shows/{id}/status",
+    "auth": "feature:FeatPrepare|FeatRelease",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/radio/shows/{id}/versions",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/radio/shows/{id}/versions/{version}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/radio/shows/{id}/versions/{version}/restore",
+    "auth": "feature:FeatPrepare",
+    "domain": "core"
+  },
+  {
     "method": "DELETE",
     "path": "/api/v1/representations/{id}",
     "auth": "verb:Configure",

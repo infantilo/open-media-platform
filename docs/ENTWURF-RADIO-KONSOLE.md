@@ -16,6 +16,15 @@ im Rahmen der OMP-Konsole (Kacheln, Rechte je Rolle, i18n, Dialog statt `confirm
 | **Mischer/Studio** | Kanalzüge, Rotlicht, Cough, Übergabe (`omp-studio-logic`-Panel) | eigenes Panel, getrennt |
 | **Recorder** | Aufnahme aus dem Sendeweg | vorhanden (`omp-recorder`), keine Kachel hier |
 
+## 1a. Grundsatz: Sendungen vorbereiten, nicht nur live fahren (Nutzer 2026-11-06)
+
+Alles, was zu einer Sendung gehört — Ablauf, Moderationskarten (Texte), Hotkeys, Notizen — gehört **der Sendung**, nicht dem Platz. Moderatorinnen
+und Moderatoren bereiten sie Tage vorher vor (Status „in Vorbereitung“), die Redaktion gibt frei, zur Sendezeit wird die Sendung in die
+Automation geladen („auf Sendung“) und danach abgeschlossen. Wiederkehrende Formate sind **Vorlagen**. Dafür gibt es das Orchestrator-Modul
+`radio` (Tabellen `radio_shows`, `radio_show_versions`, Rechte `radio.show.*`); das Dokument ist offen (`content` mit `log`, `carts`, `cards`, `notes`,
+unbekannte Schlüssel bleiben erhalten), damit neue Funktionen ohne Modulumbau dazukommen. Leitlinie für alles Weitere: **dynamisch** (je Sendung
+konfigurierbar, keine festen Belegungen im Code) und Funktionsumfang wie moderne Sendeplatz-Produkte.
+
 ## 2. Datenmodell (Erweiterung des Log-Formats, abwärtskompatibel)
 
 `LogItem` bekommt optionale Felder, der Planer (`omp-playout-core::segue`) ignoriert sie:
@@ -39,5 +48,5 @@ der Segue-Player summiert. Ducking des Programms unter dem Cart ist **nicht** Te
 
 ## 4. Offene Entscheidungen (Nutzer)
 
-- Werbesystem: nur **Block im Ablauf** (Importiert aus der Fremdplanung, Entscheidung 3 vom 2026-11-05: „zuerst nur Import“) oder **eigene Spotverwaltung** mit Kampagnen und Rotation?
-- Bibliothek: ist der Asset-Bestand (Domäne `asset`) die Musikdatenbank, oder kommt eine Musikliste von außen (Planungssystem)?
+- ~~Werbesystem~~: **entschieden 2026-11-06: beides** — Blöcke aus der Fremdplanung (Import) **und** eigene Spotverwaltung mit Kampagnen/Rotation.
+- Bibliothek/Datenquellen: **Entscheidung in der Woche ab 2026-11-09**; der Nutzer nennt die vorhandenen Systeme und woher die Daten kommen, dann werden sie eingebunden (bis dahin nichts annehmen).
