@@ -4,6 +4,7 @@
 //! Gerätetreiber hinter dieselbe Zustandsmaschine (`gpio.rs`).
 
 mod gpio;
+mod uibundle;
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -214,6 +215,9 @@ impl ParamStore for Store {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if let Some(r) = uibundle::route(method, path) {
+            return Some(r);
+        }
         // Sicherung der Einstellungen (Namen, Fail-Safe-Pegel, Entprellzeit); Pegel und Haltezeiten werden bewusst nicht gesichert:
         // nach einem Neustart gilt der Fail-Safe-Zustand.
         let json_ok = |v: Value| RawResponse { status: 200, content_type: "application/json", body: serde_json::to_vec(&v).unwrap_or_default() };
