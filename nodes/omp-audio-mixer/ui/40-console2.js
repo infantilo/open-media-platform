@@ -92,7 +92,7 @@ const CSS2 = `
 /* EQ */
 .c2-eq{display:flex;flex-direction:column;gap:4px;min-height:0}
 .c2-eq-top{display:flex;align-items:center;gap:6px}
-.c2-eq-top .hint{margin-left:auto;color:var(--dim);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.c2-eq-top .pst{flex:0 0 auto}.c2-eq-top .hint{margin-left:auto;min-width:0;flex:0 1 auto;color:var(--dim);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .c2-eqcv{flex:1 1 auto;min-height:60px;width:100%;background:#0a0a0a;border:1px solid #333;touch-action:none;cursor:crosshair;display:block}
 .c2-flt{display:grid;grid-template-columns:44px repeat(5,1fr);gap:2px 4px;align-items:center}
 .c2-flt .rl{font-size:9px;color:var(--dim);text-align:right;padding-right:2px}

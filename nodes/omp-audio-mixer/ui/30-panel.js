@@ -222,7 +222,7 @@ button{cursor:pointer}
 .channels[data-meter=m]{--strip-h:clamp(140px,calc(100vh - 290px),300px);--hbar:14px}
 .channels[data-variant=gridf][data-meter=s]{--strip-h:clamp(100px,calc(100vh - 380px),160px)}.channels[data-variant=gridf][data-meter=m]{--strip-h:clamp(120px,calc(100vh - 380px),220px)}.channels[data-variant=gridf][data-meter=l]{--strip-h:clamp(160px,calc(100vh - 380px),300px)}
 /* Dialog + Live-Region */
-.ctab-presets{margin-bottom:8px}.pst{display:inline-flex;align-items:center;gap:3px;min-width:0}.pst-sel{min-width:0;max-width:170px;height:22px;font-size:11px}.pst-btn{height:22px;min-width:24px;padding:0 5px;font-size:12px;line-height:1;cursor:pointer}
+.ctab-presets{margin-bottom:8px}.pst{display:inline-flex;align-items:center;gap:3px;flex:0 0 auto}.pst-sel{flex:0 0 auto;min-width:96px;width:120px;max-width:170px;height:22px;font-size:11px}.pst-btn{height:22px;min-width:24px;padding:0 5px;font-size:12px;line-height:1;cursor:pointer}
 .modal{position:fixed;inset:0;background:#000a;display:flex;align-items:center;justify-content:center;z-index:100}
 .modal .box{background:var(--c-surface);border:1px solid var(--c-border);border-radius:10px;padding:18px;max-width:360px}
 .modal .box.wide{max-width:min(96vw,980px);max-height:88vh;overflow:auto}
