@@ -151,6 +151,23 @@ else
   ( cd "$ROOT_DIR/orchestrator" && go build -ldflags "-X $VP.Release=$REL -X $VP.Commit=$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || true) -X $VP.BuiltAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o "$BIN" . )
 fi
 
+# Postgres (Patroni) braucht nach `make up` einige Sekunden bis ein Leader läuft; der Orchestrator
+# bricht sonst beim Verbinden mit "database system is starting up" ab. Nur warten, wenn Patroni-
+# Container existieren (z. B. nicht im Offline-/Einzel-Postgres-Betrieb); nach Timeout nur warnen.
+PATRONI_C="$(podman ps --format '{{.Names}}' 2>/dev/null | grep -m1 '^omp-patroni-' || true)"
+if [ -n "$PATRONI_C" ]; then
+  printf "==> Warte auf Patroni-Leader "
+  PATRONI_OK=0
+  for _ in $(seq 1 60); do
+    if podman exec "$PATRONI_C" patronictl list 2>/dev/null | grep -Eq 'Leader +\| running'; then
+      PATRONI_OK=1; break
+    fi
+    printf "."
+    sleep 2
+  done
+  if [ "$PATRONI_OK" = 1 ]; then echo " OK"; else echo " Timeout" >&2; echo "WARNUNG: kein Patroni-Leader nach 120 s — Orchestrator startet trotzdem." >&2; fi
+fi
+
 echo "==> Orchestrator starten"
 # Absolute Pfade statt cd+relativer Defaults (orchestrator/internal/config/
 # config.go: OMP_UI_DIR=../ui etc. sind relativ zum cwd gedacht) — so kann
