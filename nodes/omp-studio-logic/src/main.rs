@@ -3,6 +3,7 @@
 //! Regeln stehen als Daten im Parameter `config` (`docs/CONTRACT-STUDIO-LOGIC.md`). Fernaufrufe laufen über den Orchestrator-Proxy.
 
 mod logic;
+mod uibundle;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -150,6 +151,9 @@ impl ParamStore for Store {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if let Some(r) = uibundle::route(method, path) {
+            return Some(r);
+        }
         let json_ok = |v: Value| RawResponse { status: 200, content_type: "application/json", body: serde_json::to_vec(&v).unwrap_or_default() };
         if method == "GET" && path == "/state" {
             let s = self.sh.lock().expect("lock poisoned");

@@ -54,7 +54,9 @@ var DefaultRules = map[string][]Rule{
 		{"GET", "/api/v1/audio-rules/channel/*"}, {"PUT", "/api/v1/audio-rules/channel/*"}, {"DELETE", "/api/v1/audio-rules/channel/*"},
 		{"GET", "/api/v1/audio-rules/default"}, {"POST", "/api/v1/audio-rules/simulate"},
 	},
-	"omp-vfa":                    {{"GET", "/api/v1/nodes"}},
+	"omp-vfa": {{"GET", "/api/v1/nodes"}},
+	// Studio-Logik: Ziele wählen und die Kanäle/Aux/Gruppen des gewählten Mischers für die Auswahl lesen
+	"omp-studio-logic":           {{"GET", "/api/v1/nodes"}, {"GET", "/api/v1/nodes/*/params/channels"}, {"GET", "/api/v1/nodes/*/params/groups"}, {"GET", "/api/v1/nodes/*/params/auxBuses"}},
 	"omp-radio-automation":       {{"GET", "/api/v1/nodes"}, {"*", "/api/v1/radio/shows"}, {"*", "/api/v1/radio/shows/**"}},
 	"omp-webrtc-gateway-camera":  webrtcRules,
 	"omp-webrtc-gateway-monitor": webrtcRules,
