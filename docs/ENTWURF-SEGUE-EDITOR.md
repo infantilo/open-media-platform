@@ -112,7 +112,7 @@ gegen `Placed` ≤ 1 ms; Sendeweg gegen Plan weiter wie RB4 (`lateMs`).
   * Proxy: `POST …/segue/render` neu; alle fünf Routen (`plan`, `peaks`, `audio`, `render`, `ui/segue-editor.js`) über den echten Orchestrator geprüft (ohne Anmeldung 401).
   * Panel-Klicktest `tools/segue-editor-e2e/panel.mjs` (Panel-Bundle gegen den Node, Aufrufe wie vom Proxy umgeleitet): Demo-Log importieren, Doppelklick → Editor mit
     Nachtfahrt → Strandgut, Änderung übernehmen, Reiter zeigt „aus 1.0 s · Einsatz −0.5 s“, Knopf öffnet den Editor.
-  * **Nicht geprüft:** Panel im echten Browser-Shell (isolierter Ursprung/iframe); die laufende Radio-Automation des Radio-Workflows hat noch den alten Stand (Neustart nötig).
+  * **Im echten Shell geprüft (2026-11-06 abends):** Headless-Chromium, Anmeldung am Orchestrator, Test-Instanz `omp-radio-automation` per API gestartet, Panel per Doppelklick geöffnet, Demo-Log importiert, Doppelklick auf die Zeit → Editor „Nachtfahrt → Strandgut“ mit Wellenformen, Marken und Zahlenfeldern über den Proxy. Test-Instanz wieder gelöscht. **Nicht geprüft:** Vorhören mit echtem Ton am Gerät; die Instanz im Radio-Workflow (stand gestoppt) startet beim nächsten Start mit dem neuen Stand.
   * **Kachel im Radio-Modul:** Das Radio-Modul hat keine eigene Oberfläche außer diesem Panel; der Reiter „Übergänge“ ist die Kachel dazu.
 
 ## 9. Frühere offene Fragen (Rest)
