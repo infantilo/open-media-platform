@@ -22,7 +22,7 @@ const srv = http.createServer((req, res) => {
     if (u === '/api/v1/ext/intercom/config' && req.method === 'GET') return json(res, 200, cfg);
     if (u === '/api/v1/ext/intercom/config' && req.method === 'PUT') { const c = JSON.parse(body); puts.push(c); cfg = c; return json(res, 200, c); }
     if (u === '/api/v1/ext/intercom/guests' && req.method === 'GET') return json(res, 200, guests);
-    if (u === '/api/v1/ext/intercom/guests' && req.method === 'POST') { const g = JSON.parse(body); const o = { id: 100000 + guests.length, name: g.name, expires: new Date(Date.now() + g.ttl_minutes * 60000).toISOString(), url: 'https://x:9445/panel?token=abc', routes: g.routes }; guests.push(o); return json(res, 201, o); }
+    if (u === '/api/v1/ext/intercom/guests' && req.method === 'POST') { const g = JSON.parse(body); const o = { id: 100000 + guests.length, name: g.name, expires: new Date(Date.now() + g.ttl_minutes * 60000).toISOString(), url: 'https://x:9445/panel?token=abc', routes: g.routes, audio: g.audio ? { ret_in: 1, mic_out: 2, ret_channel: 3, mic_channel: 4 } : undefined, sentAudio: !!g.audio }; guests.push(o); return json(res, 201, o); }
     if (u === '/api/v1/ext/intercom/status') return json(res, 200, { parties: cfg.parties.map(p => ({ id: p.id, online: p.id === 1, speaking: false })), late_ticks: 0, max_tick_us: 1500 });
     if (u === '/api/v1/ext/intercom/panels') return json(res, 200, { panels: [{ party_id: 1, name: 'Regie 1', kind: 'human', url: 'about:blank#p1' }, { party_id: 2, name: 'Kamera 1', kind: 'human', url: 'about:blank#p2' }] });
     json(res, 404, { error: 'nf' });
@@ -140,6 +140,14 @@ check(await click('Gast-Link erzeugen'), 'Gast erzeugen');
 await sleep(600);
 check(guests.length === 1 && guests[0].routes[0].ch === 1, 'Gast angelegt mit Kanal 1');
 check(await ev(`!!document.querySelector('omp-intercom-admin [data-guest]')`), 'Gast erscheint in der Liste');
+// Ton-Gast (RC3): eigener Knopf, Anfrage mit audio:true, Anschlüsse in der Liste
+await setInput('[data-role=guests] input:not([type])', 'Ton-Gast-Test');
+check(await click('Ton-Gast anlegen'), 'Ton-Gast anlegen');
+await sleep(600);
+check(guests.length === 2 && guests[1].sentAudio === true && guests[1].name === 'Ton-Gast-Test', 'Ton-Gast mit audio:true angelegt');
+const rows = await ev(`[...document.querySelectorAll('omp-intercom-admin [data-guest]')].map(e => e.textContent.replace(/\\s+/g, ' '))`);
+check(rows.length === 2 && /return input 1|Rückweg-Eingang 1/i.test(rows[1]) && /microphone output 2|Mikrofon-Ausgang 2/i.test(rows[1]), 'Ton-Gast zeigt Rückweg-Eingang 1 / Mikrofon-Ausgang 2: ' + rows[1]);
+check(!/return input|Rückweg-Eingang/i.test(rows[0]), 'normaler Gast zeigt keine Audio-Anschlüsse');
 // Verwerfen
 await goTab('channels');
 await click('+ Kanal');
