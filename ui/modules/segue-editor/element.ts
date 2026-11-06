@@ -3,8 +3,11 @@
 // Node (`POST/GET /api/v1/nodes/{id}/segue/…`), damit der Editor zeigt, was gesendet wird.
 import {
   type Context, curvePoints, type CurveName, dragMarker, fmtMs, hitMarker, initialView, isEmptyTransition, type Marks, type MarkerKind,
-  markerTime, msToX, type Patch, type Placed, type Transition, type View, xToMs, zoomView,
+  gainEnvelope, markerTime, msToX, type Patch, type Placed, pcmToChannels, previewWindow, type Transition, type View, voiceSegment, xToMs,
+  zoomView,
 } from "./logic.ts";
+
+export type PreviewMode = "both" | "a" | "b";
 
 export interface EditItem {
   id?: string;
@@ -23,13 +26,13 @@ export interface EditItem {
 const DE: Record<string, string> = {
   title: "Übergang", save: "Übernehmen", cancel: "Abbrechen", reset: "Standardblende", outro: "Segue-Punkt A", start: "Einsatz B (Verschiebung)",
   fadeOut: "Ausblenden A (ms)", fadeIn: "Einblenden B (ms)", curveOut: "Kurve A", curveIn: "Kurve B", intro: "Intro-Ende B", som: "Beginn B (SOM)",
-  loading: "Lade …", planFailed: "Planung nicht möglich", peaksFailed: "Wellenform nicht lesbar", hint: "Marken ziehen · Mausrad = Zoom · Umschalt + Ziehen = Verschieben",
+  loading: "Lade …", planFailed: "Planung nicht möglich", peaksFailed: "Wellenform nicht lesbar", hint: "Marken ziehen · Mausrad = Zoom · Umschalt + Ziehen = Verschieben", playBoth: "▶ Übergang", playA: "▶ nur A", playB: "▶ nur B", stop: "■", loop: "Schleife", pre: "Vorlauf (s)", post: "Nachlauf (s)", audioFailed: "Vorhören nicht möglich",
   m_aOutro: "Segue A", m_bStart: "Einsatz B", m_bIntro: "Intro B", m_bSom: "SOM B", m_fadeOutEnd: "Ende Blende A", m_fadeInEnd: "Ende Blende B",
 };
 const EN: Record<string, string> = {
   title: "Transition", save: "Apply", cancel: "Cancel", reset: "Default blend", outro: "Segue point A", start: "Start of B (shift)",
   fadeOut: "Fade out A (ms)", fadeIn: "Fade in B (ms)", curveOut: "Curve A", curveIn: "Curve B", intro: "Intro end B", som: "Start of B (SOM)",
-  loading: "Loading …", planFailed: "Planning failed", peaksFailed: "Waveform unreadable", hint: "Drag markers · wheel = zoom · Shift + drag = pan",
+  loading: "Loading …", planFailed: "Planning failed", peaksFailed: "Waveform unreadable", hint: "Drag markers · wheel = zoom · Shift + drag = pan", playBoth: "▶ Transition", playA: "▶ A only", playB: "▶ B only", stop: "■", loop: "Loop", pre: "Lead-in (s)", post: "Tail (s)", audioFailed: "Preview unavailable",
   m_aOutro: "Segue A", m_bStart: "Start B", m_bIntro: "Intro B", m_bSom: "SOM B", m_fadeOutEnd: "End blend A", m_fadeInEnd: "End blend B",
 };
 const T = (k: string): string => ((document.documentElement.lang || navigator.language || "de").startsWith("en") ? EN : DE)[k] ?? k;
@@ -61,6 +64,17 @@ export class SegueEditor extends HTMLElement {
   #planSeq = 0;
   #origA = "";
   #origB = "";
+  // Vorhören
+  #audio: AudioContext | null = null;
+  #playMs: number | null = null;
+  #pre = 8000;
+  #post = 4000;
+  #loop = false;
+  #mode: PreviewMode = "both";
+  #win = { t0: 0, t1: 0 };
+  #ctxStart = 0;
+  #raf = 0;
+  #segCache = new Map<string, Promise<[Float32Array, Float32Array]>>();
 
   /** Beide Elemente laden; `a` ist der Vorgänger, `b` der Nachfolger (trägt den Übergang). Kopien — die Eingaben bleiben unverändert. */
   load(a: EditItem, b: EditItem): void {
@@ -73,6 +87,10 @@ export class SegueEditor extends HTMLElement {
     void this.#loadPeaks(this.#a);
     void this.#loadPeaks(this.#b);
     void this.#plan();
+  }
+
+  disconnectedCallback(): void {
+    this.stopPreview(false);
   }
 
   /** Bildschirmposition (Pixel im Canvas) und Höhe der Marke — für Klicktests und Tastaturbedienung. */
@@ -141,10 +159,47 @@ export class SegueEditor extends HTMLElement {
     buttons.append(
       mk(T("reset"), "", () => { this.#b.transition = {}; this.#changed(); }),
       mk(T("cancel"), "", () => this.dispatchEvent(new CustomEvent("cancel"))),
-      mk(T("save"), "primary", () => this.#save()),
+      Object.assign(mk(T("save"), "primary", () => this.#save()), { id: "save" }),
     );
     this.#fields.className = "grid";
-    wrap.append(this.#canvas, this.#status, this.#fields, buttons);
+    const transport = document.createElement("div");
+    transport.className = "row";
+    const small = (label: string, value: number, set: (v: number) => void) => {
+      const l = document.createElement("label");
+      l.style.flexDirection = "row";
+      l.style.alignItems = "center";
+      l.style.gap = "6px";
+      l.append(label);
+      const i = document.createElement("input");
+      i.type = "number";
+      i.min = "0";
+      i.max = "60";
+      i.step = "1";
+      i.style.width = "64px";
+      i.value = String(value / 1000);
+      i.addEventListener("change", () => set(Math.max(0, Math.min(60, Number(i.value) || 0)) * 1000));
+      l.append(i);
+      return l;
+    };
+    const loopLabel = document.createElement("label");
+    loopLabel.style.flexDirection = "row";
+    loopLabel.style.alignItems = "center";
+    loopLabel.style.gap = "6px";
+    const loopBox = document.createElement("input");
+    loopBox.type = "checkbox";
+    loopBox.style.minHeight = "0";
+    loopBox.addEventListener("change", () => (this.#loop = loopBox.checked));
+    loopLabel.append(loopBox, T("loop"));
+    transport.append(
+      mk(T("playBoth"), "primary", () => void this.preview("both")),
+      mk(T("playA"), "", () => void this.preview("a")),
+      mk(T("playB"), "", () => void this.preview("b")),
+      mk(T("stop"), "", () => this.stopPreview()),
+      loopLabel,
+      small(T("pre"), this.#pre, (v) => (this.#pre = v)),
+      small(T("post"), this.#post, (v) => (this.#post = v)),
+    );
+    wrap.append(this.#canvas, transport, this.#status, this.#fields, buttons);
     const c = this.#canvas;
     c.addEventListener("pointerdown", (e) => this.#down(e));
     c.addEventListener("pointermove", (e) => this.#move(e));
@@ -197,6 +252,7 @@ export class SegueEditor extends HTMLElement {
     }
     this.#renderFields();
     this.#draw();
+    if (this.#audio && this.#playMs !== null) void this.preview(this.#mode, this.#playMs);
   }
   #changed(): void {
     clearTimeout(this.#planTimer);
@@ -217,6 +273,108 @@ export class SegueEditor extends HTMLElement {
   #setStatus(text: string, err = false): void {
     this.#status.textContent = text;
     this.#status.classList.toggle("err", err);
+  }
+
+  // ---------- Vorhören (RB7.4) ----------
+  /** PCM-Ausschnitt vom Node (48 kHz, Stereo); gleiche Dekodierung wie die Wellenform. */
+  #segment(item: EditItem, fromMs: number, toMs: number): Promise<[Float32Array, Float32Array]> {
+    const from = Math.max(0, Math.round(fromMs));
+    const to = Math.round(toMs);
+    const key = `${item.file}|${from}|${to}`;
+    let p = this.#segCache.get(key);
+    if (!p) {
+      p = (async () => {
+        const r = await this.fetcher(`${this.base}/segue/audio?file=${encodeURIComponent(item.file)}&fromMs=${from}&toMs=${to}`);
+        if (!r.ok) throw new Error(String(r.status));
+        return pcmToChannels(new Uint8Array(await r.arrayBuffer()));
+      })();
+      this.#segCache.set(key, p);
+      if (this.#segCache.size > 24) this.#segCache.delete(this.#segCache.keys().next().value as string);
+      p.catch(() => this.#segCache.delete(key));
+    }
+    return p;
+  }
+
+  /** Stimmen auf einen (auch Offline-)Audiokontext legen: Zeit `t0` der Zeitachse liegt bei `when` (s) des Kontexts. */
+  async #schedule(ctx: BaseAudioContext, t0: number, t1: number, mode: PreviewMode, when: number): Promise<void> {
+    if (!this.#placed) return;
+    const voices: Array<[EditItem, Placed]> = [];
+    if (mode !== "b") voices.push([this.#a, this.#placed[0]]);
+    if (mode !== "a") voices.push([this.#b, this.#placed[1]]);
+    await Promise.all(voices.map(async ([item, p]) => {
+      const seg = voiceSegment(p, t0, t1);
+      if (!seg) return;
+      const [l, r] = await this.#segment(item, seg.fileFromMs, seg.fileToMs);
+      if (l.length < 2) return;
+      const buf = ctx.createBuffer(2, l.length, 48000);
+      buf.copyToChannel(l as Float32Array<ArrayBuffer>, 0);
+      buf.copyToChannel(r as Float32Array<ArrayBuffer>, 1);
+      const durMs = (l.length / 48000) * 1000;
+      const gain = ctx.createGain();
+      const trim = Math.pow(10, (Number(item.gainDb) || 0) / 20);
+      const env = gainEnvelope(p, seg.atMs, seg.atMs + durMs, 1).map((v) => v * trim);
+      const at = when + (seg.atMs - t0) / 1000;
+      gain.gain.setValueAtTime(0, 0);
+      gain.gain.setValueCurveAtTime(env, at, Math.max(0.001, (env.length - 1) / 1000));
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(gain).connect(ctx.destination);
+      src.start(at);
+    }));
+  }
+
+  /** Übergang abspielen. `fromMs`: Wiedereinstieg mitten im Fenster (nach einer Änderung während des Hörens). */
+  async preview(mode: PreviewMode, fromMs?: number): Promise<void> {
+    if (!this.#placed) return;
+    this.stopPreview(false);
+    this.#mode = mode;
+    const w = previewWindow(this.#placed[0], this.#placed[1], this.#pre, this.#post);
+    const t0 = fromMs === undefined ? w.t0 : Math.min(Math.max(w.t0, fromMs), w.t1 - 50);
+    this.#win = { t0, t1: w.t1 };
+    try {
+      const ctx = new AudioContext({ sampleRate: 48000 });
+      this.#audio = ctx;
+      await this.#schedule(ctx, t0, w.t1, mode, ctx.currentTime + 0.12);
+      if (this.#audio !== ctx) return; // inzwischen gestoppt/neu gestartet
+      this.#ctxStart = ctx.currentTime + 0.12;
+      this.#playMs = t0;
+      const tick = () => {
+        if (this.#audio !== ctx) return;
+        const t = this.#win.t0 + (ctx.currentTime - this.#ctxStart) * 1000;
+        if (t >= this.#win.t1) {
+          if (this.#loop) void this.preview(this.#mode);
+          else this.stopPreview();
+          return;
+        }
+        this.#playMs = Math.max(this.#win.t0, t);
+        this.#draw();
+        this.#raf = requestAnimationFrame(tick);
+      };
+      this.#raf = requestAnimationFrame(tick);
+    } catch {
+      this.stopPreview();
+      this.#setStatus(T("audioFailed"), true);
+    }
+  }
+
+  stopPreview(redraw = true): void {
+    cancelAnimationFrame(this.#raf);
+    const c = this.#audio;
+    this.#audio = null;
+    this.#playMs = null;
+    if (c) void c.close().catch(() => {});
+    if (redraw) this.#draw();
+  }
+
+  /** Dasselbe Vorhören ohne Lautsprecher in einen Puffer gerechnet (Tests, später „Sendequalität prüfen“). */
+  async renderPreview(mode: PreviewMode = "both"): Promise<{ t0: number; sampleRate: number; left: Float32Array; right: Float32Array }> {
+    if (!this.#placed) throw new Error("kein Plan");
+    const w = previewWindow(this.#placed[0], this.#placed[1], this.#pre, this.#post);
+    const frames = Math.ceil(((w.t1 - w.t0) / 1000) * 48000);
+    const off = new OfflineAudioContext(2, frames, 48000);
+    await this.#schedule(off, w.t0, w.t1, mode, 0);
+    const out = await off.startRendering();
+    return { t0: w.t0, sampleRate: 48000, left: out.getChannelData(0).slice(), right: out.getChannelData(1).slice() };
   }
 
   // ---------- Zahlenfelder ----------
@@ -296,6 +454,15 @@ export class SegueEditor extends HTMLElement {
     const lanes: Array<[EditItem, Placed | undefined, number]> = [[this.#a, p?.[0], RULER_H], [this.#b, p?.[1], RULER_H + LANE_H + 6]];
     lanes.forEach(([item, pl, y0], idx) => this.#lane(g, item, pl, y0, idx === 0));
     if (!p) return;
+    if (this.#playMs !== null) {
+      const x = msToX(v, this.#playMs);
+      g.strokeStyle = "#ffffff";
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(x, RULER_H - 4);
+      g.lineTo(x, RULER_H + 2 * LANE_H + 6);
+      g.stroke();
+    }
     const times = this.#times();
     const c2 = this.#ctx()!;
     // Blendkurven

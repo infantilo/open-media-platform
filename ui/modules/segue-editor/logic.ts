@@ -190,3 +190,57 @@ export function fmtMs(ms: number): string {
   const r = a % 1000;
   return `${neg ? "-" : ""}${m}:${String(s).padStart(2, "0")}.${String(r).padStart(3, "0")}`;
 }
+
+// ---------- Vorhören (RB7.4) ----------
+
+/** Zeitfenster des Vorhörens um den Übergang: ab `preMs` vor dem Segue-Punkt bis `postMs` nach dem Ende beider Blenden. */
+export function previewWindow(pa: Placed, pb: Placed, preMs: number, postMs: number): { t0: number; t1: number } {
+  const segue = pa.stopAtMs === null ? pa.endMs : pa.startMs + (pa.stopAtMs - pa.offsetMs);
+  const t0 = Math.max(pa.startMs, Math.min(segue, pb.startMs) - Math.max(0, preMs));
+  const t1 = Math.max(pa.endMs, pb.startMs + pb.fadeInMs) + Math.max(0, postMs);
+  return { t0, t1: Math.min(t1, Math.max(pb.endMs, t0 + 1000)) };
+}
+
+/**
+ * Welcher Dateiausschnitt einer Stimme liegt im Fenster [t0, t1]? `atMs` = Zeitachse-Beginn des Ausschnitts. Die Stimme belegt die Zeitachse
+ * von `startMs` bis `endMs` (Ende nach dem Ausblenden); die Datei wird ab `offsetMs` gelesen.
+ */
+export function voiceSegment(p: Placed, t0: number, t1: number): { fileFromMs: number; fileToMs: number; atMs: number } | null {
+  const a = Math.max(t0, p.startMs);
+  const b = Math.min(t1, p.endMs);
+  if (b <= a) return null;
+  return { fileFromMs: p.offsetMs + (a - p.startMs), fileToMs: p.offsetMs + (b - p.startMs), atMs: a };
+}
+
+/** Verstärkung (linear, ohne Pegelkorrektur) einer Stimme zur Zeit `tMs`: Einblenden × Ausblenden, wie `omp-segue-player`. */
+export function voiceGainAt(p: Placed, tMs: number): number {
+  if (tMs < p.startMs || tMs >= p.endMs) return 0;
+  let g = 1;
+  if (p.fadeInMs > 0) g *= rise(p.fadeInCurve, (tMs - p.startMs) / p.fadeInMs);
+  if (p.stopAtMs !== null) {
+    const fadeStart = p.startMs + (p.stopAtMs - p.offsetMs);
+    if (tMs >= fadeStart) g *= p.fadeOutMs > 0 ? fall(p.fadeOutCurve, (tMs - fadeStart) / p.fadeOutMs) : 0;
+  }
+  return g;
+}
+
+/** Verstärkungsverlauf einer Stimme über [from, to) mit `stepMs`-Raster (für `setValueCurveAtTime`). */
+export function gainEnvelope(p: Placed, from: number, to: number, stepMs = 1): Float32Array {
+  const n = Math.max(2, Math.ceil((to - from) / stepMs) + 1);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = voiceGainAt(p, from + i * stepMs);
+  return out;
+}
+
+/** Rohes PCM (s16le, 2 Kanäle verschränkt) → zwei Float-Kanäle. */
+export function pcmToChannels(raw: Uint8Array): [Float32Array, Float32Array] {
+  const frames = Math.floor(raw.byteLength / 4);
+  const view = new DataView(raw.buffer, raw.byteOffset, frames * 4);
+  const l = new Float32Array(frames);
+  const r = new Float32Array(frames);
+  for (let i = 0; i < frames; i++) {
+    l[i] = view.getInt16(i * 4, true) / 32768;
+    r[i] = view.getInt16(i * 4 + 2, true) / 32768;
+  }
+  return [l, r];
+}

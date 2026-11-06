@@ -193,6 +193,35 @@ pub fn peaks_response(query: &str) -> (u16, Value) {
     (200, json!({"fromMs": from, "toMs": to, "bins": bins, "peaks": acc.finish()}))
 }
 
+/// Längster Vorhörausschnitt einer Datei (Schutz gegen riesige Antworten): 2 Minuten Stereo 48 kHz s16 ≈ 23 MB.
+const MAX_AUDIO_MS: i64 = 120_000;
+
+/// `GET /segue/audio?file=…&fromMs=…&toMs=…` → rohe PCM-Daten: 48 kHz, 2 Kanäle, s16le, verschränkt. Das Vorhören im Browser baut
+/// daraus einen `AudioBuffer` (kein Dekodieren von Formaten im Browser, gleiche Dekodierung wie die Wellenform).
+pub fn audio_response(query: &str) -> (u16, Vec<u8>, &'static str) {
+    let err = |status: u16, msg: &str| (status, serde_json::to_vec(&json!({"error": msg})).unwrap_or_default(), "application/json");
+    let Some(file) = query_param(query, "file") else { return err(400, "file fehlt") };
+    let Some(path) = allowed_file(&file, &media_roots()) else { return err(403, "Datei liegt nicht im Medienverzeichnis") };
+    let num = |k: &str| query_param(query, k).and_then(|v| v.parse::<i64>().ok());
+    let from = num("fromMs").unwrap_or(0).max(0);
+    let Some(to) = num("toMs").filter(|t| *t > from) else { return err(400, "toMs fehlt oder ≤ fromMs") };
+    if to - from > MAX_AUDIO_MS {
+        return err(400, "Ausschnitt zu lang (höchstens 120 s)");
+    }
+    let out = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-ss", &format!("{:.3}", from as f64 / 1000.0), "-t", &format!("{:.3}", (to - from) as f64 / 1000.0)])
+        .arg("-i")
+        .arg(&path)
+        .args(["-vn", "-ac", "2", "-ar", "48000", "-f", "s16le", "-"])
+        .stderr(Stdio::null())
+        .output();
+    match out {
+        Ok(o) if !o.stdout.is_empty() => (200, o.stdout, "application/octet-stream"),
+        Ok(_) => err(422, "Datei nicht lesbar"),
+        Err(e) => err(500, &format!("ffmpeg nicht startbar: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,6 +284,19 @@ mod tests {
         let (st, v) = plan_response(br#"{"items":[{"id":"a","kind":"song","file":"x","durationMs":0}]}"#);
         assert_eq!(st, 400, "{v}");
         assert_eq!(plan_response(b"nope").0, 400);
+    }
+
+    #[test]
+    fn audio_route_refuses_foreign_files_and_bad_ranges() {
+        assert_eq!(audio_response("fromMs=0&toMs=1000").0, 400, "file fehlt");
+        assert_eq!(audio_response("file=/etc/passwd&fromMs=0&toMs=1000").0, 403);
+        let dir = std::env::temp_dir().join("segue_api_audio_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.wav");
+        std::fs::write(&f, b"x").unwrap();
+        // Medienverzeichnis ist hier nicht gesetzt → Datei außerhalb von data/media
+        assert_eq!(audio_response(&format!("file={}&fromMs=0&toMs=1000", f.display())).0, 403);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

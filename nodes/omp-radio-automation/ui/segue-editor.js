@@ -143,6 +143,55 @@ function fmtMs(ms) {
   const r = a % 1e3;
   return `${neg ? "-" : ""}${m}:${String(s).padStart(2, "0")}.${String(r).padStart(3, "0")}`;
 }
+function previewWindow(pa, pb, preMs, postMs) {
+  const segue = pa.stopAtMs === null ? pa.endMs : pa.startMs + (pa.stopAtMs - pa.offsetMs);
+  const t0 = Math.max(pa.startMs, Math.min(segue, pb.startMs) - Math.max(0, preMs));
+  const t1 = Math.max(pa.endMs, pb.startMs + pb.fadeInMs) + Math.max(0, postMs);
+  return {
+    t0,
+    t1: Math.min(t1, Math.max(pb.endMs, t0 + 1e3))
+  };
+}
+function voiceSegment(p, t0, t1) {
+  const a = Math.max(t0, p.startMs);
+  const b = Math.min(t1, p.endMs);
+  if (b <= a) return null;
+  return {
+    fileFromMs: p.offsetMs + (a - p.startMs),
+    fileToMs: p.offsetMs + (b - p.startMs),
+    atMs: a
+  };
+}
+function voiceGainAt(p, tMs) {
+  if (tMs < p.startMs || tMs >= p.endMs) return 0;
+  let g = 1;
+  if (p.fadeInMs > 0) g *= rise(p.fadeInCurve, (tMs - p.startMs) / p.fadeInMs);
+  if (p.stopAtMs !== null) {
+    const fadeStart = p.startMs + (p.stopAtMs - p.offsetMs);
+    if (tMs >= fadeStart) g *= p.fadeOutMs > 0 ? fall(p.fadeOutCurve, (tMs - fadeStart) / p.fadeOutMs) : 0;
+  }
+  return g;
+}
+function gainEnvelope(p, from, to, stepMs = 1) {
+  const n = Math.max(2, Math.ceil((to - from) / stepMs) + 1);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = voiceGainAt(p, from + i * stepMs);
+  return out;
+}
+function pcmToChannels(raw) {
+  const frames = Math.floor(raw.byteLength / 4);
+  const view = new DataView(raw.buffer, raw.byteOffset, frames * 4);
+  const l = new Float32Array(frames);
+  const r = new Float32Array(frames);
+  for (let i = 0; i < frames; i++) {
+    l[i] = view.getInt16(i * 4, true) / 32768;
+    r[i] = view.getInt16(i * 4 + 2, true) / 32768;
+  }
+  return [
+    l,
+    r
+  ];
+}
 
 // ui/modules/segue-editor/element.ts
 var DE = {
@@ -162,6 +211,14 @@ var DE = {
   planFailed: "Planung nicht m\xF6glich",
   peaksFailed: "Wellenform nicht lesbar",
   hint: "Marken ziehen \xB7 Mausrad = Zoom \xB7 Umschalt + Ziehen = Verschieben",
+  playBoth: "\u25B6 \xDCbergang",
+  playA: "\u25B6 nur A",
+  playB: "\u25B6 nur B",
+  stop: "\u25A0",
+  loop: "Schleife",
+  pre: "Vorlauf (s)",
+  post: "Nachlauf (s)",
+  audioFailed: "Vorh\xF6ren nicht m\xF6glich",
   m_aOutro: "Segue A",
   m_bStart: "Einsatz B",
   m_bIntro: "Intro B",
@@ -186,6 +243,14 @@ var EN = {
   planFailed: "Planning failed",
   peaksFailed: "Waveform unreadable",
   hint: "Drag markers \xB7 wheel = zoom \xB7 Shift + drag = pan",
+  playBoth: "\u25B6 Transition",
+  playA: "\u25B6 A only",
+  playB: "\u25B6 B only",
+  stop: "\u25A0",
+  loop: "Loop",
+  pre: "Lead-in (s)",
+  post: "Tail (s)",
+  audioFailed: "Preview unavailable",
   m_aOutro: "Segue A",
   m_bStart: "Start B",
   m_bIntro: "Intro B",
@@ -244,6 +309,20 @@ var SegueEditor = class extends HTMLElement {
   #planSeq = 0;
   #origA = "";
   #origB = "";
+  // Vorhören
+  #audio = null;
+  #playMs = null;
+  #pre = 8e3;
+  #post = 4e3;
+  #loop = false;
+  #mode = "both";
+  #win = {
+    t0: 0,
+    t1: 0
+  };
+  #ctxStart = 0;
+  #raf = 0;
+  #segCache = /* @__PURE__ */ new Map();
   /** Beide Elemente laden; `a` ist der Vorgänger, `b` der Nachfolger (trägt den Übergang). Kopien — die Eingaben bleiben unverändert. */
   load(a, b) {
     this.#a = structuredClone(a);
@@ -255,6 +334,9 @@ var SegueEditor = class extends HTMLElement {
     void this.#loadPeaks(this.#a);
     void this.#loadPeaks(this.#b);
     void this.#plan();
+  }
+  disconnectedCallback() {
+    this.stopPreview(false);
   }
   /** Bildschirmposition (Pixel im Canvas) und Höhe der Marke — für Klicktests und Tastaturbedienung. */
   markerPoint(kind) {
@@ -334,9 +416,40 @@ var SegueEditor = class extends HTMLElement {
     buttons.append(mk(T("reset"), "", () => {
       this.#b.transition = {};
       this.#changed();
-    }), mk(T("cancel"), "", () => this.dispatchEvent(new CustomEvent("cancel"))), mk(T("save"), "primary", () => this.#save()));
+    }), mk(T("cancel"), "", () => this.dispatchEvent(new CustomEvent("cancel"))), Object.assign(mk(T("save"), "primary", () => this.#save()), {
+      id: "save"
+    }));
     this.#fields.className = "grid";
-    wrap.append(this.#canvas, this.#status, this.#fields, buttons);
+    const transport = document.createElement("div");
+    transport.className = "row";
+    const small = (label, value, set) => {
+      const l = document.createElement("label");
+      l.style.flexDirection = "row";
+      l.style.alignItems = "center";
+      l.style.gap = "6px";
+      l.append(label);
+      const i = document.createElement("input");
+      i.type = "number";
+      i.min = "0";
+      i.max = "60";
+      i.step = "1";
+      i.style.width = "64px";
+      i.value = String(value / 1e3);
+      i.addEventListener("change", () => set(Math.max(0, Math.min(60, Number(i.value) || 0)) * 1e3));
+      l.append(i);
+      return l;
+    };
+    const loopLabel = document.createElement("label");
+    loopLabel.style.flexDirection = "row";
+    loopLabel.style.alignItems = "center";
+    loopLabel.style.gap = "6px";
+    const loopBox = document.createElement("input");
+    loopBox.type = "checkbox";
+    loopBox.style.minHeight = "0";
+    loopBox.addEventListener("change", () => this.#loop = loopBox.checked);
+    loopLabel.append(loopBox, T("loop"));
+    transport.append(mk(T("playBoth"), "primary", () => void this.preview("both")), mk(T("playA"), "", () => void this.preview("a")), mk(T("playB"), "", () => void this.preview("b")), mk(T("stop"), "", () => this.stopPreview()), loopLabel, small(T("pre"), this.#pre, (v) => this.#pre = v), small(T("post"), this.#post, (v) => this.#post = v));
+    wrap.append(this.#canvas, transport, this.#status, this.#fields, buttons);
     const c = this.#canvas;
     c.addEventListener("pointerdown", (e) => this.#down(e));
     c.addEventListener("pointermove", (e) => this.#move(e));
@@ -424,6 +537,7 @@ var SegueEditor = class extends HTMLElement {
     }
     this.#renderFields();
     this.#draw();
+    if (this.#audio && this.#playMs !== null) void this.preview(this.#mode, this.#playMs);
   }
   #changed() {
     clearTimeout(this.#planTimer);
@@ -453,6 +567,120 @@ var SegueEditor = class extends HTMLElement {
   #setStatus(text, err = false) {
     this.#status.textContent = text;
     this.#status.classList.toggle("err", err);
+  }
+  // ---------- Vorhören (RB7.4) ----------
+  /** PCM-Ausschnitt vom Node (48 kHz, Stereo); gleiche Dekodierung wie die Wellenform. */
+  #segment(item, fromMs, toMs) {
+    const from = Math.max(0, Math.round(fromMs));
+    const to = Math.round(toMs);
+    const key = `${item.file}|${from}|${to}`;
+    let p = this.#segCache.get(key);
+    if (!p) {
+      p = (async () => {
+        const r = await this.fetcher(`${this.base}/segue/audio?file=${encodeURIComponent(item.file)}&fromMs=${from}&toMs=${to}`);
+        if (!r.ok) throw new Error(String(r.status));
+        return pcmToChannels(new Uint8Array(await r.arrayBuffer()));
+      })();
+      this.#segCache.set(key, p);
+      if (this.#segCache.size > 24) this.#segCache.delete(this.#segCache.keys().next().value);
+      p.catch(() => this.#segCache.delete(key));
+    }
+    return p;
+  }
+  /** Stimmen auf einen (auch Offline-)Audiokontext legen: Zeit `t0` der Zeitachse liegt bei `when` (s) des Kontexts. */
+  async #schedule(ctx, t0, t1, mode, when) {
+    if (!this.#placed) return;
+    const voices = [];
+    if (mode !== "b") voices.push([
+      this.#a,
+      this.#placed[0]
+    ]);
+    if (mode !== "a") voices.push([
+      this.#b,
+      this.#placed[1]
+    ]);
+    await Promise.all(voices.map(async ([item, p]) => {
+      const seg = voiceSegment(p, t0, t1);
+      if (!seg) return;
+      const [l, r] = await this.#segment(item, seg.fileFromMs, seg.fileToMs);
+      if (l.length < 2) return;
+      const buf = ctx.createBuffer(2, l.length, 48e3);
+      buf.copyToChannel(l, 0);
+      buf.copyToChannel(r, 1);
+      const durMs = l.length / 48e3 * 1e3;
+      const gain = ctx.createGain();
+      const trim = Math.pow(10, (Number(item.gainDb) || 0) / 20);
+      const env = gainEnvelope(p, seg.atMs, seg.atMs + durMs, 1).map((v) => v * trim);
+      const at = when + (seg.atMs - t0) / 1e3;
+      gain.gain.setValueAtTime(0, 0);
+      gain.gain.setValueCurveAtTime(env, at, Math.max(1e-3, (env.length - 1) / 1e3));
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(gain).connect(ctx.destination);
+      src.start(at);
+    }));
+  }
+  /** Übergang abspielen. `fromMs`: Wiedereinstieg mitten im Fenster (nach einer Änderung während des Hörens). */
+  async preview(mode, fromMs) {
+    if (!this.#placed) return;
+    this.stopPreview(false);
+    this.#mode = mode;
+    const w = previewWindow(this.#placed[0], this.#placed[1], this.#pre, this.#post);
+    const t0 = fromMs === void 0 ? w.t0 : Math.min(Math.max(w.t0, fromMs), w.t1 - 50);
+    this.#win = {
+      t0,
+      t1: w.t1
+    };
+    try {
+      const ctx = new AudioContext({
+        sampleRate: 48e3
+      });
+      this.#audio = ctx;
+      await this.#schedule(ctx, t0, w.t1, mode, ctx.currentTime + 0.12);
+      if (this.#audio !== ctx) return;
+      this.#ctxStart = ctx.currentTime + 0.12;
+      this.#playMs = t0;
+      const tick = () => {
+        if (this.#audio !== ctx) return;
+        const t = this.#win.t0 + (ctx.currentTime - this.#ctxStart) * 1e3;
+        if (t >= this.#win.t1) {
+          if (this.#loop) void this.preview(this.#mode);
+          else this.stopPreview();
+          return;
+        }
+        this.#playMs = Math.max(this.#win.t0, t);
+        this.#draw();
+        this.#raf = requestAnimationFrame(tick);
+      };
+      this.#raf = requestAnimationFrame(tick);
+    } catch {
+      this.stopPreview();
+      this.#setStatus(T("audioFailed"), true);
+    }
+  }
+  stopPreview(redraw = true) {
+    cancelAnimationFrame(this.#raf);
+    const c = this.#audio;
+    this.#audio = null;
+    this.#playMs = null;
+    if (c) void c.close().catch(() => {
+    });
+    if (redraw) this.#draw();
+  }
+  /** Dasselbe Vorhören ohne Lautsprecher in einen Puffer gerechnet (Tests, später „Sendequalität prüfen“). */
+  async renderPreview(mode = "both") {
+    if (!this.#placed) throw new Error("kein Plan");
+    const w = previewWindow(this.#placed[0], this.#placed[1], this.#pre, this.#post);
+    const frames = Math.ceil((w.t1 - w.t0) / 1e3 * 48e3);
+    const off = new OfflineAudioContext(2, frames, 48e3);
+    await this.#schedule(off, w.t0, w.t1, mode, 0);
+    const out = await off.startRendering();
+    return {
+      t0: w.t0,
+      sampleRate: 48e3,
+      left: out.getChannelData(0).slice(),
+      right: out.getChannelData(1).slice()
+    };
   }
   // ---------- Zahlenfelder ----------
   #render() {
@@ -598,6 +826,15 @@ var SegueEditor = class extends HTMLElement {
     ];
     lanes.forEach(([item, pl, y0], idx) => this.#lane(g, item, pl, y0, idx === 0));
     if (!p) return;
+    if (this.#playMs !== null) {
+      const x = msToX(v, this.#playMs);
+      g.strokeStyle = "#ffffff";
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(x, RULER_H - 4);
+      g.lineTo(x, RULER_H + 2 * LANE_H + 6);
+      g.stroke();
+    }
     const times = this.#times();
     const c2 = this.#ctx();
     const trans = this.#b.transition ?? {};

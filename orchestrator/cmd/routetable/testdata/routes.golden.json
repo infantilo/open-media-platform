@@ -1632,6 +1632,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/nodes/{id}/segue/audio",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/nodes/{id}/segue/peaks",
     "auth": "auth",
     "domain": "core"

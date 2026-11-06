@@ -364,6 +364,10 @@ impl ParamStore for Store {
             let (status, v) = segue_api::peaks_response(path.split_once('?').map(|(_, q)| q).unwrap_or(""));
             return Some(RawResponse { status, content_type: "application/json", body: serde_json::to_vec(&v).unwrap_or_default() });
         }
+        if method == "GET" && path.starts_with("/segue/audio") {
+            let (status, body, content_type) = segue_api::audio_response(path.split_once('?').map(|(_, q)| q).unwrap_or(""));
+            return Some(RawResponse { status, content_type, body });
+        }
         if method == "GET" && path == "/state" {
             let r = self.run.lock().expect("lock poisoned");
             let mut sent: Vec<usize> = r.sent.iter().copied().collect();

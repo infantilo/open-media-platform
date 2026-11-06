@@ -93,6 +93,15 @@ gegen `Placed` ≤ 1 ms; Sendeweg gegen Plan weiter wie RB4 (`lateMs`).
   **Nicht geprüft:** der Dialog im echten Panel hinter dem Orchestrator-Proxy (Import des Elements über `ui/segue-editor.js` im isolierten Ursprung);
   Radio-Automation-Node + Orchestrator neu starten nötig. Kachel im Radio-Modul folgt mit RB7.5.
 
+* **RB7.4 erledigt (2026-11-06):** Vorhören im Editor. Node: `GET /segue/audio?file&fromMs&toMs` (ffmpeg → rohes PCM 48 kHz/Stereo/s16le, höchstens 120 s,
+  nur Medienverzeichnisse; Proxy-Route `GET /api/v1/nodes/{id}/segue/audio`). Browser: Tasten „▶ Übergang“, „▶ nur A“, „▶ nur B“, „■“, Schleife, Vorlauf/
+  Nachlauf; jede Stimme als `AudioBuffer` mit Verstärkungsverlauf nach der Planung des Nodes (Einblenden × Ausblenden mit den Kurven des Segue-Players,
+  1-ms-Raster, Pegelkorrektur `gainDb`), Wiedergabekopf im Bild; Änderungen während des Hörens starten an der aktuellen Stelle neu. `renderPreview()` rechnet
+  dieselbe Mischung offline (Tests, später „Sendequalität prüfen“). **Gemessen** (Headless, Offline-Mischung gegen Plan, `tools/segue-editor-e2e/editor.mjs`):
+  Einsatz von B 0,40 ms nach Plan (Ziel ≤ 1 ms); A in der Mitte der linearen 2-s-Blende 0,54 des Pegels davor, am Ende 0,03, danach 0; B vor dem Einsatz
+  exakt still. **Nicht geprüft:** echtes Hören über Lautsprecher (Headless), Verhalten bei sehr langen Dateien (Ausschnitte nur ≈ 30 s, aber nicht gemessen).
+  Logik-Tests: 7 (`deno test ui/modules/segue-editor`).
+
 ## 9. Frühere offene Fragen (Rest)
 
 1. **Wohin mit den Marken?** Am Asset (setzt die Bibliothek-/MAM-Entscheidung voraus, die für die Woche ab 2026-11-09 erwartet wird) oder

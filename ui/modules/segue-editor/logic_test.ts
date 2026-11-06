@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { curvePoints, dragMarker, fall, fmtMs, hitMarker, initialView, isEmptyTransition, markerTime, msToX, rise, xToMs, zoomView } from "./logic.ts";
+import { curvePoints, gainEnvelope, pcmToChannels, previewWindow, voiceGainAt, voiceSegment, dragMarker, fall, fmtMs, hitMarker, initialView, isEmptyTransition, markerTime, msToX, rise, xToMs, zoomView } from "./logic.ts";
 import type { Context, Placed } from "./logic.ts";
 
 // Wie der Node für Nachtfahrt (61 s, Segue 52 881) → Strandgut mit Standardblende plant.
@@ -77,4 +77,30 @@ Deno.test("Hilfen: leerer Übergang, Zeitformat", () => {
   assert(!isEmptyTransition({ startShiftMs: 0 }));
   assertEquals(fmtMs(61_250), "1:01.250");
   assertEquals(fmtMs(-500), "-0:00.500");
+});
+
+Deno.test("Vorhören: Fenster, Ausschnitte, Verstärkung", () => {
+  const w = previewWindow(pa, pb, 8000, 4000);
+  assertEquals(w.t0, 52_881 - 8000);
+  assert(w.t1 >= pa.endMs + 4000 - 1 && w.t1 <= pb.endMs);
+  // A läuft im Fenster von t0 bis zum Ende der Blende, B erst ab seinem Einsatz
+  assertEquals(voiceSegment(pa, w.t0, w.t1), { fileFromMs: w.t0, fileToMs: pa.endMs, atMs: w.t0 });
+  assertEquals(voiceSegment(pb, w.t0, w.t1)?.atMs, pb.startMs);
+  assertEquals(voiceSegment(pb, 0, 1000), null);
+  // Verstärkung: A voll bis zum Segue-Punkt, danach (cosine) fallend, nach der Blende still; B steigt ein
+  assertEquals(voiceGainAt(pa, 40_000), 1);
+  assert(Math.abs(voiceGainAt(pa, 52_881 + 1500) - (1 - Math.sin(Math.PI / 4))) < 1e-9);
+  assertEquals(voiceGainAt(pa, 56_000), 0);
+  assertEquals(voiceGainAt(pb, 52_881), 0);
+  assertEquals(voiceGainAt(pb, 52_881 + 3000), 1);
+  const lin: Placed = { ...pb, fadeInCurve: "linear" };
+  assert(Math.abs(voiceGainAt(lin, 52_881 + 1500) - 0.5) < 1e-9);
+  const env = gainEnvelope(lin, 52_881, 52_881 + 3000, 1);
+  assertEquals(env.length, 3001);
+  assert(Math.abs(env[1500] - 0.5) < 1e-6);
+  // PCM s16le stereo
+  const raw = new Uint8Array([0x00, 0x40, 0x00, 0xc0, 0xff, 0x7f, 0x00, 0x80]);
+  const [l, r] = pcmToChannels(raw);
+  assertEquals([l[0], r[0]], [0.5, -0.5]);
+  assert(Math.abs(l[1] - 32767 / 32768) < 1e-9 && r[1] === -1);
 });

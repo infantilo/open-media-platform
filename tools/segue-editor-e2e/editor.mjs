@@ -50,14 +50,54 @@ const shift = v.b.transition?.startShiftMs;
 check(typeof shift === 'number' && shift < -200, 'Ziehen setzt die Verschiebung des Einsatzes: ' + shift + ' ms');
 const after = JSON.parse(await tab.evaluate(`JSON.stringify(window.__ed.markerPoint('bStart'))`));
 check(after && after.x < start.x - 20, 'Marke folgt der Maus nach neuer Planung (x ' + Math.round(start.x) + ' → ' + Math.round(after.x) + ')');
-const inField = await tab.evaluate(`window.__ed.shadowRoot.querySelectorAll('input')[1].value`);
+const inField = await tab.evaluate(`window.__ed.shadowRoot.querySelector('.grid label:nth-child(2) input').value`);
 check(Number(inField) === shift, 'Zahlenfeld zeigt denselben Wert: ' + inField);
 await shot(process.env.SHOT_DIR + '/segue-2.png');
 // Speichern
-await tab.evaluate(`window.__ed.shadowRoot.querySelector('button.primary').click()`);
+await tab.evaluate(`window.__ed.shadowRoot.getElementById('save').click()`);
 await sleep(200);
 const saved = JSON.parse(await tab.evaluate(`JSON.stringify(window.__saved)`));
 check(saved && saved.changedB === true && saved.b.transition.startShiftMs === shift && saved.changedA === false, 'Speichern liefert beide Elemente mit Übergang');
 check(saved.b.file === items[1].file && saved.a.file === items[0].file, 'Dateien unverändert');
+
+// ---- Vorhören (RB7.4): dieselbe Planung als Offline-Mischung gerechnet, Zeiten und Pegel gegen den Plan ----
+const items2 = JSON.parse(JSON.stringify(items));
+items2[1].transition = { fadeOutMs: 2000, fadeInMs: 0, curveOut: 'linear', curveIn: 'linear', startShiftMs: 0 };
+await tab.evaluate(`window.__ed.load(${JSON.stringify(items2[0])}, ${JSON.stringify(items2[1])})`);
+await sleep(2500);
+const planRes = await (await fetch(NODE + '/segue/plan', { method: 'POST', headers: { 'content-type': 'application/json', 'x-omp-node-token': NT }, body: JSON.stringify({ items: [{ ...items2[0], id: 'a' }, { ...items2[1], id: 'b' }] }) })).json();
+const [pa, pb] = planRes.placed;
+const segue = pa.startMs + (pa.stopAtMs - pa.offsetMs);
+const stats = JSON.parse(await tab.evaluate(`(async () => {
+  const A = await window.__ed.renderPreview('a');
+  const B = await window.__ed.renderPreview('b');
+  const rms = (x, t0, a, b) => { const i0 = Math.max(0, Math.round((a - t0) / 1000 * 48000)), i1 = Math.min(x.length, Math.round((b - t0) / 1000 * 48000)); let s = 0; for (let i = i0; i < i1; i++) s += x[i] * x[i]; return Math.sqrt(s / Math.max(1, i1 - i0)); };
+  const max = (x, t0, a, b) => { const i0 = Math.max(0, Math.round((a - t0) / 1000 * 48000)), i1 = Math.min(x.length, Math.round((b - t0) / 1000 * 48000)); let m = 0; for (let i = i0; i < i1; i++) m = Math.max(m, Math.abs(x[i])); return m; };
+  const onset = (x, t0, from) => { for (let i = Math.round((from - t0) / 1000 * 48000); i < x.length; i++) if (Math.abs(x[i]) > 0.01) return t0 + i / 48 ; return null; };
+  const seg = ${segue};
+  return JSON.stringify({
+    t0: A.t0,
+    aBefore: rms(A.left, A.t0, seg - 1500, seg - 100),
+    aMid: rms(A.left, A.t0, seg + 900, seg + 1100),
+    aEnd: rms(A.left, A.t0, seg + 1850, seg + 1990),
+    aAfter: max(A.left, A.t0, seg + 2100, seg + 4000),
+    bBefore: max(B.left, B.t0, B.t0, ${pb.startMs} - 5),
+    bOnset: onset(B.left, B.t0, ${pb.startMs} - 5),
+  });
+})()`));
+console.log(JSON.stringify(stats));
+check(stats.aBefore > 0.03, 'A vor dem Segue-Punkt hörbar (RMS ' + stats.aBefore.toFixed(3) + ')');
+check(stats.aMid / stats.aBefore > 0.25 && stats.aMid / stats.aBefore < 0.75, 'A in der Mitte der linearen Blende ≈ halb (Verhältnis ' + (stats.aMid / stats.aBefore).toFixed(2) + ')');
+check(stats.aEnd / stats.aBefore < 0.2, 'A am Ende der Blende fast still (Verhältnis ' + (stats.aEnd / stats.aBefore).toFixed(2) + ')');
+check(stats.aAfter < 1e-4, 'A nach der Blende still (' + stats.aAfter + ')');
+check(stats.bBefore < 1e-4, 'B vor seinem Einsatz still (' + stats.bBefore + ')');
+check(stats.bOnset !== null && Math.abs(stats.bOnset - pb.startMs) <= 1, 'Einsatz von B gegen Plan ' + pb.startMs + ' ms: ' + (stats.bOnset && stats.bOnset.toFixed(2)) + ' ms (Abweichung ' + (stats.bOnset - pb.startMs).toFixed(2) + ')');
+// echtes Abspielen (AudioContext): Schaltfläche löst es aus, Wiedergabekopf läuft, Stopp beendet es
+await tab.evaluate(`[...window.__ed.shadowRoot.querySelectorAll('button')].find(b => b.textContent.includes('▶ ')).click()`);
+await sleep(2500);
+await shot(process.env.SHOT_DIR + '/segue-3.png');
+const ctxState = await tab.evaluate(`window.__ed.shadowRoot.querySelector('.status').textContent`);
+check(!/nicht möglich|unavailable/i.test(ctxState), 'Abspielen ohne Fehlermeldung (' + JSON.stringify(ctxState) + ')');
+await tab.evaluate(`[...window.__ed.shadowRoot.querySelectorAll('button')].find(b => b.textContent === '■').click()`);
 await tab.close();
 console.log(failed ? failed + ' FEHLER' : 'ALLES OK'); process.exit(failed ? 1 : 0);
