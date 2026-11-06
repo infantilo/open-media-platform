@@ -34,7 +34,8 @@ const CSS2 = `
 .c2{--bg:#111;--panel:#1a1a1a;--panel2:#202020;--line:#2c2c2c;--line2:#3a3a3a;--txt:#d8dde2;--dim:#7d848c;
   --cyan:#27e0f0;--blue:#1fa4e6;--green:#25d366;--pink:#ff4f9a;--orange:#ff9f1c;--amber:#ffb000;--red:#ff4040;--violet:#b57bff;
   --mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
-  display:flex;flex-direction:column;background:var(--bg);color:var(--txt);font:11px/1.2 var(--mono);height:max(var(--c2-min,620px),calc(100vh - var(--c2-off,0px) - 6px));min-height:0;overflow:hidden;border:1px solid #000;position:relative;user-select:none}
+  display:flex;flex-direction:column;background:var(--bg);color:var(--txt);font:11px/1.2 var(--mono);height:max(var(--c2-min,520px),calc(100vh - var(--c2-off,0px) - 6px));min-height:0;overflow:hidden;border:1px solid #000;position:relative;user-select:none}
+:host{display:block;overflow:auto;max-height:100vh}
 .c2 :where(button){font:inherit;color:inherit;cursor:pointer}
 .c2 *{box-sizing:border-box}
 .c2 [hidden]{display:none!important}
@@ -54,9 +55,9 @@ const CSS2 = `
 .c2-lim{display:flex;align-items:center;gap:4px;padding:0 6px;border:1px solid var(--line);border-radius:3px;background:#0d0d0d}
 .c2-clock{font:600 14px/1 var(--mono);color:#e8e8e8;padding:0 8px;align-self:center;min-width:76px;text-align:right}
 /* Detail */
-.c2-detail{display:grid;grid-template-columns:140px minmax(250px,1.4fr) minmax(300px,2.4fr) minmax(190px,1fr) minmax(170px,.9fr);overflow-x:auto;gap:4px;padding:4px 6px;background:#0c0c0c;border-bottom:1px solid #000;flex:0 0 auto;height:262px;min-height:0}
+.c2-detail{display:grid;grid-template-columns:140px minmax(250px,1.4fr) minmax(300px,2.4fr) minmax(190px,1fr) minmax(170px,.9fr);overflow-x:auto;gap:4px;padding:4px 6px;background:#0c0c0c;border-bottom:1px solid #000;flex:0 0 auto;height:clamp(176px,31vh,262px);min-height:0}
 .c2-det-empty{grid-column:1/-1;display:flex;align-items:center;justify-content:center;color:var(--dim)}
-.c2-sec{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:2px;padding:6px 6px 6px 22px;min-width:0;min-height:0;display:flex;flex-direction:column;gap:5px;overflow:hidden}
+.c2-sec{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:2px;padding:6px 6px 6px 22px;min-width:0;min-height:0;display:flex;flex-direction:column;gap:5px;overflow-x:hidden;overflow-y:auto;scrollbar-width:thin}
 .c2-sec>.vl{position:absolute;left:1px;top:0;bottom:0;width:18px;display:flex;align-items:center;justify-content:center;writing-mode:vertical-rl;transform:rotate(180deg);font-weight:700;letter-spacing:.14em;color:#9aa3ad;font-size:10px;border-right:1px solid var(--line)}
 .c2-chip{display:inline-flex;align-items:center;justify-content:center;height:20px;min-width:56px;padding:0 8px;border-radius:2px;border:1px solid #000;font-weight:700;font-size:11px;color:#06121c;background:#4a5560;letter-spacing:.03em}
 .c2-chip[aria-pressed=true].gate{background:linear-gradient(#2db4ff,#1479b8)}
@@ -355,7 +356,7 @@ class ConsoleApp extends MixerApp {
     const style = h("style");
     style.textContent = CSS + CSS2;
     this.root = h("div", { class: "root c2", tabindex: "-1" });
-    // Höhe = Fensterhöhe abzüglich der Position im Fenster (kein Seiten-Scrollbalken); die Fader füllen den Rest, unterhalb von --c2-min (620 px) wird gescrollt.
+    // Höhe = Fensterhöhe abzüglich der Position im Fenster (kein Seiten-Scrollbalken); die Fader füllen den Rest, unterhalb von --c2-min (520 px) wird gescrollt.
     this.fitHeight = () => {
       if (!this.root.isConnected) return;
       const top = Math.max(0, Math.round(this.root.getBoundingClientRect().top + window.scrollY));
