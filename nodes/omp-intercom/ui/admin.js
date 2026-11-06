@@ -166,6 +166,9 @@ var messages = {
     "icom.guest.name": "Name des Gasts",
     "icom.guest.ttl": "G\xFCltig (Minuten)",
     "icom.guest.create": "Gast-Link erzeugen",
+    "icom.guest.createAudio": "Ton-Gast anlegen",
+    "icom.guest.audioHint": "Ton-Gast: legt R\xFCckweg- und Mikrofonkanal samt Anbindungen an. Danach im Flow-Editor den N-1-Ausgang des Tonmischers mit dem genannten Programmeingang und den genannten Mix-Ausgang mit einem Mischerkanal verbinden.",
+    "icom.guest.audioPorts": "Ton: R\xFCckweg-Eingang {p0}, Mikrofon-Ausgang {p1}",
     "icom.guest.none": "Keine aktiven G\xE4ste.",
     "icom.guest.until": "bis {p0}",
     "icom.guest.copy": "Link kopieren",
@@ -334,6 +337,9 @@ var messages = {
     "icom.guest.name": "Guest name",
     "icom.guest.ttl": "Valid (minutes)",
     "icom.guest.create": "Create guest link",
+    "icom.guest.createAudio": "Add audio guest",
+    "icom.guest.audioHint": "Audio guest: creates a return and a microphone channel with their connections. Then, in the flow editor, connect the audio mixer's N-1 output to the named programme input and the named mix output to a mixer channel.",
+    "icom.guest.audioPorts": "Audio: return input {p0}, microphone output {p1}",
     "icom.guest.none": "No active guests.",
     "icom.guest.until": "until {p0}",
     "icom.guest.copy": "Copy link",
@@ -2057,6 +2063,10 @@ var IntercomAdmin = class extends HTMLElement {
       row.append(el3("strong", "", g.name), el3("span", DIM3 + "font-size:12px;", t("icom.guest.until", {
         p0: fmt.format(new Date(g.expires))
       })));
+      if (g.audio) row.append(el3("span", DIM3 + "font-size:12px;", t("icom.guest.audioPorts", {
+        p0: g.audio.ret_in,
+        p1: g.audio.mic_out
+      })));
       row.append(btn(t("icom.guest.copy"), async () => {
         try {
           await navigator.clipboard.writeText(g.url ?? "");
@@ -2112,7 +2122,29 @@ var IntercomAdmin = class extends HTMLElement {
       this.#guestName = "";
       await this.#load();
     }));
-    box.append(form);
+    form.append(btn(t("icom.guest.createAudio"), async () => {
+      const res = await apiFetch("/api/v1/ext/intercom/guests", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          name: this.#guestName,
+          ttl_minutes: this.#guestTtl,
+          audio: true
+        })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(t("icom.guest.createFailed", {
+          p0: body.error ?? res.status
+        }));
+        return;
+      }
+      this.#guestName = "";
+      await this.#load();
+    }));
+    box.append(form, el3("div", DIM3 + "font-size:12px;margin-top:6px;", t("icom.guest.audioHint")));
     return box;
   }
 };

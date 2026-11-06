@@ -162,7 +162,7 @@ impl Store {
             &g.token,
             &omp_node_sdk::https_info(),
         );
-        json!({"id": g.id, "name": g.name, "expires": admin::format_rfc3339(g.expires), "url": url, "routes": g.routes})
+        json!({"id": g.id, "name": g.name, "expires": admin::format_rfc3339(g.expires), "url": url, "routes": g.routes, "audio": g.audio})
     }
 
     /// Darf die Person diese Sprechstelle fernbedienen (Rolle `deck.*`)? Admins und Bootstrap alle, sonst nur die eigenen.
@@ -280,7 +280,12 @@ impl Store {
                 let name = v.get("name").and_then(Value::as_str).unwrap_or("");
                 let ttl = v.get("ttl_minutes").and_then(Value::as_i64).unwrap_or(0);
                 let mut adm = self.admin.lock().expect("lock poisoned");
-                match adm.create_guest(&actor, name, routes, ttl, admin::now_secs()) {
+                let created = if v.get("audio").and_then(Value::as_bool).unwrap_or(false) {
+                    adm.create_audio_guest(&actor, name, ttl, admin::now_secs())
+                } else {
+                    adm.create_guest(&actor, name, routes, ttl, admin::now_secs())
+                };
+                match created {
                     Ok((g, note)) => match self.apply_admin(&adm) {
                         Ok(()) => (json_resp(201, Self::guest_out(req, &g)), audit(note)),
                         Err(e) => reply(json_resp(500, json!({"error": e}))),
@@ -555,7 +560,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     // Konfiguration des Dienstes: Datei beim Dienst. Eine unlesbare Datei beendet den Start (nie still durch eine leere ersetzen).
     let data_path = env_or("OMP_INTERCOM_DATA", "data/omp-intercom.json");
-    let admin = admin::Admin::open(Some(std::path::PathBuf::from(&data_path)))?;
+    let mut admin = admin::Admin::open(Some(std::path::PathBuf::from(&data_path)))?;
     if !admin.is_empty() {
         let doc = admin.cfg.node_config(admin::now_secs());
         if let Err(e) = hub.core.lock().expect("lock poisoned").apply_config(&doc) {
@@ -586,6 +591,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
     hub.core.lock().expect("lock poisoned").mxl = io.clone();
+    // Ton-Gäste (RC3) dürfen nur Anschlüsse belegen, die es wirklich gibt.
+    (admin.mxl_inputs, admin.mxl_outputs) = if io.is_some() { (n_in as u32, n_out as u32) } else { (0, 0) };
     let mut receiver_specs = Vec::new();
     let mut sender_specs = Vec::new();
     let mut inputs = Vec::new();

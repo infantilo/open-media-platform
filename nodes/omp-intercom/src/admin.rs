@@ -158,6 +158,22 @@ pub struct Guest {
     pub routes: Vec<Route>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub created_by: String,
+    /// Ton-Gast (RC3): die für ihn angelegten Kanäle und Anbindungen; sie verschwinden mit dem Gast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<GuestAudio>,
+}
+
+/// Verdrahtung eines Ton-Gasts: Rückweg (N-1 vom Mischer → Gast) und Mikrofon (Gast → Mischerkanal).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct GuestAudio {
+    pub ret_channel: u32,
+    pub mic_channel: u32,
+    /// Programmquelle: Programmeingang `ret_in` (IS-05-Receiver) speist den Rückwegkanal.
+    pub prog_party: u32,
+    pub ret_in: u32,
+    /// Anbindung: Mix-Ausgang `mic_out` trägt das Mikrofon des Gasts (MXL-Sender) zum Mischer.
+    pub port_party: u32,
+    pub mic_out: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -423,6 +439,19 @@ impl Config {
     /// Übernimmt die Token der bisherigen Konfiguration (gleiche ID) und vergibt neue für neue Teilnehmer. Clients dürfen
     /// Token nie setzen; Gäste kommen nur über die Gast-Endpunkte (bestehende bleiben unverändert).
     pub fn with_tokens(mut self, old: &Config) -> Config {
+        // Verdrahtung der Ton-Gäste gehört dem Gast, nicht der Einrichtung: bleibt, solange der Gast besteht.
+        for a in old.guests.iter().filter_map(|g| g.audio.as_ref()) {
+            for c in old.channels.iter().filter(|c| c.id == a.ret_channel || c.id == a.mic_channel) {
+                if !self.channels.iter().any(|x| x.id == c.id) {
+                    self.channels.push(c.clone());
+                }
+            }
+            for pt in old.parties.iter().filter(|p| p.id == a.prog_party || p.id == a.port_party) {
+                if !self.parties.iter().any(|x| x.id == pt.id) {
+                    self.parties.push(pt.clone());
+                }
+            }
+        }
         let tokens: BTreeMap<u32, &str> = old.parties.iter().map(|p| (p.id, p.token.as_str())).collect();
         for p in &mut self.parties {
             p.token = match tokens.get(&p.id) {
@@ -444,6 +473,22 @@ impl Config {
             g.token.clear();
         }
         out
+    }
+
+    /// Entfernt den Gast samt der für ihn angelegten Kanäle und Anbindungen.
+    pub fn remove_guest(&mut self, id: u32) {
+        if let Some(a) = self.guests.iter().find(|g| g.id == id).and_then(|g| g.audio.clone()) {
+            self.channels.retain(|c| c.id != a.ret_channel && c.id != a.mic_channel);
+            self.parties.retain(|p| p.id != a.prog_party && p.id != a.port_party);
+        }
+        self.guests.retain(|g| g.id != id);
+    }
+
+    pub fn drop_expired_guests(&mut self, now: i64) {
+        let gone: Vec<u32> = self.guests.iter().filter(|g| g.expires <= now).map(|g| g.id).collect();
+        for id in gone {
+            self.remove_guest(id);
+        }
     }
 
     pub fn active_guests(&self, now: i64) -> Vec<&Guest> {
@@ -553,6 +598,9 @@ pub struct AuditNote {
 pub struct Admin {
     pub cfg: Config,
     path: Option<PathBuf>,
+    /// Wie viele Programmeingänge / Mix-Ausgänge der Node wirklich hat (für Ton-Gäste); der Node setzt es nach dem Start.
+    pub mxl_inputs: u32,
+    pub mxl_outputs: u32,
 }
 
 impl Admin {
@@ -568,7 +616,7 @@ impl Admin {
             },
             None => Config::default(),
         };
-        Ok(Self { cfg, path })
+        Ok(Self { cfg, path, mxl_inputs: 16, mxl_outputs: 16 })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -641,9 +689,9 @@ impl Admin {
         for g in &self.cfg.guests {
             next_id = next_id.max(g.id + 1);
         }
-        let g = Guest { id: next_id, name: name.to_string(), token: new_token(), expires: now + ttl_minutes * 60, routes, created_by: actor.to_string() };
+        let g = Guest { id: next_id, name: name.to_string(), token: new_token(), expires: now + ttl_minutes * 60, routes, created_by: actor.to_string(), audio: None };
         let mut cand = self.cfg.clone();
-        cand.guests.retain(|x| x.expires > now);
+        cand.drop_expired_guests(now);
         cand.guests.push(g.clone());
         cand.validate().map_err(AdminError::Invalid)?;
         let prev = std::mem::replace(&mut self.cfg, cand);
@@ -655,12 +703,77 @@ impl Admin {
         Ok((g, note))
     }
 
+    /// Ton-Gast (RC3): legt Rückwegkanal, Mikrofonkanal, Programmquelle (N-1 rein), Anbindung (Mikrofon raus) und den
+    /// Gast-Link in einem Schritt an. Der Gast hört nur den Rückweg und spricht nur in den Mikrofonkanal.
+    pub fn create_audio_guest(&mut self, actor: &str, name: &str, ttl_minutes: i64, now: i64) -> Result<(Guest, AuditNote), AdminError> {
+        if name.trim().is_empty() {
+            return Err(AdminError::Invalid(vec!["Gast ohne Namen".into()]));
+        }
+        if !(1..=7 * 24 * 60).contains(&ttl_minutes) {
+            return Err(AdminError::Invalid(vec!["Gültigkeit muss zwischen 1 Minute und 7 Tagen liegen".into()]));
+        }
+        let mut cand = self.cfg.clone();
+        cand.drop_expired_guests(now);
+        let free_slot = |used: Vec<u32>, max: u32| (1..=max.min(16)).find(|n| !used.contains(n));
+        let ret_in = free_slot(cand.parties.iter().map(|p| p.mxl_in).collect(), self.mxl_inputs)
+            .ok_or_else(|| AdminError::Invalid(vec![format!("Kein freier Programmeingang ({} vorhanden, OMP_INTERCOM_PROGRAM_INPUTS)", self.mxl_inputs)]))?;
+        let mic_out = free_slot(cand.parties.iter().map(|p| p.mxl_out).collect(), self.mxl_outputs)
+            .ok_or_else(|| AdminError::Invalid(vec![format!("Kein freier Mix-Ausgang ({} vorhanden, OMP_INTERCOM_MIX_OUTPUTS)", self.mxl_outputs)]))?;
+        let ch_next = cand.channels.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+        let party_next = cand.parties.iter().map(|p| p.id).max().unwrap_or(0) + 1;
+        if ch_next + 1 > MAX_CHANNEL_ID || party_next + 1 >= GUEST_BASE {
+            return Err(AdminError::Invalid(vec!["Keine freien Kanal-/Teilnehmer-IDs mehr".into()]));
+        }
+        let a = GuestAudio { ret_channel: ch_next, mic_channel: ch_next + 1, prog_party: party_next, ret_in, port_party: party_next + 1, mic_out };
+        let label = name.trim();
+        cand.channels.push(Channel { id: a.ret_channel, name: format!("Gast {label} Rückweg"), ..Default::default() });
+        cand.channels.push(Channel { id: a.mic_channel, name: format!("Gast {label} Mikro"), ..Default::default() });
+        cand.parties.push(Party {
+            id: a.prog_party,
+            name: format!("Gast {label} Rückweg N-1"),
+            kind: "program".into(),
+            mxl_in: ret_in,
+            routes: vec![Route { ch: a.ret_channel, talk: true, ..Default::default() }],
+            ..Default::default()
+        });
+        cand.parties.push(Party {
+            id: a.port_party,
+            name: format!("Gast {label} Mikro zum Mischer"),
+            kind: "port".into(),
+            mxl_out: mic_out,
+            routes: vec![Route { ch: a.mic_channel, listen: true, ..Default::default() }],
+            ..Default::default()
+        });
+        let mut next_id = GUEST_BASE;
+        for g in &cand.guests {
+            next_id = next_id.max(g.id + 1);
+        }
+        let routes = vec![
+            Route { ch: a.ret_channel, listen: true, ..Default::default() },
+            Route { ch: a.mic_channel, talk: true, ..Default::default() },
+        ];
+        let g = Guest { id: next_id, name: name.to_string(), token: new_token(), expires: now + ttl_minutes * 60, routes, created_by: actor.to_string(), audio: Some(a.clone()) };
+        cand.guests.push(g.clone());
+        cand.validate().map_err(AdminError::Invalid)?;
+        let prev = std::mem::replace(&mut self.cfg, cand);
+        if let Err(e) = self.save() {
+            self.cfg = prev;
+            return Err(e);
+        }
+        let note = AuditNote {
+            id: g.id.to_string(),
+            action: "guest-create-audio",
+            details: json!({"name": name, "expires": format_rfc3339(g.expires), "mxl_in": a.ret_in, "mxl_out": a.mic_out}),
+        };
+        Ok((g, note))
+    }
+
     pub fn delete_guest(&mut self, id: u32) -> Result<AuditNote, AdminError> {
         if !self.cfg.guests.iter().any(|g| g.id == id) {
             return Err(AdminError::NotFound);
         }
         let prev = self.cfg.clone();
-        self.cfg.guests.retain(|g| g.id != id);
+        self.cfg.remove_guest(id);
         if let Err(e) = self.save() {
             self.cfg = prev;
             return Err(e);
@@ -671,7 +784,7 @@ impl Admin {
     /// Entfernt abgelaufene Gäste; `true`, wenn sich etwas geändert hat.
     pub fn prune_guests(&mut self, now: i64) -> bool {
         let before = self.cfg.guests.len();
-        self.cfg.guests.retain(|g| g.expires > now);
+        self.cfg.drop_expired_guests(now);
         let changed = self.cfg.guests.len() != before;
         if changed {
             let _ = self.save();
@@ -835,7 +948,7 @@ mod tests {
         let mut c = sample().with_tokens(&Config::default());
         let now = 1000;
         c.guests = vec![
-            Guest { id: GUEST_BASE, name: "Gast".into(), token: "g1".into(), expires: now + 60, routes: vec![Route { ch: 1, talk: true, listen: true, ..Default::default() }], created_by: "x".into() },
+            Guest { id: GUEST_BASE, name: "Gast".into(), token: "g1".into(), expires: now + 60, routes: vec![Route { ch: 1, talk: true, listen: true, ..Default::default() }], created_by: "x".into(), audio: None },
             Guest { id: GUEST_BASE + 1, name: "Alt".into(), token: "g2".into(), expires: now - 1, ..Default::default() },
         ];
         let doc = c.node_config(now);
@@ -952,5 +1065,45 @@ mod tests {
         assert_eq!(b.cfg.parties[0].token, "alt-token", "Links bleiben gültig");
         assert!(!b.cfg.parties[1].token.is_empty());
         assert!(matches!(b.import(full), Err(AdminError::Invalid(_))), "nur in eine leere Konfiguration");
+    }
+
+    #[test]
+    fn audio_guest_wires_return_and_mic_and_cleans_up() {
+        let mut a = Admin::open(None).unwrap();
+        a.update("x", sample()).unwrap();
+        let now = 1_000;
+        let (g, note) = a.create_audio_guest("anna", "Frau Meier", 60, now).unwrap();
+        assert_eq!(note.action, "guest-create-audio");
+        let au = g.audio.clone().unwrap();
+        // Gast hört nur den Rückweg und spricht nur ins Mikrofon.
+        assert_eq!(g.routes.len(), 2);
+        assert!(g.routes.iter().any(|r| r.ch == au.ret_channel && r.listen && !r.talk));
+        assert!(g.routes.iter().any(|r| r.ch == au.mic_channel && r.talk && !r.listen));
+        let prog = a.cfg.parties.iter().find(|p| p.id == au.prog_party).unwrap();
+        assert_eq!((prog.kind.as_str(), prog.mxl_in), ("program", au.ret_in));
+        let port = a.cfg.parties.iter().find(|p| p.id == au.port_party).unwrap();
+        assert_eq!((port.kind.as_str(), port.mxl_out), ("port", au.mic_out));
+        a.cfg.validate().unwrap();
+        // Zweiter Gast bekommt andere Anschlüsse.
+        a.mxl_inputs = 1;
+        assert!(matches!(a.create_audio_guest("anna", "Herr Schulz", 60, now), Err(AdminError::Invalid(_))), "nur ein Eingang vorhanden");
+        a.mxl_inputs = 16;
+        let (g2, _) = a.create_audio_guest("anna", "Herr Schulz", 60, now).unwrap();
+        let au2 = g2.audio.unwrap();
+        assert_ne!((au.ret_in, au.mic_out), (au2.ret_in, au2.mic_out));
+        // Eine Einrichtungs-Speicherung ohne die Gast-Verdrahtung darf sie nicht verlieren.
+        let kept = sample().with_tokens(&a.cfg);
+        assert!(kept.channels.iter().any(|c| c.id == au.ret_channel));
+        assert!(kept.parties.iter().any(|p| p.id == au.port_party));
+        kept.validate().unwrap();
+        // Widerruf räumt auf; Ablauf ebenso.
+        let n = a.cfg.channels.len();
+        a.delete_guest(g.id).unwrap();
+        assert_eq!(a.cfg.channels.len(), n - 2);
+        assert!(!a.cfg.parties.iter().any(|p| p.id == au.prog_party || p.id == au.port_party));
+        assert!(a.prune_guests(now + 3601 + 1));
+        assert!(a.cfg.guests.is_empty());
+        assert_eq!(a.cfg.channels.len(), sample().channels.len());
+        assert_eq!(a.cfg.parties.len(), sample().parties.len());
     }
 }

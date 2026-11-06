@@ -63,6 +63,8 @@ export interface Guest {
   expires: string;
   url?: string;
   routes: Route[];
+  /** Ton-Gast (RC3): Programmeingang (N-1 rein) und Mix-Ausgang (Mikrofon raus) des Intercom-Dienstes. */
+  audio?: { ret_in: number; mic_out: number };
 }
 export interface Config {
   channels: Channel[];

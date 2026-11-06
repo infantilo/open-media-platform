@@ -639,6 +639,7 @@ class IntercomAdmin extends HTMLElement {
       const row = el("div", "display:flex;gap:10px;align-items:center;margin-bottom:6px;flex-wrap:wrap;");
       row.dataset.guest = String(g.id);
       row.append(el("strong", "", g.name), el("span", DIM + "font-size:12px;", tt("icom.guest.until", { p0: fmt.format(new Date(g.expires)) })));
+      if (g.audio) row.append(el("span", DIM + "font-size:12px;", tt("icom.guest.audioPorts", { p0: g.audio.ret_in, p1: g.audio.mic_out })));
       row.append(btn(tt("icom.guest.copy"), async () => {
         try {
           await navigator.clipboard.writeText(g.url ?? "");
@@ -682,7 +683,21 @@ class IntercomAdmin extends HTMLElement {
       this.#guestName = "";
       await this.#load();
     }));
-    box.append(form);
+    form.append(btn(tt("icom.guest.createAudio"), async () => {
+      const res = await apiFetch("/api/v1/ext/intercom/guests", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: this.#guestName, ttl_minutes: this.#guestTtl, audio: true }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        showToast(tt("icom.guest.createFailed", { p0: body.error ?? res.status }));
+        return;
+      }
+      this.#guestName = "";
+      await this.#load();
+    }));
+    box.append(form, el("div", DIM + "font-size:12px;margin-top:6px;", tt("icom.guest.audioHint")));
     return box;
   }
 }
