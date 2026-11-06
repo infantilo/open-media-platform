@@ -49,7 +49,18 @@ fn view_json(r: &Run) -> Value {
                    "fadeInMs": p.fade_in_ms, "fadeOutMs": p.fade_out_ms, "stopAtMs": p.stop_at_ms, "sent": r.sent.contains(&i)})
         })
         .collect();
-    json!({"state": Store::state_value(r), "startUnixMs": start_unix_ms, "nowUnixMs": now_unix_ms, "items": items})
+    let now_tai = tai_now_ns();
+    let carts: Vec<Value> = r
+        .carts
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let playing = r.cart_fired.get(&i).is_some_and(|f| c.duration_ms > 0 && now_tai < f.start_tai_ns + c.duration_ms as u64 * 1_000_000);
+            let elapsed = r.cart_fired.get(&i).map(|f| (now_tai.saturating_sub(f.start_tai_ns) / 1_000_000) as i64).unwrap_or(0);
+            json!({"index": i, "label": c.label, "color": c.color, "file": c.file, "durationMs": c.duration_ms, "gainDb": c.gain_db, "playing": playing, "elapsedMs": if playing { elapsed } else { 0 }})
+        })
+        .collect();
+    json!({"state": Store::state_value(r), "startUnixMs": start_unix_ms, "nowUnixMs": now_unix_ms, "items": items, "carts": carts})
 }
 
 #[derive(Default)]
@@ -63,10 +74,43 @@ struct Run {
     target_label: String,
     lookahead_ms: u64,
     last_error: String,
+    /// Hotkey-Wand (Carts) und je Taste die zuletzt gestartete Stimme.
+    carts: Vec<Cart>,
+    cart_fired: std::collections::HashMap<usize, CartFired>,
+}
+
+/// Eine Taste der Hotkey-Wand.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Cart {
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    color: String,
+    #[serde(default)]
+    file: String,
+    #[serde(default)]
+    duration_ms: i64,
+    #[serde(default)]
+    gain_db: f64,
+}
+
+#[derive(Clone, Debug)]
+struct CartFired {
+    voice_id: String,
+    start_tai_ns: u64,
+}
+
+/// Fernzugriff für Methoden, die sofort etwas am Segue-Player auslösen (Hotkeys).
+struct Remote {
+    orchestrator_url: String,
+    auth: OrchestratorAuth,
+    registry: RegistryClient,
 }
 
 struct Store {
     run: Arc<Mutex<Run>>,
+    remote: Remote,
 }
 
 fn ro(name: &str, kind: ParamType) -> ParamSpec {
@@ -102,12 +146,16 @@ impl ParamStore for Store {
                 ro("asRun", ParamType::String),
                 ro("view", ParamType::String),
                 ro("log", ParamType::String),
+                ro("carts", ParamType::String),
                 ro("lastError", ParamType::String),
             ],
             methods: vec![
                 MethodSpec { name: "load".to_string(), args: vec![MethodArg { name: "log".to_string(), kind: ParamType::String }] },
                 MethodSpec { name: "start".to_string(), args: vec![MethodArg { name: "atTai".to_string(), kind: ParamType::Number }, MethodArg { name: "atUnixMs".to_string(), kind: ParamType::Number }, MethodArg { name: "delayMs".to_string(), kind: ParamType::Number }] },
                 MethodSpec { name: "stop".to_string(), args: vec![MethodArg { name: "fadeMs".to_string(), kind: ParamType::Number }] },
+                MethodSpec { name: "setCarts".to_string(), args: vec![MethodArg { name: "carts".to_string(), kind: ParamType::String }] },
+                MethodSpec { name: "fireCart".to_string(), args: vec![MethodArg { name: "index".to_string(), kind: ParamType::Number }] },
+                MethodSpec { name: "stopCart".to_string(), args: vec![MethodArg { name: "index".to_string(), kind: ParamType::Number }, MethodArg { name: "fadeMs".to_string(), kind: ParamType::Number }] },
             ],
         }
     }
@@ -125,6 +173,7 @@ impl ParamStore for Store {
             "asRun" => json!(serde_json::to_string(&r.as_run).unwrap_or_default()),
             "view" => json!(view_json(&r).to_string()),
             "log" => json!(r.log.as_ref().map(|l| serde_json::to_string(l).unwrap_or_default()).unwrap_or_default()),
+            "carts" => json!(serde_json::to_string(&r.carts).unwrap_or_default()),
             "lastError" => json!(r.last_error),
             _ => return None,
         })
@@ -162,7 +211,7 @@ impl ParamStore for Store {
                     None => return Err(InvokeError::Unknown),
                 };
                 let placed = runner::plan(&log, &Config::default()).map_err(InvokeError::Message)?;
-                *r = Run { log: Some(log), placed, target_label: std::mem::take(&mut r.target_label), lookahead_ms: r.lookahead_ms, ..Run::default() };
+                *r = Run { log: Some(log), placed, target_label: std::mem::take(&mut r.target_label), lookahead_ms: r.lookahead_ms, carts: std::mem::take(&mut r.carts), cart_fired: std::mem::take(&mut r.cart_fired), ..Run::default() };
                 Ok(())
             }
             "start" => {
@@ -205,6 +254,51 @@ impl ParamStore for Store {
                 let _ = target;
                 Ok(())
             }
+            "setCarts" => {
+                let carts: Vec<Cart> = match args.get("carts") {
+                    Some(Value::String(t)) => serde_json::from_str(t).map_err(|e| InvokeError::Message(format!("Hotkeys ungültig: {e}")))?,
+                    Some(v) => serde_json::from_value(v.clone()).map_err(|e| InvokeError::Message(format!("Hotkeys ungültig: {e}")))?,
+                    None => return Err(InvokeError::Unknown),
+                };
+                if carts.len() > 64 {
+                    return Err(InvokeError::Message("höchstens 64 Tasten".to_string()));
+                }
+                let n = carts.len();
+                r.carts = carts;
+                r.cart_fired.retain(|i, _| *i < n);
+                Ok(())
+            }
+            "fireCart" | "stopCart" => {
+                let idx = args.get("index").and_then(Value::as_u64).ok_or_else(|| InvokeError::Message("index fehlt".to_string()))? as usize;
+                let cart = r.carts.get(idx).cloned().ok_or_else(|| InvokeError::Message(format!("Taste {idx} gibt es nicht")))?;
+                let target = r.target_label.clone();
+                if target.is_empty() {
+                    return Err(InvokeError::Message("kein Ziel (Segue-Player) gewählt".to_string()));
+                }
+                let now = tai_now_ns();
+                let fired = r.cart_fired.get(&idx).cloned();
+                let voice = if name == "fireCart" { format!("cart-{}-{}", idx + 1, now / 1_000_000) } else { fired.as_ref().map(|f| f.voice_id.clone()).unwrap_or_default() };
+                drop(r);
+                if name == "stopCart" && voice.is_empty() {
+                    return Ok(());
+                }
+                let id = resolve_target(&self.remote.orchestrator_url, &self.remote.auth, &self.remote.registry, &target).ok_or_else(|| InvokeError::Message(format!("Ziel „{target}“ nicht gefunden")))?;
+                let client = ProxyClient::new(self.remote.orchestrator_url.clone(), id, self.remote.auth.clone());
+                if name == "fireCart" {
+                    if cart.file.trim().is_empty() {
+                        return Err(InvokeError::Message("Taste ohne Datei".to_string()));
+                    }
+                    client.invoke("play", json!({"voiceId": voice, "file": cart.file, "gainDb": cart.gain_db, "label": cart.label})).map_err(|e| InvokeError::Message(e.to_string()))?;
+                    let mut r = self.run.lock().expect("lock poisoned");
+                    r.cart_fired.insert(idx, CartFired { voice_id: voice, start_tai_ns: now });
+                    r.as_run.push(json!({"event": "cart", "index": idx, "label": cart.label, "taiNs": now}));
+                } else {
+                    let fade = args.get("fadeMs").and_then(Value::as_u64).unwrap_or(300);
+                    client.invoke("stop", json!({"voiceId": voice, "fadeMs": fade})).map_err(|e| InvokeError::Message(e.to_string()))?;
+                    self.run.lock().expect("lock poisoned").cart_fired.remove(&idx);
+                }
+                Ok(())
+            }
             _ => Err(InvokeError::Unknown),
         }
     }
@@ -219,7 +313,7 @@ impl ParamStore for Store {
             let r = self.run.lock().expect("lock poisoned");
             let mut sent: Vec<usize> = r.sent.iter().copied().collect();
             sent.sort_unstable();
-            return Some(json_ok(json!({"state": {"log": r.log, "startTaiNs": r.start_tai_ns, "sent": sent, "target": r.target_label, "lookaheadMs": r.lookahead_ms}})));
+            return Some(json_ok(json!({"state": {"log": r.log, "startTaiNs": r.start_tai_ns, "sent": sent, "target": r.target_label, "lookaheadMs": r.lookahead_ms, "carts": r.carts}})));
         }
         if method == "POST" && path == "/state" {
             let v: Value = match serde_json::from_slice(body) {
@@ -235,6 +329,9 @@ impl ParamStore for Store {
                     r.start_tai_ns = s.get("startTaiNs").and_then(Value::as_u64).unwrap_or(0);
                     r.sent = s.get("sent").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as usize)).collect()).unwrap_or_default();
                 }
+            }
+            if let Some(c) = s.get("carts").and_then(|c| serde_json::from_value::<Vec<Cart>>(c.clone()).ok()) {
+                r.carts = c;
             }
             if let Some(t) = s.get("target").and_then(Value::as_str) {
                 r.target_label = t.to_string();
@@ -352,7 +449,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let (run, url, auth, reg, hb) = (run.clone(), orchestrator_url.clone(), auth.clone(), registry.clone(), heartbeat.clone());
         std::thread::spawn(move || scheduler_loop(run, url, auth, reg, hb));
     }
-    let store: Arc<dyn ParamStore> = Arc::new(Store { run });
+    let store: Arc<dyn ParamStore> = Arc::new(Store { run, remote: Remote { orchestrator_url: orchestrator_url.clone(), auth: auth.clone(), registry: registry.clone() } });
     let handle = omp_node_sdk::start(
         NodeConfig { label, host, port, registry_url, nats_url, senders: vec![], receivers: vec![], instance_id, media_ready: omp_node_sdk::MediaReadySource::NotApplicable },
         store,

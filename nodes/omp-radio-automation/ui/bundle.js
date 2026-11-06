@@ -4,7 +4,7 @@
 const T = (() => {
   const D = {
     de: {
-      target: "Segue-Player (Ziel)", noTarget: "— kein Ziel —", lookahead: "Vorlauf (s)", state: "Zustand",
+      addSpot: "+ Spot (Werbeblock)", target: "Segue-Player (Ziel)", noTarget: "— kein Ziel —", lookahead: "Vorlauf (s)", state: "Zustand",
       "st.empty": "leer", "st.loaded": "geladen", "st.running": "läuft", "st.finished": "beendet",
       log: "Log", logId: "Log-Name", add: "+ Element", load: "Log laden", dirty: "ungeladene Änderungen", import: "JSON einfügen …", export: "Als JSON anzeigen", apply: "Übernehmen",
       colId: "Name", colKind: "Art", colFile: "Datei", colDur: "Dauer (ms)", colIntro: "Intro (ms)", colOutro: "Segue-Punkt (ms)", colSom: "Start in Datei (ms)", colGain: "Pegel (dB)", colFix: "Harte Marke (HH:MM:SS)", colOpt: "Füller",
@@ -15,10 +15,15 @@ const T = (() => {
       sent: "gesendet", waiting: "wartet", playing: "läuft", done: "vorbei", elapsed: "Zeit",
       asRun: "As-Run", noAsRun: "Noch keine Einträge.", evSched: "geplant", evStop: "Stopp", evBack: "Backtiming", evBackRes: "Backtiming-Ergebnis: Rest {ms} ms", badFix: "Marke ungültig (HH:MM[:SS]): {v}", lead: "Vorlauf {s} s",
       loaded: "Log geladen.", started: "Gestartet.", stopped: "Gestoppt.", badTime: "Uhrzeit ungültig (HH:MM[:SS]).", badLog: "Log ungültig: {e}", fail: "{m} fehlgeschlagen: {d}",
+      colTitle: "Titel", colBlock: "Block", colTime: "Zeit", drag: "ziehen zum Sortieren", dup: "Duplizieren", insertAbove: "Element davor einfügen",
+      blockTarget: "Soll (s)", blockSum: "Summe", blockDiff: "Differenz", blockOver: "zu lang", blockUnder: "zu kurz", blockOk: "passt", blockFill: "Füller anhängen", noFiller: "Kein Füller passt (Füller im JSON unter „fillers“)",
+      now: "Jetzt", next: "Nächstes", remain: "Rest", nothing: "—", notRunning: "Kein Log läuft.",
+      hot: "Hotkeys", hotEdit: "Bearbeiten", hotDone: "Fertig", hotAdd: "+ Taste", hotSave: "Speichern", hotDel: "Taste löschen", hotLabel: "Beschriftung", hotColor: "Farbe", hotFile: "Datei", hotDur: "Dauer (ms)", hotGain: "Pegel (dB)", hotEmpty: "Keine Tasten. „Bearbeiten“ → „+ Taste“.", hotNoTarget: "Erst oben einen Segue-Player als Ziel wählen.", hotSaved: "Hotkeys gespeichert.",
+      "col.red": "Rot", "col.green": "Grün", "col.blue": "Blau", "col.orange": "Orange", "col.purple": "Violett", "col.teal": "Türkis", "col.grey": "Grau",
       hint: "Eine harte Marke (Uhrzeit) lässt das Element zu dieser Zeit einsetzen: beim Start werden Füller weggelassen/eingefügt und Segue-Punkte verschoben (Entscheidungen im As-Run). Der Segue-Punkt ist die Stelle in der Datei, ab der der Nachfolger starten darf; ohne Angabe 3 s vor Dateiende. Der Log wird erst mit „Log laden“ übernommen.",
     },
     en: {
-      target: "Segue player (target)", noTarget: "— no target —", lookahead: "Lead time (s)", state: "State",
+      addSpot: "+ Spot (ad block)", target: "Segue player (target)", noTarget: "— no target —", lookahead: "Lead time (s)", state: "State",
       "st.empty": "empty", "st.loaded": "loaded", "st.running": "running", "st.finished": "finished",
       log: "Log", logId: "Log name", add: "+ Item", load: "Load log", dirty: "unloaded changes", import: "Paste JSON …", export: "Show as JSON", apply: "Apply",
       colId: "Name", colKind: "Kind", colFile: "File", colDur: "Duration (ms)", colIntro: "Intro (ms)", colOutro: "Segue point (ms)", colSom: "Start in file (ms)", colGain: "Level (dB)", colFix: "Hard mark (HH:MM:SS)", colOpt: "Filler",
@@ -29,6 +34,11 @@ const T = (() => {
       sent: "sent", waiting: "waiting", playing: "playing", done: "done", elapsed: "Time",
       asRun: "As-run", noAsRun: "No entries yet.", evSched: "scheduled", evStop: "stop", evBack: "Backtiming", evBackRes: "Backtiming result: remainder {ms} ms", badFix: "Invalid mark (HH:MM[:SS]): {v}", lead: "lead {s} s",
       loaded: "Log loaded.", started: "Started.", stopped: "Stopped.", badTime: "Invalid time (HH:MM[:SS]).", badLog: "Invalid log: {e}", fail: "{m} failed: {d}",
+      colTitle: "Title", colBlock: "Block", colTime: "Time", drag: "drag to reorder", dup: "Duplicate", insertAbove: "Insert item above",
+      blockTarget: "Target (s)", blockSum: "Total", blockDiff: "Difference", blockOver: "too long", blockUnder: "too short", blockOk: "fits", blockFill: "Append filler", noFiller: "No filler fits (fillers in the JSON under “fillers”)",
+      now: "Now", next: "Next", remain: "Remaining", nothing: "—", notRunning: "No log running.",
+      hot: "Hotkeys", hotEdit: "Edit", hotDone: "Done", hotAdd: "+ Key", hotSave: "Save", hotDel: "Delete key", hotLabel: "Label", hotColor: "Colour", hotFile: "File", hotDur: "Duration (ms)", hotGain: "Level (dB)", hotEmpty: "No keys. “Edit” → “+ Key”.", hotNoTarget: "Choose a segue player as target above first.", hotSaved: "Hotkeys saved.",
+      "col.red": "Red", "col.green": "Green", "col.blue": "Blue", "col.orange": "Orange", "col.purple": "Purple", "col.teal": "Teal", "col.grey": "Grey",
       hint: "A hard mark (time of day) makes the item start at that time: at start, fillers are dropped/inserted and segue points are moved (decisions in the as-run). The segue point is the position in the file from which the next item may start; without it, 3 s before the end. The log only takes effect with “Load log”.",
     },
   };
@@ -102,10 +112,21 @@ const STYLE = `
   .tlfade { position: absolute; top: 2px; height: 18px; background: repeating-linear-gradient(135deg, rgba(255,255,255,.28) 0 3px, transparent 3px 6px); border-radius: 3px; }
   .ev { font-variant-numeric: tabular-nums; padding: 1px 0; }
   textarea { width: 100%; min-height: 120px; font-family: monospace; }
+  tr.blockhead td { background: #3a2f1c; font-weight: 600; padding: 4px 6px; } tr.blockhead input { width: 70px; }
+  tr.dragover td { border-top: 2px solid var(--acc); } td.handle { cursor: grab; color: var(--mut); user-select: none; } tr.cur td { background: #1f3a24; } tr.done td { opacity: .55; }
+  .ok { color: var(--ok); } .bad { color: var(--err); } .nowbar { display: flex; gap: 18px; align-items: center; padding: 8px 10px; background: var(--bg2); border: 1px solid var(--bd); border-radius: 6px; margin-bottom: 8px; }
+  .nowbar .big { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; } .nowbar .grow { flex: 1; min-width: 0; } .nowbar .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nowprog { height: 5px; background: var(--bg3); border-radius: 3px; margin-top: 4px; } .nowprog > div { height: 100%; background: var(--acc); border-radius: 3px; }
+  .hk { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
+  .hkkey { position: relative; min-height: 58px; padding: 6px 8px; border-radius: 5px; border: 1px solid rgba(255,255,255,.2); color: #fff; text-align: left; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; }
+  .hkkey .nm { font-weight: 700; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,.6); } .hkkey .tm { font-variant-numeric: tabular-nums; font-size: 11px; opacity: .9; }
+  .hkkey .pr { position: absolute; left: 0; bottom: 0; height: 4px; background: #fff; opacity: .85; } .hkkey.playing { box-shadow: 0 0 0 2px #fff; }
+  .hkkey.c-red { background: #b03030; } .hkkey.c-green { background: #2f8a3e; } .hkkey.c-blue { background: #2f5fb0; } .hkkey.c-orange { background: #c7731d; } .hkkey.c-purple { background: #7a3fa0; } .hkkey.c-teal { background: #1f8a86; } .hkkey.c-grey { background: #55555c; }
+  .hked { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; align-items: end; padding: 6px; border: 1px solid var(--bd); border-radius: 5px; margin-bottom: 6px; } .hked label { display: flex; flex-direction: column; gap: 2px; color: var(--mut); }
 `;
 
 const fmtMs = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
-const blankItem = () => ({ id: "", kind: "song", file: "", durationMs: 180000, somMs: 0, introMs: null, outroMs: null, gainDb: 0, optional: false, fixText: "" });
+const blankItem = () => ({ id: "", kind: "song", file: "", durationMs: 180000, somMs: 0, introMs: null, outroMs: null, gainDb: 0, optional: false, fixText: "", title: "", block: "" });
 const fixToUnix = (text) => { const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(text.trim()); if (!m || +m[1] > 23 || +m[2] > 59 || +(m[3] || 0) > 59) return null; const d = new Date(); d.setHours(+m[1], +m[2], +(m[3] || 0), 0); if (d.getTime() < Date.now()) d.setDate(d.getDate() + 1); return d.getTime(); };
 const unixToFix = (ms) => (ms ? new Date(ms).toLocaleTimeString("de-DE") : "");
 
@@ -116,6 +137,8 @@ class OmpRadioAutomationPanel extends HTMLElement {
     let rows = [];
     let logId = "log1";
     let fillers = [];
+    let blockTargets = {};
+    let cartsEdit = null; // null = Anzeige folgt dem Node; sonst lokale Bearbeitung
     let dirty = false;
     let view = { state: "empty", items: [], startUnixMs: 0, nowUnixMs: 0 };
     let asRun = [];
@@ -145,10 +168,12 @@ class OmpRadioAutomationPanel extends HTMLElement {
         somMs: Number(r.somMs) || 0, introMs: r.introMs === null || r.introMs === "" ? null : Number(r.introMs),
         outroMs: r.outroMs === null || r.outroMs === "" ? null : Number(r.outroMs), gainDb: Number(r.gainDb) || 0,
         optional: !!r.optional, fixAtUnixMs: r.fixText && r.fixText.trim() ? fixToUnix(r.fixText) : null,
+        title: r.title && r.title.trim() ? r.title.trim() : null, block: r.block && r.block.trim() ? r.block.trim() : null,
       })),
       fillers,
+      blocks: Object.entries(blockTargets).filter(([n]) => rows.some((r) => (r.block || "").trim() === n)).map(([name, targetMs]) => ({ name, targetMs })),
     });
-    const fromWire = (l) => { logId = l.logId || "log"; fillers = l.fillers || []; rows = (l.items || []).map((i) => ({ ...blankItem(), ...i, introMs: i.introMs ?? null, outroMs: i.outroMs ?? null, fixText: unixToFix(i.fixAtUnixMs) })); };
+    const fromWire = (l) => { logId = l.logId || "log"; fillers = l.fillers || []; blockTargets = Object.fromEntries((l.blocks || []).map((b) => [b.name, b.targetMs])); rows = (l.items || []).map((i) => ({ ...blankItem(), ...i, introMs: i.introMs ?? null, outroMs: i.outroMs ?? null, fixText: unixToFix(i.fixAtUnixMs), title: i.title || "", block: i.block || "" })); };
 
     // ---- Kopf ----
     const stateChip = h("span", { class: "chip" });
@@ -162,16 +187,66 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const markDirty = () => { dirty = true; dirtyEl.textContent = T("dirty"); };
     const tbody = h("tbody");
     const cell = (cls, el) => h("td", { class: cls }, el);
+    let timeCells = [];
+    let dragFrom = null;
+    const blockSum = (name) => rows.filter((r) => (r.block || "").trim() === name).reduce((a, r) => a + (Number(r.durationMs) || 0), 0);
     const renderRows = () => {
-      tbody.replaceChildren(...rows.map((r, i) => {
-        const inp = (key, type, cls) => h("input", { type, value: r[key] ?? "", oninput: (e) => { r[key] = type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value; markDirty(); } });
+      timeCells = [];
+      const out = [];
+      rows.forEach((r, i) => {
+        const bn = (r.block || "").trim();
+        const prevBn = i > 0 ? (rows[i - 1].block || "").trim() : "";
+        if (bn && bn !== prevBn) out.push(blockHead(bn, i));
+        const inp = (key, type) => h("input", { type, value: r[key] ?? "", oninput: (e) => { r[key] = type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value; markDirty(); }, onchange: () => { if (key === "block" || key === "durationMs") renderRows(); } });
         const kind = h("select", { onchange: (e) => { r.kind = e.target.value; markDirty(); } }, ...["song", "jingle", "speech"].map((k) => h("option", { value: k }, T("kind." + k))));
         kind.value = r.kind;
-        const move = (d) => () => { const j = i + d; if (j < 0 || j >= rows.length) return; [rows[i], rows[j]] = [rows[j], rows[i]]; markDirty(); renderRows(); };
-        return h("tr", {}, cell("", inp("id", "text")), cell("", kind), cell("file", inp("file", "text")), cell("num", inp("durationMs", "number")), cell("num", inp("introMs", "number")), cell("num", inp("outroMs", "number")), cell("num", inp("somMs", "number")), cell("num", inp("gainDb", "number")), cell("", inp("fixText", "text")),
+        const timeCell = h("td", { class: "muted" }); timeCells.push([i, timeCell]);
+        const tr = h("tr", { draggable: "true",
+          ondragstart: (e) => { dragFrom = i; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(i)); },
+          ondragover: (e) => { if (dragFrom === null) return; e.preventDefault(); tr.classList.add("dragover"); },
+          ondragleave: () => tr.classList.remove("dragover"),
+          ondrop: (e) => { e.preventDefault(); tr.classList.remove("dragover"); if (dragFrom === null || dragFrom === i) { dragFrom = null; return; } const [m] = rows.splice(dragFrom, 1); rows.splice(i, 0, m); dragFrom = null; markDirty(); renderRows(); },
+          ondragend: () => { dragFrom = null; } },
+          h("td", { class: "handle", title: T("drag") }, "⠿"), h("td", { class: "muted" }, i + 1), cell("", inp("id", "text")), cell("", inp("title", "text")), cell("", kind), cell("", inp("block", "text")), cell("file", inp("file", "text")), cell("num", inp("durationMs", "number")), cell("num", inp("introMs", "number")), cell("num", inp("outroMs", "number")), cell("num", inp("somMs", "number")), cell("num", inp("gainDb", "number")), cell("", inp("fixText", "text")),
           cell("", h("input", { type: "checkbox", style: "width:auto", checked: !!r.optional, onchange: (e) => { r.optional = e.target.checked; markDirty(); } })),
-          cell("act", [h("button", { title: T("up"), onclick: move(-1) }, "↑"), h("button", { title: T("down"), onclick: move(1) }, "↓"), h("button", { title: T("del"), onclick: () => { rows.splice(i, 1); markDirty(); renderRows(); } }, "✕")]));
-      }));
+          timeCell,
+          cell("act", [h("button", { title: T("insertAbove"), onclick: () => { const n = blankItem(); n.block = r.block; rows.splice(i, 0, n); markDirty(); renderRows(); } }, "＋"), h("button", { title: T("dup"), onclick: () => { rows.splice(i + 1, 0, { ...r, id: r.id ? r.id + "-2" : "" }); markDirty(); renderRows(); } }, "⧉"), h("button", { title: T("del"), onclick: () => { rows.splice(i, 1); markDirty(); renderRows(); } }, "✕")]));
+        out.push(tr);
+      });
+      tbody.replaceChildren(...out);
+      updateTimes();
+    };
+    // Blockkopf: Summe gegen Soll-Länge, Füller-Vorschlag
+    const blockHead = (name, startIdx) => {
+      const sum = blockSum(name);
+      const target = blockTargets[name];
+      const diff = target ? sum - target : null;
+      const verdict = diff === null ? "" : Math.abs(diff) <= 500 ? T("blockOk") : diff > 0 ? T("blockOver") : T("blockUnder");
+      const tin = h("input", { type: "number", min: "0", value: target ? target / 1000 : "", onchange: (e) => { const v = Number(e.target.value); if (v > 0) blockTargets[name] = Math.round(v * 1000); else delete blockTargets[name]; markDirty(); renderRows(); } });
+      const fillBtn = h("button", { onclick: () => {
+        const gap = (target || 0) - sum;
+        const fit = fillers.filter((f) => f.durationMs <= gap).sort((a, b) => b.durationMs - a.durationMs)[0];
+        if (!fit) return show(T("noFiller"));
+        let last = startIdx; while (last + 1 < rows.length && (rows[last + 1].block || "").trim() === name) last++;
+        rows.splice(last + 1, 0, { ...blankItem(), ...fit, block: name, introMs: fit.introMs ?? null, outroMs: fit.outroMs ?? null, fixText: "" }); markDirty(); renderRows();
+      } }, T("blockFill"));
+      return h("tr", { class: "blockhead" }, h("td", { colspan: "16" }, `▣ ${name}   ·   ${T("blockSum")} ${fmtMs(sum)}   ·   ${T("blockTarget")} `, tin,
+        target ? h("span", { class: diff !== null && Math.abs(diff) <= 500 ? "ok" : "bad" }, `   ${T("blockDiff")} ${diff > 0 ? "+" : ""}${(diff / 1000).toFixed(1)} s ${verdict}   `) : null, target && diff < -500 ? fillBtn : null));
+    };
+    // Zeitspalte: geplanter Beginn je Zeile (nur wenn der geladene Log zur Tabelle passt), laufende/vergangene Zeilen markiert
+    const updateTimes = () => {
+      const its = view.items || [];
+      const valid = !dirty && its.length === rows.length;
+      const trs = [...tbody.querySelectorAll("tr:not(.blockhead)")];
+      for (const [i, td] of timeCells) {
+        const it = valid ? its[i] : null;
+        if (!it) { td.textContent = ""; trs[i]?.classList.remove("cur", "done"); continue; }
+        const running = view.startUnixMs > 0;
+        td.textContent = running ? new Date(view.startUnixMs + it.startMs).toLocaleTimeString(LOCALE) : `+${fmtMs(it.startMs)}`;
+        const el = running ? view.nowUnixMs - view.startUnixMs : null;
+        trs[i]?.classList.toggle("cur", el !== null && el >= it.startMs && el < it.endMs);
+        trs[i]?.classList.toggle("done", el !== null && el >= it.endMs);
+      }
     };
     const loadBtn = h("button", { class: "primary", onclick: async () => {
       const w = toWire();
@@ -186,10 +261,10 @@ class OmpRadioAutomationPanel extends HTMLElement {
       h("button", { onclick: () => { try { fromWire(JSON.parse(jsonArea.value)); logIdInput.value = logId; markDirty(); renderRows(); jsonBox.style.display = "none"; } catch (e) { show(T("badLog", { e: e.message })); } } }, T("apply")));
     const logSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("log")),
       h("div", { class: "body" },
-        h("div", { class: "bar" }, h("label", {}, T("logId"), logIdInput), h("button", { onclick: () => { rows.push(blankItem()); markDirty(); renderRows(); } }, T("add")),
+        h("div", { class: "bar" }, h("label", {}, T("logId"), logIdInput), h("button", { onclick: () => { rows.push(blankItem()); markDirty(); renderRows(); } }, T("add")), h("button", { onclick: () => { const n = blankItem(); n.kind = "jingle"; n.block = "Werbeblock"; n.durationMs = 30000; rows.push(n); markDirty(); renderRows(); } }, T("addSpot")),
           loadBtn, h("button", { onclick: () => { jsonArea.value = JSON.stringify(toWire(), null, 2); jsonBox.style.display = ""; } }, T("export")),
           h("button", { onclick: () => { jsonArea.value = ""; jsonBox.style.display = ""; } }, T("import")), dirtyEl),
-        h("table", {}, h("thead", {}, h("tr", {}, ...["colId", "colKind", "colFile", "colDur", "colIntro", "colOutro", "colSom", "colGain", "colFix", "colOpt"].map((k) => h("th", {}, T(k))), h("th"))), tbody),
+        h("table", {}, h("thead", {}, h("tr", {}, h("th"), h("th", {}, "#"), ...["colId", "colTitle", "colKind", "colBlock", "colFile", "colDur", "colIntro", "colOutro", "colSom", "colGain", "colFix", "colOpt", "colTime"].map((k) => h("th", {}, T(k))), h("th"))), tbody),
         jsonBox, h("p", { class: "hint" }, T("hint"))));
 
     // ---- Ablauf (Zeitleiste) ----
@@ -247,8 +322,74 @@ class OmpRadioAutomationPanel extends HTMLElement {
       }));
     };
 
-    shadow.append(h("style", {}, STYLE), banner, head, logSec, planSec, asRunSec);
-    renderRows(); renderPlan(); renderAsRun();
+    // ---- Jetzt-Leiste ----
+    const nowTitle = h("div", { class: "t big" }), nowSub = h("div", { class: "muted t" }), nowProg = h("div"), nowRemain = h("div", { class: "big" }), nextEl = h("div", { class: "t" }), clockEl = h("div", { class: "big" });
+    const nowBar = h("div", { class: "nowbar" },
+      h("div", { class: "grow" }, h("div", { class: "muted" }, T("now")), nowTitle, h("div", { class: "nowprog" }, nowProg), nowSub),
+      h("div", {}, h("div", { class: "muted" }, T("remain")), nowRemain),
+      h("div", { class: "grow" }, h("div", { class: "muted" }, T("next")), nextEl), clockEl);
+    const nameOf = (i) => { const r = rows[i]; const it = (view.items || [])[i]; return (r && r.title && r.title.trim()) || (r && r.id) || (it && it.id) || ""; };
+    const renderNow = () => {
+      clockEl.textContent = new Date(view.nowUnixMs || Date.now()).toLocaleTimeString(LOCALE);
+      const its = view.items || [];
+      const el = view.startUnixMs > 0 ? view.nowUnixMs - view.startUnixMs : null;
+      const idx = el === null ? -1 : its.findIndex((i) => el >= i.startMs && el < i.endMs);
+      if (idx < 0) { nowTitle.textContent = T("nothing"); nowSub.textContent = T("notRunning"); nowProg.style.width = "0"; nowRemain.textContent = "0:00"; const upcoming = its.length && el !== null ? its.find((i) => i.startMs > el) : null; nextEl.textContent = upcoming ? upcoming.id : T("nothing"); return; }
+      const it = its[idx];
+      nowTitle.textContent = nameOf(idx) || it.id; nowSub.textContent = `${it.file || ""}`;
+      nowProg.style.width = `${Math.min(100, ((el - it.startMs) / Math.max(1, it.endMs - it.startMs)) * 100)}%`;
+      nowRemain.textContent = fmtMs(it.endMs - el);
+      nextEl.textContent = its[idx + 1] ? (nameOf(idx + 1) || its[idx + 1].id) : T("nothing");
+    };
+
+    // ---- Hotkeys ----
+    let hkSig = "", hkKeys = [];
+    const COLORS = ["red", "green", "blue", "orange", "purple", "teal", "grey"];
+    const hkGrid = h("div", { class: "hk" }), hkEdit = h("div");
+    const hkEditBtn = h("button", { onclick: () => { if (cartsEdit) { cartsEdit = null; hkEditBtn.textContent = T("hotEdit"); } else { cartsEdit = (view.carts || []).map((c) => ({ label: c.label, color: c.color, file: c.file, durationMs: c.durationMs, gainDb: c.gainDb })); hkEditBtn.textContent = T("hotDone"); } renderCarts(); } }, T("hotEdit"));
+    const hkAdd = h("button", { onclick: () => { if (!cartsEdit) return; cartsEdit.push({ label: "", color: COLORS[cartsEdit.length % COLORS.length], file: "", durationMs: 5000, gainDb: 0 }); renderCarts(); } }, T("hotAdd"));
+    const hkSave = h("button", { class: "primary", onclick: async () => { if (cartsEdit && await call("setCarts", { carts: JSON.stringify(cartsEdit) })) { show(T("hotSaved"), true); cartsEdit = null; hkEditBtn.textContent = T("hotEdit"); await poll(); renderCarts(); } } }, T("hotSave"));
+    const renderCarts = () => {
+      hkAdd.style.display = hkSave.style.display = cartsEdit ? "" : "none";
+      if (cartsEdit) {
+        hkSig = "";
+        hkEdit.replaceChildren(...cartsEdit.map((c, i) => {
+          const f = (key, type, label) => h("label", {}, label, h("input", { type, value: c[key] ?? "", oninput: (e) => { c[key] = type === "number" ? Number(e.target.value) : e.target.value; } }));
+          const col = h("select", { onchange: (e) => { c.color = e.target.value; } }, ...COLORS.map((k) => h("option", { value: k }, T("col." + k)))); col.value = c.color || "grey";
+          return h("div", { class: "hked" }, f("label", "text", T("hotLabel")), h("label", {}, T("hotColor"), col), f("file", "text", T("hotFile")), f("durationMs", "number", T("hotDur")), f("gainDb", "number", T("hotGain")), h("button", { onclick: () => { cartsEdit.splice(i, 1); renderCarts(); } }, T("hotDel")));
+        }));
+        hkGrid.replaceChildren();
+        return;
+      }
+      hkEdit.replaceChildren();
+      const cs = view.carts || [];
+      if (!cs.length) { hkGrid.replaceChildren(h("span", { class: "muted" }, T("hotEmpty"))); hkSig = ""; return; }
+      // Tasten nur bei geänderter Belegung neu bauen; sonst an Ort und Stelle aktualisieren (ein Klick geht nicht durch Neuaufbau verloren)
+      const sig = JSON.stringify(cs.map((c) => [c.label, c.color, c.durationMs]));
+      if (sig !== hkSig) {
+        hkSig = sig; hkKeys = [];
+        hkGrid.replaceChildren(...cs.map((c) => {
+          const nm = h("span", { class: "nm" }, c.label || `#${c.index + 1}`), tm = h("span", { class: "tm" }), pr = h("span", { class: "pr" });
+          const btn = h("button", { class: `hkkey c-${COLORS.includes(c.color) ? c.color : "grey"}`, onclick: async () => {
+            const cur = (view.carts || [])[c.index];
+            if (!target) return show(T("hotNoTarget"));
+            if (await call(cur && cur.playing ? "stopCart" : "fireCart", { index: c.index })) poll();
+          } }, nm, tm, pr);
+          hkKeys.push({ btn, tm, pr });
+          return btn;
+        }));
+      }
+      cs.forEach((c, i) => {
+        const k = hkKeys[i]; if (!k) return;
+        k.btn.classList.toggle("playing", !!c.playing);
+        k.tm.textContent = c.playing ? fmtMs(Math.max(0, c.durationMs - c.elapsedMs)) : c.durationMs ? fmtMs(c.durationMs) : "";
+        k.pr.style.width = c.playing && c.durationMs ? `${Math.min(100, (c.elapsedMs / c.durationMs) * 100)}%` : "0";
+      });
+    };
+    const cartSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("hot")), h("div", { class: "body" }, h("div", { class: "bar" }, hkEditBtn, hkAdd, hkSave), hkEdit, hkGrid));
+
+    shadow.append(h("style", {}, STYLE), banner, head, nowBar, cartSec, logSec, planSec, asRunSec);
+    renderRows(); renderPlan(); renderAsRun(); renderNow(); renderCarts();
 
     const loadTargets = async () => {
       try {
@@ -281,7 +422,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
         startBtn.disabled = running || view.state === "empty" || dirty; stopBtn.disabled = !running; loadBtn.disabled = running;
         if (lastError) { banner.textContent = lastError; banner.className = "banner show"; }
         else if (banner.className === "banner show") banner.className = "banner";
-        fillTargets(); renderPlan(); renderAsRun();
+        fillTargets(); renderPlan(); renderAsRun(); renderNow(); updateTimes(); if (!cartsEdit) renderCarts();
       } catch { /* nächster Takt */ }
     };
     loadTargets().then(poll);

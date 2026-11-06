@@ -28,6 +28,20 @@ pub struct LogItem {
     /// Harte Marke: dieses Element soll zu dieser Uhrzeit (Unix-ms) einsetzen (Backtiming, RB5).
     #[serde(default)]
     pub fix_at_unix_ms: Option<i64>,
+    /// Anzeigename (nur Bedienfeld).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Blockname (z. B. Werbeblock); aufeinanderfolgende Elemente mit gleichem Namen bilden einen Block (nur Bedienfeld).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block: Option<String>,
+}
+
+/// Soll-Länge eines Blocks (nur Bedienfeld).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockSpec {
+    pub name: String,
+    pub target_ms: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -38,6 +52,8 @@ pub struct Log {
     /// Füllkandidaten für das Backtiming (werden nur bei Bedarf eingefügt).
     #[serde(default)]
     pub fillers: Vec<LogItem>,
+    #[serde(default)]
+    pub blocks: Vec<BlockSpec>,
 }
 
 /// Ein Aufruf `play` an den Segue-Player.
@@ -149,10 +165,10 @@ mod tests {
     use segue::Kind;
 
     fn item(id: &str, kind: Kind, dur: i64, outro: Option<i64>) -> LogItem {
-        LogItem { id: id.into(), kind, file: format!("/m/{id}.wav"), duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: outro, gain_db: -1.5, optional: false, fix_at_unix_ms: None }
+        LogItem { id: id.into(), kind, file: format!("/m/{id}.wav"), duration_ms: dur, som_ms: 0, intro_ms: None, outro_ms: outro, gain_db: -1.5, optional: false, fix_at_unix_ms: None, title: None, block: None }
     }
     fn log() -> Log {
-        Log { log_id: "tag 1".into(), fillers: vec![], items: vec![item("a", Kind::Song, 200_000, Some(195_000)), item("j", Kind::Jingle, 6_000, None), item("b", Kind::Song, 180_000, None)] }
+        Log { log_id: "tag 1".into(), fillers: vec![], blocks: vec![], items: vec![item("a", Kind::Song, 200_000, Some(195_000)), item("j", Kind::Jingle, 6_000, None), item("b", Kind::Song, 180_000, None)] }
     }
 
     #[test]
