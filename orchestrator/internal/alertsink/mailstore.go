@@ -219,7 +219,9 @@ func (s *MailStore) TestMailer(c MailConfig) (*Mailer, error) {
 // TestSend schickt eine Testmail. Ohne kind direkt an alle Empfänger (Standard + Regeln);
 // mit kind (und optional workflowID) wie ein echter Alarm dieser Art (Schweregrad severity, leer = Standard der Art) durch die Regeln geleitet.
 // Rückgabe: die Empfänger.
-func TestSend(ctx context.Context, m *Mailer, kind, severity, workflowID, processID, action string) ([]string, error) {
+// status (optional) liefert die Statusbeilage; statusMode überschreibt den Wunsch der Regeln (leer = Regeln entscheiden,
+// bei der ungerichteten Testmail: keine Beilage).
+func TestSend(ctx context.Context, m *Mailer, kind, severity, workflowID, processID, action string, status func(Alert) *StatusReport, statusMode string) ([]string, error) {
 	a := Alert{Kind: "test", Subject: "alert-mail", Name: "Testmail", Time: time.Now(), Severity: SevInfo,
 		Message: "Dies ist eine Testnachricht der OpenMediaPlatform. Die E-Mail-Alarmierung funktioniert."}
 	to := m.allRecipients()
@@ -244,6 +246,13 @@ func TestSend(ctx context.Context, m *Mailer, kind, severity, workflowID, proces
 		if len(to) == 0 {
 			return nil, nil
 		}
+		if statusMode == "" {
+			statusMode = m.StatusMode(a)
+		}
+	}
+	if validStatusMode(statusMode) && statusMode != StatusNone && status != nil {
+		a.StatusMode = statusMode
+		a.Status = status(a)
 	}
 	return to, m.SendTo(ctx, a, to)
 }

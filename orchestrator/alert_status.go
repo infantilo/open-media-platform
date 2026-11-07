@@ -55,7 +55,21 @@ func alertStatusProvider(cl *cluster.Node, reg *registry.Store, gs *graph.Servic
 				}
 			}
 		}
+		if _, known := label[focus]; !known && (a.Subject == "" || a.Kind == "test") {
+			// Testmail/Vorschau ohne Node: den mit dem längsten Signalweg nehmen (zeigt die Grafik am besten)
+			best := -1
+			for id := range label {
+				if n := len(alertsink.UpstreamOf(id, edges, label, ok).Nodes); n > best || (n == best && id < focus) {
+					best, focus = n, id
+				}
+			}
+		}
 		r.Flow = alertsink.UpstreamOf(focus, edges, label, ok)
+		if len(a.Workflows) == 0 && focus != "" {
+			if ref, found := wf.WorkflowOfSubject(focus); found {
+				a.Workflows = []alertsink.WorkflowRef{{ID: ref.ID, Name: ref.Name}}
+			}
+		}
 
 		affectedHosts := map[string]bool{}
 		hostID, _, _ := strings.Cut(a.Subject, "/")

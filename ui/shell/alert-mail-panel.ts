@@ -72,6 +72,7 @@ class AlertMailPanel extends HTMLElement {
   #busy = false;
   #loaded = false;
   #lastRecipients: string[] = [];
+  #preview: { text: string; png: string } | null = null;
 
   connectedCallback() {
     this.style.cssText = "display:block;margin-bottom:28px;";
@@ -260,6 +261,27 @@ class AlertMailPanel extends HTMLElement {
       testSev.style.display = testWf.style.display = testProc.style.display = testKind.value ? "" : "none";
       testAct.style.display = testKind.value === "user-action" ? "" : "none";
     });
+    const testStatus = el("select", "padding:3px;");
+    testStatus.title = t("amail.testStatusTitle");
+    for (const [v, k] of [["", "amail.testStatusRules"], ["text", "amail.route.statusText"], ["graph", "amail.route.statusGraph"], ["graph-svg", "amail.route.statusSvg"]] as const) {
+      const o = el("option", "", t(k));
+      o.value = v;
+      testStatus.append(o);
+    }
+    const prev = el("button", BTN, t("amail.statusPreview"));
+    prev.title = t("amail.statusPreviewHint");
+    prev.addEventListener("click", async () => {
+      this.#err = "";
+      try {
+        const res = await apiFetch("/api/v1/admin/settings/alert-mail/status-preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        if (!res.ok) this.#err = (await res.text()).trim() || `HTTP ${res.status}`;
+        else this.#preview = (await res.json()) as { text: string; png: string };
+      } catch (e) {
+        this.#err = String(e);
+      }
+      this.#cfg = read();
+      this.#render();
+    });
     const reset = el("button", BTN, t("amail.reset"));
     save.disabled = test.disabled = this.#busy;
     reset.disabled = this.#busy || !this.#stored;
@@ -270,7 +292,7 @@ class AlertMailPanel extends HTMLElement {
     });
     test.addEventListener("click", async () => {
       const v = read();
-      const ok = await this.#send("POST", "/api/v1/admin/settings/alert-mail/test", { ...v, testKind: testKind.value, testSeverity: testSev.value, testWorkflow: testWf.value, testProcess: testProc.value, testAction: testAct.value.trim() });
+      const ok = await this.#send("POST", "/api/v1/admin/settings/alert-mail/test", { ...v, testKind: testKind.value, testSeverity: testSev.value, testWorkflow: testWf.value, testProcess: testProc.value, testAction: testAct.value.trim(), testStatus: testStatus.value });
       if (ok) this.#msg = this.#lastRecipients.length ? t("amail.testSentTo", { p0: this.#lastRecipients.join(", ") }) : t("amail.testNobody");
       this.#cfg = { ...v, password: "" };
       this.#render();
@@ -280,7 +302,18 @@ class AlertMailPanel extends HTMLElement {
       if (await this.#send("DELETE", "/api/v1/admin/settings/alert-mail")) this.#msg = t("amail.removed");
       await this.#load();
     });
-    bar.append(save, test, testKind, testSev, testWf, testProc, testAct, actList, reset);
+    bar.append(save, test, testKind, testSev, testWf, testProc, testAct, testStatus, actList, prev, reset);
+    if (this.#preview) {
+      const box = el("div", "margin-top:12px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;padding:8px 10px;");
+      box.append(el("div", "font-weight:600;margin-bottom:6px;", t("amail.statusPreview")));
+      box.append(el("pre", "font-size:12px;white-space:pre-wrap;margin:0 0 8px;", this.#preview.text));
+      if (this.#preview.png) {
+        const img = el("img", "max-width:100%;");
+        img.src = `data:image/png;base64,${this.#preview.png}`;
+        box.append(img);
+      }
+      this.append(box);
+    }
     bar.style.flexWrap = "wrap";
     bar.style.alignItems = "center";
     this.append(bar);

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/freeze"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/kpi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
@@ -68,6 +69,7 @@ type handlerOptions struct {
 	moduleDeps          module.Deps
 	systemSettings      SystemSettingsStore
 	alertMail           AlertMailStore
+	alertStatus         func(alertsink.Alert) *alertsink.StatusReport
 	startupSkipped      []string
 	workflowRuns        WorkflowRunReader
 }

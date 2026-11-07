@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
@@ -26,6 +28,34 @@ func WithAlertMail(s *alertsink.MailStore) HandlerOption {
 		if s != nil {
 			o.alertMail = s
 		}
+	}
+}
+
+// WithAlertStatus liefert die Statusbeilage für Testmail und Vorschau (dieselbe Quelle wie beim echten Alarm).
+func WithAlertStatus(f func(alertsink.Alert) *alertsink.StatusReport) HandlerOption {
+	return func(o *handlerOptions) { o.alertStatus = f }
+}
+
+// handleAlertStatusPreview: POST {"node": "<Node-ID, leer = Node mit dem längsten Signalweg>"} → Statusbeilage als Text, PNG (Base64) und SVG.
+// Braucht keinen Mailserver — zum Ansehen, bevor ein Server eingerichtet ist.
+func handleAlertStatusPreview(f func(alertsink.Alert) *alertsink.StatusReport) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if f == nil {
+			http.Error(w, "Statusbeilage nicht verfügbar", http.StatusNotImplemented)
+			return
+		}
+		var body struct {
+			Node string `json:"node"`
+		}
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
+		rep := f(alertsink.Alert{Kind: "test", Subject: strings.TrimSpace(body.Node), Name: "Vorschau", Time: time.Now()})
+		if rep == nil {
+			http.Error(w, "kein Status verfügbar", http.StatusServiceUnavailable)
+			return
+		}
+		title := "Signalweg bis zur Wurzel"
+		png, _ := rep.Flow.PNG(title)
+		writeJSON(w, http.StatusOK, map[string]any{"text": rep.Text(), "png": base64.StdEncoding.EncodeToString(png), "svg": string(rep.Flow.SVG(title)), "report": rep})
 	}
 }
 
@@ -101,7 +131,7 @@ func handleDeleteAlertMail(s AlertMailStore, domainAudit DomainAuditLogger) http
 
 // handleTestAlertMail: POST sendet sofort eine Testmail mit den übergebenen (noch ungespeicherten) Werten.
 // Mit "testKind" (und optional "testSeverity") wird sie wie ein echter Alarm dieser Art durch die Regeln geleitet.
-func handleTestAlertMail(s AlertMailStore) http.HandlerFunc {
+func handleTestAlertMail(s AlertMailStore, f func(alertsink.Alert) *alertsink.StatusReport) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s == nil {
 			http.Error(w, "E-Mail-Alarmierung nicht konfiguriert", http.StatusNotImplemented)
@@ -114,6 +144,8 @@ func handleTestAlertMail(s AlertMailStore) http.HandlerFunc {
 			TestWorkflow string `json:"testWorkflow"`
 			TestProcess  string `json:"testProcess"`
 			TestAction   string `json:"testAction"`
+			TestStatus   string `json:"testStatus"`
+			TestNode     string `json:"testNode"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -126,7 +158,7 @@ func handleTestAlertMail(s AlertMailStore) http.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 		defer cancel()
-		to, err := alertsink.TestSend(ctx, m, body.TestKind, body.TestSeverity, body.TestWorkflow, body.TestProcess, body.TestAction)
+		to, err := alertsink.TestSend(ctx, m, body.TestKind, body.TestSeverity, body.TestWorkflow, body.TestProcess, body.TestAction, statusFor(f, body.TestNode), body.TestStatus)
 		if err != nil {
 			http.Error(w, "Senden fehlgeschlagen: "+err.Error(), http.StatusBadGateway)
 			return
@@ -135,5 +167,18 @@ func handleTestAlertMail(s AlertMailStore) http.HandlerFunc {
 			to = []string{}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "recipients": to})
+	}
+}
+
+// statusFor bindet den Test-Node an den Provider (leer = der Provider wählt selbst den Node mit dem längsten Signalweg).
+func statusFor(f func(alertsink.Alert) *alertsink.StatusReport, node string) func(alertsink.Alert) *alertsink.StatusReport {
+	if f == nil {
+		return nil
+	}
+	return func(a alertsink.Alert) *alertsink.StatusReport {
+		if a.Subject == "alert-mail" { // Platzhalter-Gegenstand der Testmail
+			a.Subject = strings.TrimSpace(node)
+		}
+		return f(a)
 	}
 }
