@@ -108,6 +108,8 @@ struct MixerStore {
     /// Ebene zur Auswahl.
     keyfill_inputs: Arc<Mutex<Vec<DiscoveredKeyFill>>>,
     keyer_source: PerLevel<Option<String>>,
+    /// Gewählte Keyer-Quelle als Name (Basis-Label): überlebt den Neustart der Grafik (neue Sender-ID) und des Mischers.
+    keyer_label: PerLevel<Option<String>>,
     /// PIP-Layer (Nutzerwunsch 2026-07-22, s. `pipeline.rs`-Moduldoku
     /// "PIP als eigenständiger Layer") — gleiches Muster wie
     /// `keyer_enabled`/`keyer_source`.
@@ -803,9 +805,7 @@ fn level_get(store: &MixerStore, name: &str) -> Option<Value> {
                     .collect::<Vec<_>>()
             ))
         }
-        "keyer.source" => Some(serde_json::json!(
-            store.keyer_source[level].lock().expect("lock poisoned").clone().unwrap_or_default()
-        )),
+        "keyer.source" => Some(serde_json::json!(store.resolved_keyer_source(level).unwrap_or_default())),
         "pip.enabled" => Some(serde_json::json!(
             store.pip[level].lock().expect("lock poisoned").slots.iter().any(|s| s.enabled)
         )),
@@ -1035,6 +1035,9 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 .and_then(Value::as_str)
                 .ok_or(InvokeError::Unknown)?;
             let selected = if sender_id.is_empty() { None } else { Some(sender_id.to_string()) };
+            *store.keyer_label[level].lock().expect("lock poisoned") = selected.as_ref().and_then(|id| {
+                store.keyfill_inputs.lock().expect("lock poisoned").iter().find(|k| &k.fill_sender_id == id).map(|k| k.label.clone())
+            });
             *store.keyer_source[level].lock().expect("lock poisoned") = selected.clone();
             store.pipeline.set_keyer_source(level, selected);
             Ok(())
@@ -1197,6 +1200,17 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
 }
 
 impl MixerStore {
+    /// Keyer-Quelle (Fill-Sender-ID) der Ebene: über den gespeicherten Namen gegen die aktuell entdeckten Paare aufgelöst,
+    /// sonst die zuletzt gesetzte ID.
+    fn resolved_keyer_source(&self, level: usize) -> Option<String> {
+        if let Some(label) = self.keyer_label[level].lock().expect("lock poisoned").clone() {
+            if let Some(k) = self.keyfill_inputs.lock().expect("lock poisoned").iter().find(|k| k.label == label) {
+                return Some(k.fill_sender_id.clone());
+            }
+        }
+        self.keyer_source[level].lock().expect("lock poisoned").clone()
+    }
+
     /// Node-eigener Vollzustand (§4.6 Punkt 4, `docs/END-GOAL-FEATURES.md`
     /// "Mixer-Presets", `docs/decisions.md` Nachtrag 40) hinter `GET
     /// /state` — dasselbe Node-Contract-Muster wie `omp-audio-mixer`
@@ -1242,7 +1256,8 @@ impl MixerStore {
             "presetSenderId": self.preset[level].lock().expect("lock poisoned").clone(),
             "dveBox": {"x": box_.x, "y": box_.y, "width": box_.width, "height": box_.height},
             "keyerEnabled": *self.keyer_enabled[level].lock().expect("lock poisoned"),
-            "keyerSourceSenderId": self.keyer_source[level].lock().expect("lock poisoned").clone(),
+            "keyerSourceSenderId": self.resolved_keyer_source(level),
+            "keyerSourceLabel": self.keyer_label[level].lock().expect("lock poisoned").clone(),
             "pipEnabled": slot0.enabled,
             "pipSourceSenderId": slot0.source,
             "pipSlots": slots_doc,
@@ -1337,6 +1352,11 @@ impl MixerStore {
         if let Some(source) = doc.get("keyerSourceSenderId").and_then(Value::as_str).map(str::to_string) {
             *self.keyer_source[level].lock().expect("lock poisoned") = Some(source.clone());
             self.pipeline.set_keyer_source(level, Some(source));
+        }
+        // Name vor ID: die gespeicherte Sender-ID ist nach dem Neustart der Grafik veraltet, der Name löst sich neu auf.
+        if let Some(label) = doc.get("keyerSourceLabel").and_then(Value::as_str).filter(|l| !l.is_empty()).map(str::to_string) {
+            *self.keyer_label[level].lock().expect("lock poisoned") = Some(label.clone());
+            self.pipeline.set_keyer_label(level, label);
         }
         if doc.get("pipSlots").is_none() {
             if let Some(enabled) = doc.get("pipEnabled").and_then(Value::as_bool) {
@@ -1480,6 +1500,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let preset: PerLevel<Option<String>> = (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
     let keyer_enabled: PerLevel<bool> = (0..level_count).map(|_| Arc::new(Mutex::new(false))).collect();
     let keyer_source: PerLevel<Option<String>> = (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
+    let keyer_label: PerLevel<Option<String>> = (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
     let pip: PerLevel<LevelPips> = (0..level_count).map(|_| Arc::new(Mutex::new(LevelPips::new(pip_slots, pip_2d_slots, width, height)))).collect();
     let pinned: PerLevel<Vec<String>> = (0..level_count).map(|_| Arc::new(Mutex::new(Vec::new()))).collect();
     let trans_rate: PerLevel<i32> =
@@ -1526,6 +1547,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         keyer_enabled: keyer_enabled.clone(),
         keyfill_inputs: keyfill_inputs.clone(),
         keyer_source: keyer_source.clone(),
+        keyer_label: keyer_label.clone(),
         pip: pip.clone(),
         pgm_preview_urls: pgm_urls,
         pinned: pinned.clone(),

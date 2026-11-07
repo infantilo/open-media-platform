@@ -4,7 +4,7 @@
 //! erfunden, `UMSETZUNG.md` §0 Punkt 9): `isel` = Programm-Bus (fg),
 //! `isel_bg` = Preset-Mirror (bg, während einer Transition sichtbar),
 //! `compositor` mit fg auf `zorder=2` über bg auf `zorder=1`, ein
-//! Keyer-Layer auf `zorder=3` obenauf. Jeder Eingang wird zweimal per
+//! Keyer-Layer ganz oben (`KEYER_Z`, über den PIPs). Jeder Eingang wird zweimal per
 //! `MxlVideoInput` gelesen (einmal für `isel`, einmal für `isel_bg`) —
 //! Spiegel des Vorbilds, das denselben `intervideosrc`-Kanal zweimal
 //! liest; MXLs Ring-Buffer ist für mehrere unabhängige Reader ausgelegt
@@ -104,6 +104,9 @@
 //! über die gewählte Rampendauer von 1 auf 0), `isel_bg`s aktiver Pad
 //! wechselt erst am Ende des Fades (`spawn_autotrans`) auf den neuen
 //! Eingang.
+
+/// z-Ordnung des Keyers/DSK im Compositor: über allen PIP-Slots (4 + Slot, Fokus 200, s. `pipstate::FOCUS_Z`).
+const KEYER_Z: u32 = 1000;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
@@ -503,6 +506,8 @@ enum Command {
     SetKeyerEnabled(usize, bool),
     SetKeyFillInputs(Vec<DiscoveredKeyFill>),
     SetKeyerSource(usize, Option<String>),
+    /// Wiederherstellung: Keyer-Quelle über den Namen (Basis-Label) wählen; die Sender-ID wird bei jeder Discovery neu aufgelöst.
+    SetKeyerLabel(usize, String),
     SetPipEnabled(usize, usize, bool),
     SetPipSource(usize, usize, Option<String>),
     /// Freeze: letztes PGM-Bild der Ebene als Standbild unter dieser ID im `StillStore` ablegen.
@@ -745,6 +750,10 @@ impl PipelineHandle {
     /// `fill_sender_id` wählt das Fill+Key-Paar (identifiziert über den
     /// Fill-Sender, s. `DiscoveredKeyFill`), `None` schaltet zurück auf
     /// die synthetische Test-Farbfläche (Default, s. `build`).
+    pub fn set_keyer_label(&self, level: usize, label: String) {
+        let _ = self.commands.send(Command::SetKeyerLabel(level, label));
+    }
+
     pub fn set_keyer_source(&self, level: usize, fill_sender_id: Option<String>) {
         let _ = self.commands.send(Command::SetKeyerSource(level, fill_sender_id));
     }
@@ -885,7 +894,7 @@ fn pixel_caps(format: &str, width: u32, height: u32) -> gst::Caps {
 fn keyfill_fill_caps() -> gst::Caps {
     gst::Caps::builder("video/x-raw")
         .field("format", "I420")
-        .field("colorimetry", "bt601")
+        .field("colorimetry", "bt709")
         .build()
 }
 
@@ -897,10 +906,28 @@ const KEY_RANGE_CONTRAST: f64 = 1.1644;
 const KEY_RANGE_BRIGHTNESS: f64 = -0.064;
 
 fn keyfill_key_caps() -> gst::Caps {
+    // CPU-Messung 2026-11-07: bt601 zwang `videoconvert` bei den bt709-Flows zur teuren Matrixumrechnung (v210 → I420
+    // 25,2 ms statt 4,2 ms je Bild, 720p); der Key geht als I420 direkt an `alphacombine` (nimmt am Alpha-Eingang GRAY8,
+    // I420 oder NV12), die zweite Umwandlung nach GRAY8 entfällt.
     gst::Caps::builder("video/x-raw")
-        .field("format", "GRAY8")
-        .field("colorimetry", "bt601")
+        .field("format", "I420")
+        .field("colorimetry", "bt709")
         .build()
+}
+
+/// Löst die gewählten Keyer-Namen gegen die entdeckten Fill+Key-Paare auf und trägt die aktuelle Fill-Sender-ID ein.
+/// `true`, wenn sich dadurch eine Quelle geändert hat. Ohne Treffer bleibt die bisherige ID stehen.
+fn resolve_keyer_labels(labels: &[Option<String>], inputs: &[DiscoveredKeyFill], sources: &mut [Option<String>]) -> bool {
+    let mut changed = false;
+    for (level, label) in labels.iter().enumerate() {
+        let Some(label) = label else { continue };
+        let Some(found) = inputs.iter().find(|k| &k.label == label) else { continue };
+        if sources.get(level).is_some_and(|s| s.as_deref() != Some(found.fill_sender_id.as_str())) {
+            sources[level] = Some(found.fill_sender_id.clone());
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// Baut Fill+Key-MXL-Eingänge plus `alphacombine` zu einem einzigen,
@@ -959,11 +986,10 @@ fn build_keyfill_tail(
         .property("brightness", KEY_RANGE_BRIGHTNESS)
         .build()
         .map_err(|e| format!("videobalance (keyer-key range): {e}"))?;
-    let key_to_gray = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert (keyer-key gray): {e}"))?;
     pipeline
-        .add_many([&key_to_i420, &key_i420_caps, &key_range, &key_to_gray, &key_caps])
+        .add_many([&key_to_i420, &key_i420_caps, &key_range, &key_caps])
         .map_err(|e| format!("add keyer-key range chain: {e}"))?;
-    gst::Element::link_many([&key_input.tail, &key_to_i420, &key_i420_caps, &key_range, &key_to_gray, &key_caps])
+    gst::Element::link_many([&key_input.tail, &key_to_i420, &key_i420_caps, &key_range, &key_caps])
         .map_err(|e| format!("link keyer-key range chain: {e}"))?;
 
     let alphacombine = gst::ElementFactory::make("alphacombine")
@@ -1837,6 +1863,8 @@ struct PipSlot {
     source_pads: HashMap<String, gst::Pad>,
     comp_pad: gst::Pad,
     xform: Option<gst::Element>,
+    /// 2D-Slot: `false` = ausgeschaltet, Pufferfluss am Kettenanfang wird verworfen (kein `perspective`-Rechnen im Leerlauf).
+    live: Arc<AtomicBool>,
 }
 
 /// Eine unabhängige M/E-Bank (Nutzerwunsch 2026-08-14, "dynamische Anzahl
@@ -1865,6 +1893,8 @@ struct LevelPipeline {
     /// `MxlVideoInput`s am Leben, sonst stirbt ihr `read_loop`-Thread
     /// beim `Drop` (s. `build_keyfill_tail`).
     _keyer_keyfill: Option<(MxlVideoInput, MxlVideoInput)>,
+    /// Fill-Flow, den der Keyer gerade liest (zum Vergleich mit der aufgelösten Quelle nach einer Discovery).
+    keyer_flow: Option<String>,
     flowed: Arc<AtomicBool>,
     /// Letztes PGM-Bild (Quelle für Freezes).
     last_frame: Arc<Mutex<Option<gst::Sample>>>,
@@ -2170,7 +2200,12 @@ fn report_missing_inputs(monitor: &omp_node_sdk::Monitor, missing: &[String]) {
 /// Teiler der Zeichenfläche eines 2D-Slots: ab 1080p halbe Auflösung (der Slot rechnet jedes Bild auf Vollbildgröße
 /// durch `perspective`, ca. 3 ms je 360p-Bild gemessen, `examples/persp_probe.rs`); der Compositor-Pad skaliert wieder hoch.
 pub fn pip_2d_div(height: u32) -> u32 {
-    if height > 720 { 2 } else { 1 }
+    // CPU-Messung 2026-11-07: ein 2D-Slot kostete bei 720p voller Zeichenfläche ≈ 27–30 ms je Bild (≈ 70 % eines Kerns),
+    // bei halber 9 ms. Standard daher ab 720p halbe Fläche (PIP im Vollbild-Fokus etwas weicher); `OMP_PIP_2D_DIV=1`
+    // stellt die volle Auflösung wieder her.
+    static OVERRIDE: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    let forced = *OVERRIDE.get_or_init(|| std::env::var("OMP_PIP_2D_DIV").ok().and_then(|v| v.parse::<u32>().ok()).filter(|d| (1..=4).contains(d)));
+    forced.unwrap_or(if height >= 720 { 2 } else { 1 })
 }
 
 /// Kette eines 2D-Slots: `isel_pip` → videoconvert → videoscale → ARGB (Zeichenfläche) → `perspective` → queue → Pad.
@@ -2184,6 +2219,7 @@ fn build_pip_2d_chain(
     slot: usize,
     width: u32,
     height: u32,
+    live: Arc<AtomicBool>,
 ) -> Result<gst::Element, String> {
     let div = pip_2d_div(height);
     let (cw, ch) = ((width / div) as i32, (height / div) as i32);
@@ -2217,9 +2253,10 @@ fn build_pip_2d_chain(
         .property("max-size-time", 0u64)
         .build()
         .map_err(|e| format!("queue (pip 2d): {e}"))?;
-    let chain = [&convert, &scale, &caps, &persp, &queue];
+    // Erst verkleinern, dann in ARGB wandeln: die Umwandlung rechnet dann nur noch die verkleinerte Fläche.
+    let chain = [&scale, &convert, &caps, &persp, &queue];
     pipeline.add_many(chain).map_err(|e| format!("add pip 2d chain (level {level_idx}, slot {slot}): {e}"))?;
-    gst::Element::link_many([isel_pip, &convert, &scale, &caps, &persp, &queue])
+    gst::Element::link_many([isel_pip, &scale, &convert, &caps, &persp, &queue])
         .map_err(|e| format!("link pip 2d chain (level {level_idx}, slot {slot}): {e}"))?;
     queue
         .static_pad("src")
@@ -2227,6 +2264,19 @@ fn build_pip_2d_chain(
         .link(comp_pad)
         .map_err(|e| format!("link pip 2d to compositor (level {level_idx}, slot {slot}): {e}"))?;
     set_persp_matrix(&persp, &IDENTITY3);
+    // CPU-Messung 2026-11-07: ein ausgeschalteter 2D-Slot rechnete `perspective` weiter (≈ 70 % eines Kerns je Slot, der
+    // Compositor überspringt nur das Mischen bei alpha=0). Am Kettenanfang werden die Puffer deshalb verworfen, solange der
+    // Slot aus ist; `ignore-inactive-pads` (Compositor) verhindert das Warten auf das stumme Pad. Abschaltbar mit
+    // `OMP_PIP_2D_IDLE_SKIP=0`.
+    if std::env::var("OMP_PIP_2D_IDLE_SKIP").map_or(true, |v| v != "0") {
+        if let Some(pad) = scale.static_pad("sink") {
+            pad.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+                if live.load(Ordering::Relaxed) { gst::PadProbeReturn::Ok } else { gst::PadProbeReturn::Drop }
+            });
+        }
+    } else {
+        live.store(true, Ordering::Relaxed);
+    }
     Ok(persp)
 }
 
@@ -2292,6 +2342,7 @@ impl PipRuntime {
                 let pose = *self.pose[level][slot_idx].lock().expect("lock poisoned");
                 apply_pose(slot, &pose, self.width, self.height);
                 slot.comp_pad.set_property("zorder", self.z[level][slot_idx]);
+                slot.live.store(self.enabled[level][slot_idx], Ordering::Relaxed);
                 slot.comp_pad.set_property("alpha", if self.enabled[level][slot_idx] { 1.0f64 } else { 0.0f64 });
             }
         }
@@ -2318,7 +2369,7 @@ struct PartialLevel {
     isel: gst::Element,
     isel_bg: gst::Element,
     /// (Selektor, Schwarz-Pad, Compositor-Pad, Transform-Element) je Slot, Pads der Quellen kommen später.
-    pip_parts: Vec<(gst::Element, gst::Pad, gst::Pad, Option<gst::Element>)>,
+    pip_parts: Vec<(gst::Element, gst::Pad, gst::Pad, Option<gst::Element>, Arc<AtomicBool>)>,
     black_pad_fg: gst::Pad,
     black_pad_bg: gst::Pad,
     comp_fg_pad: gst::Pad,
@@ -2326,6 +2377,7 @@ struct PartialLevel {
     comp_keyer_pad: gst::Pad,
     mxl_output: MxlVideoOutput,
     keyer_keyfill: Option<(MxlVideoInput, MxlVideoInput)>,
+    keyer_flow: Option<String>,
     flowed: Arc<AtomicBool>,
     last_frame: Arc<Mutex<Option<gst::Sample>>>,
 }
@@ -2515,6 +2567,7 @@ fn build(
             // (reine Aggregator-Toleranz, kein zusätzlicher Puffer
             // in der eigentlichen Pipeline).
             .property("min-upstream-latency", 200_000_000u64)
+            .property("ignore-inactive-pads", true)
             .build()
             .map_err(|e| format!("compositor (level {level_idx}): {e}"))?;
         pipeline
@@ -2561,7 +2614,7 @@ fn build(
             .link(&comp_bg_pad)
             .map_err(|e| format!("link isel_bg to comp.sink_1 (level {level_idx}): {e}"))?;
 
-        // ── comp.sink_2 = Keyer/DSK (zorder 3, obenauf, alpha vom Aufrufer
+        // ── comp.sink_2 = Keyer/DSK (zorder `KEYER_Z`, über allen PIPs, alpha vom Aufrufer
         //    nach dem Build per `keyer.enabled`-Zustand gesetzt). Zwei
         //    Varianten: ohne gewählte Fill+Key-Quelle die bisherige
         //    synthetische Test-Farbfläche (kleine, zentrierte Box — reine
@@ -2580,11 +2633,11 @@ fn build(
         // Kette, ein echter externer Fill+Key-Flow (unbekannte Auflösung/
         // Format) weiterhin schon — deshalb hier zweigeteilt statt wie
         // vorher gemeinsam über `build_normalized_branch` danach.
-        let (keyer_caps, keyer_keyfill) = match keyer_source_input {
+        let (keyer_caps, keyer_keyfill, keyer_flow) = match keyer_source_input {
             Some(kf) => {
                 let (tail, fill_input, key_input) = build_keyfill_tail(&pipeline, context, kf)?;
                 let (caps, _) = build_normalized_branch(&pipeline, &tail, &format!("keyer-l{level_idx}"), config.width, config.height, None, config.hwaccel, "RGBA")?;
-                (caps, Some((fill_input, key_input)))
+                (caps, Some((fill_input, key_input)), Some(kf.fill_flow_id.clone()))
             }
             None => {
                 let keyer_src = gst::ElementFactory::make("videotestsrc")
@@ -2609,13 +2662,13 @@ fn build(
                     (config.height / 8).max(2),
                     "RGBA",
                 )?;
-                (caps, None)
+                (caps, None, None)
             }
         };
         let comp_keyer_pad = comp
             .request_pad_simple("sink_2")
             .ok_or_else(|| format!("comp: request sink_2 (keyer) failed (level {level_idx})"))?;
-        comp_keyer_pad.set_property("zorder", 3u32);
+        comp_keyer_pad.set_property("zorder", KEYER_Z);
         comp_keyer_pad.set_property("alpha", 0.0f64);
         if keyer_keyfill.is_some() {
             comp_keyer_pad.set_property("xpos", 0i32);
@@ -2636,7 +2689,8 @@ fn build(
             .link(&comp_keyer_pad)
             .map_err(|e| format!("link keyer to comp.sink_2 (level {level_idx}): {e}"))?;
 
-        // ── comp.sink_3 = PIP (Bild-im-Bild, zorder 4, ganz oben —
+        // ── comp.sink_3 = PIP (Bild-im-Bild, zorder 4.., unter dem Keyer (Nutzerwunsch 2026-11-07: Grafikrahmen mit Fenstern/
+        //    runden Ecken liegt über den PIPs; vorher lagen die PIPs über dem Keyer) —
         //    Architekturentscheidung 2026-07-22, s. Moduldoku "PIP als
         //    eigenständiger Layer"): unabhängig vom PGM-/PST-Bus wählbare
         //    Quelle aus `crosspoint.inputs` (nicht `keyer.inputs` — jede
@@ -2655,8 +2709,9 @@ fn build(
             comp_pip_pad.set_property("zorder", 4 + slot as u32);
             comp_pip_pad.set_property("alpha", 0.0f64);
             let mut xform = None;
+            let live = Arc::new(AtomicBool::new(false));
             if slot < config.pip_2d_slots {
-                let persp = build_pip_2d_chain(&pipeline, &isel_pip, &comp_pip_pad, level_idx, slot, config.width, config.height)?;
+                let persp = build_pip_2d_chain(&pipeline, &isel_pip, &comp_pip_pad, level_idx, slot, config.width, config.height, live.clone())?;
                 comp_pip_pad.set_property("xpos", 0i32);
                 comp_pip_pad.set_property("ypos", 0i32);
                 comp_pip_pad.set_property("width", config.width as i32);
@@ -2669,7 +2724,7 @@ fn build(
                     .link(&comp_pip_pad)
                     .map_err(|e| format!("link pip to comp.sink_{} (level {level_idx}): {e}", 3 + slot))?;
             }
-            pip_parts.push((isel_pip, black_pad_pip, comp_pip_pad, xform));
+            pip_parts.push((isel_pip, black_pad_pip, comp_pip_pad, xform, live));
         }
 
         // Ausgangsformat des Compositors FEST (AYUV, mit Alpha): sonst wählt er wegen der RGBA-Keyer-Ebene RGBA und wandelt
@@ -2731,6 +2786,7 @@ fn build(
             comp_keyer_pad,
             mxl_output,
             keyer_keyfill,
+            keyer_flow,
             flowed,
             last_frame,
         });
@@ -2790,12 +2846,13 @@ fn build(
                 .pip_parts
                 .into_iter()
                 .enumerate()
-                .map(|(slot, (isel, black_pad, comp_pad, xform))| PipSlot {
+                .map(|(slot, (isel, black_pad, comp_pad, xform, live))| PipSlot {
                     isel,
                     black_pad,
                     source_pads: std::mem::take(&mut source_pads_pip[level_idx * slots + slot]),
                     comp_pad,
                     xform,
+                    live,
                 })
                 .collect(),
             black_pad_fg: partial.black_pad_fg,
@@ -2807,6 +2864,7 @@ fn build(
             comp_keyer_pad: partial.comp_keyer_pad,
             _mxl_output: partial.mxl_output,
             _keyer_keyfill: partial.keyer_keyfill,
+            keyer_flow: partial.keyer_flow,
             flowed: partial.flowed,
             last_frame: partial.last_frame,
         });
@@ -3278,6 +3336,8 @@ pub fn run(
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut keyfill_inputs: Vec<DiscoveredKeyFill> = Vec::new();
     let mut keyer_sources: Vec<Option<String>> = vec![None; level_count];
+    // Gewählte Keyer-Quelle als NAME (Basis-Label): Sender-IDs ändern sich, wenn die Grafik neu startet, der Name nicht.
+    let mut keyer_labels: Vec<Option<String>> = vec![None; level_count];
     let mut active = match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &output_delays) {
         Ok((p, _warnings)) => {
             *flowed_slot.lock().expect("lock poisoned") = p.levels.iter().map(|l| Some(l.flowed.clone())).collect();
@@ -3400,6 +3460,42 @@ pub fn run(
     }
 
     let mut gate_last_used: HashMap<String, Instant> = HashMap::new();
+    // Voller Rebuild nach einer Änderung der Keyer-Quelle (gemeinsam für `SetKeyerSource`/`SetKeyerLabel`/Discovery).
+    macro_rules! rebuild_for_keyer {
+        () => {{
+                join_all_fades(&fade_threads, &fading);
+                active = None;
+                std::thread::sleep(OLD_WRITER_DRAIN);
+                match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &output_delays) {
+                    Ok((p, warnings)) => {
+                        for w in warnings {
+                            let _ = tx.send(Event::Error(w));
+                        }
+                        reapply_all_levels(&p, &mut program, &pips, &keyer_enabled, &tx);
+                        update_flowed(&flowed_slot, &frames_slot, &p);
+                        active = Some(p);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Event::Error(format!(
+                            "keyer source rebuild failed: {e} — falling back to black"
+                        )));
+                        match build(&context, &config, &[], &keyfill_inputs, &keyer_sources, &output_delays) {
+                            Ok((p, _warnings)) => {
+                                reset_all_levels_to_black(&p, &mut program, &mut preset, &pips, &tx);
+                                update_flowed(&flowed_slot, &frames_slot, &p);
+                                active = Some(p);
+                            }
+                            Err(e2) => {
+                                let _ = tx.send(Event::Error(format!(
+                                    "fallback black-only build also failed: {e2}"
+                                )));
+                                break;
+                            }
+                        }
+                    }
+                }
+                    }};
+    }
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
         // Nachtrag 130/131).
@@ -3579,6 +3675,19 @@ pub fn run(
                 // (bewusst einfach gehalten für den ersten Ausbau, s.
                 // `docs/decisions.md`).
                 keyfill_inputs = inputs;
+                // Quelle über den Namen neu auflösen (Grafik neu gestartet → neue Sender-ID) und neu aufbauen, wenn der
+                // Keyer andere Flows lesen müsste als die laufende Pipeline (auch beim Start: Wiederherstellung vor der Discovery).
+                let changed = resolve_keyer_labels(&keyer_labels, &keyfill_inputs, &mut keyer_sources);
+                let stale = active.as_ref().is_some_and(|p| {
+                    p.levels.iter().enumerate().any(|(l, lp)| {
+                        let want = keyer_sources.get(l).and_then(|s| s.as_ref()).and_then(|id| keyfill_inputs.iter().find(|k| &k.fill_sender_id == id)).map(|k| k.fill_flow_id.as_str());
+                        let have = lp.keyer_flow.as_deref();
+                        want != have
+                    })
+                });
+                if changed || stale {
+                    rebuild_for_keyer!();
+                }
             }
             // Nutzerfund 2026-08-14 (bekannte, bewusst in Kauf genommene
             // Einschränkung dieser Sitzung): ein Keyer-/PIP-Quellwechsel
@@ -3590,40 +3699,21 @@ pub fn run(
             // Folge-Optimierung, kein Teil dieser Sitzung — s.
             // Zusammenfassung an den Nutzer.
             Ok(Command::SetKeyerSource(level, source)) if keyer_sources.get(level).is_some_and(|s| *s != source) => {
+                keyer_labels[level] = source
+                    .as_ref()
+                    .and_then(|id| keyfill_inputs.iter().find(|k| &k.fill_sender_id == id))
+                    .map(|k| k.label.clone());
                 keyer_sources[level] = source;
-                join_all_fades(&fade_threads, &fading);
-                active = None;
-                std::thread::sleep(OLD_WRITER_DRAIN);
-                match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_sources, &output_delays) {
-                    Ok((p, warnings)) => {
-                        for w in warnings {
-                            let _ = tx.send(Event::Error(w));
-                        }
-                        reapply_all_levels(&p, &mut program, &pips, &keyer_enabled, &tx);
-                        update_flowed(&flowed_slot, &frames_slot, &p);
-                        active = Some(p);
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Event::Error(format!(
-                            "keyer source rebuild failed: {e} — falling back to black"
-                        )));
-                        match build(&context, &config, &[], &keyfill_inputs, &keyer_sources, &output_delays) {
-                            Ok((p, _warnings)) => {
-                                reset_all_levels_to_black(&p, &mut program, &mut preset, &pips, &tx);
-                                update_flowed(&flowed_slot, &frames_slot, &p);
-                                active = Some(p);
-                            }
-                            Err(e2) => {
-                                let _ = tx.send(Event::Error(format!(
-                                    "fallback black-only build also failed: {e2}"
-                                )));
-                                break;
-                            }
-                        }
-                    }
+                rebuild_for_keyer!();
+            }
+            Ok(Command::SetKeyerLabel(level, label)) if level < level_count => {
+                keyer_labels[level] = Some(label);
+                if resolve_keyer_labels(&keyer_labels, &keyfill_inputs, &mut keyer_sources) {
+                    rebuild_for_keyer!();
                 }
             }
             Ok(Command::SetKeyerSource(..)) => {}
+            Ok(Command::SetKeyerLabel(..)) => {}
             // PIP-Layer (Nutzerwunsch 2026-07-22, s. Moduldoku "PIP als
             // eigenständiger Layer") — Quellwechsel, exakt gespiegelt von
             // `SetKeyerSource` oben (voller Rebuild, da eine neue
@@ -4004,6 +4094,7 @@ pub fn run(
                     pips.anim_gen[level][slot].fetch_add(1, Ordering::AcqRel);
                     pips.enabled[level][slot] = enabled;
                     if let Some(slot_ref) = active.as_ref().and_then(|a| a.levels.get(level)).and_then(|l| l.pips.get(slot)) {
+                        slot_ref.live.store(enabled, Ordering::Relaxed);
                         slot_ref.comp_pad.set_property("alpha", if enabled { 1.0f64 } else { 0.0f64 });
                     }
                     let _ = tx.send(Event::PipChanged { level, slot, enabled });
