@@ -231,6 +231,10 @@ everything needed without a remote session.
 </tr>
 </table>
 
+**Alarm e-mails with status and signal path.** Each recipient rule can attach the state of the orchestrator, hosts (media servers) and involved workflows plus the signal path from the alarming node up to its root — as text, as an inline node graphic (PNG) or as an SVG attachment. A preview in the settings shows it without a mail server.
+
+<img src="docs/screenshots/alarm-mail-signalweg.png" width="640"><br><sub>Example graphic from an alarm mail: the encoder (orange) fails, fed by mixer, camera and monitor.</sub>
+
 Full walkthroughs and context for every screen above are in
 [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
 

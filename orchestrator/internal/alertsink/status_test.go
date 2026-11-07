@@ -47,7 +47,7 @@ func TestStatusTextUndPNG(t *testing.T) {
 			t.Errorf("Text ohne %q:\n%s", w, txt)
 		}
 	}
-	b, err := r.Flow.PNG("Signalweg bis zur Wurzel: Äpfel/Öl ß")
+	b, err := r.Flow.PNG("Signalweg bis zur Wurzel: Encoder (Beispiel)")
 	if err != nil {
 		t.Fatal(err)
 	}
