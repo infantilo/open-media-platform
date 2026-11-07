@@ -13,6 +13,7 @@ interface RouteCfg {
   workflows: string[];
   processes: string[];
   actions: string[];
+  status?: string;
   to: string;
 }
 interface KindInfo {
@@ -396,6 +397,19 @@ class AlertMailPanel extends HTMLElement {
       act.addEventListener("input", () => r.actions = act.value.split(/[\s,;]+/).filter(Boolean));
       actBox.append(act, el("div", "font-size:10px;color:var(--omp-text-dim);margin-top:2px;", t("amail.route.actionsHint")));
       card.append(actBox);
+
+      card.append(el("span", "font-size:12px;", t("amail.route.status")));
+      const stBox = el("div", "");
+      const st = el("select", "padding:3px 6px;");
+      for (const [v, k] of [["", "amail.route.statusNone"], ["text", "amail.route.statusText"], ["graph", "amail.route.statusGraph"], ["graph-svg", "amail.route.statusSvg"]] as const) {
+        const o = el("option", "", t(k));
+        o.value = v;
+        st.append(o);
+      }
+      st.value = r.status ?? "";
+      st.addEventListener("change", () => r.status = st.value);
+      stBox.append(st, el("div", "font-size:10px;color:var(--omp-text-dim);margin-top:2px;", t("amail.route.statusHint")));
+      card.append(stBox);
 
       card.append(el("span", "font-size:12px;", t("amail.route.to")));
       const to = el("input", "padding:3px 6px;width:100%;box-sizing:border-box;");

@@ -100,6 +100,9 @@ func handlePostTimelineMarker(src *timeline.Sources, events EventSubscriber) htt
 		if events != nil {
 			events.Broadcast(sse.Event{Type: "timeline.appended", Data: json.RawMessage("null")})
 		}
+		if src.OnMarker != nil {
+			src.OnMarker(actor, note)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"at": now.UTC()})
 	}
 }

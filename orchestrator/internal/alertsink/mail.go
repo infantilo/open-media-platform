@@ -3,7 +3,9 @@ package alertsink
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
+	"html"
 	"mime"
 	"net"
 	"net/mail"
@@ -102,8 +104,8 @@ func (m *Mailer) Message(a Alert, to []string) []byte {
 	b.WriteString("To: " + strings.Join(to, ", ") + "\r\n")
 	b.WriteString("Subject: " + mimeEncode(subj) + "\r\n")
 	b.WriteString("Date: " + a.Time.Format(time.RFC1123Z) + "\r\n")
-	b.WriteString("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n")
-	b.WriteString("Auto-Submitted: auto-generated\r\n\r\n")
+	b.WriteString("MIME-Version: 1.0\r\n")
+	headEnd := b.Len()
 	wf := ""
 	if len(a.Workflows) > 0 {
 		names := make([]string, 0, len(a.Workflows))
@@ -124,8 +126,51 @@ func (m *Mailer) Message(a Alert, to []string) []byte {
 	}
 	body := wf + fmt.Sprintf("Schwere:  %s\r\nArt:      %s\r\nGegenstand: %s\r\nName:     %s\r\nZeit:     %s\r\n\r\n%s\r\n",
 		sanitizeHeader(a.Severity), sanitizeHeader(a.Kind), sanitizeHeader(a.Subject), sanitizeHeader(a.Name), a.Time.Format(time.RFC3339), strings.ReplaceAll(strings.ReplaceAll(a.Message, "\r\n", "\n"), "\n", "\r\n"))
-	b.WriteString(body)
-	return []byte(b.String())
+	crlf := func(t string) string { return strings.ReplaceAll(strings.ReplaceAll(t, "\r\n", "\n"), "\n", "\r\n") }
+	if a.Status != nil && a.StatusMode != StatusNone {
+		body += "\r\n" + crlf(a.Status.Text())
+	}
+	head := b.String()[:headEnd]
+	var png []byte
+	if a.Status != nil && a.StatusMode == StatusGraph {
+		png, _ = a.Status.Flow.PNG("Signalweg bis zur Wurzel: " + firstNonEmpty(a.Name, a.Subject))
+	}
+	if a.Status != nil && a.StatusMode == StatusSVG {
+		if svg := a.Status.Flow.SVG("Signalweg bis zur Wurzel: " + firstNonEmpty(a.Name, a.Subject)); svg != nil {
+			const mixed = "omp-mix-7d1f"
+			var o strings.Builder
+			o.WriteString(head + "Content-Type: multipart/mixed; boundary=\"" + mixed + "\"\r\nAuto-Submitted: auto-generated\r\n\r\n")
+			o.WriteString("--" + mixed + "\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" + body + "\r\n")
+			o.WriteString("--" + mixed + "\r\nContent-Type: image/svg+xml; name=\"signalweg.svg\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"signalweg.svg\"\r\n\r\n")
+			enc := base64.StdEncoding.EncodeToString(svg)
+			for len(enc) > 76 {
+				o.WriteString(enc[:76] + "\r\n")
+				enc = enc[76:]
+			}
+			o.WriteString(enc + "\r\n--" + mixed + "--\r\n")
+			return []byte(o.String())
+		}
+	}
+	if png == nil {
+		return []byte(head + "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\nAuto-Submitted: auto-generated\r\n\r\n" + body)
+	}
+	// multipart/alternative: Text | multipart/related: HTML + eingebettetes PNG (cid)
+	const outer, inner = "omp-alt-7d1f", "omp-rel-7d1f"
+	var o strings.Builder
+	o.WriteString(head + "Content-Type: multipart/alternative; boundary=\"" + outer + "\"\r\nAuto-Submitted: auto-generated\r\n\r\n")
+	o.WriteString("--" + outer + "\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" + body + "\r\n")
+	o.WriteString("--" + outer + "\r\nContent-Type: multipart/related; boundary=\"" + inner + "\"\r\n\r\n")
+	o.WriteString("--" + inner + "\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n")
+	o.WriteString("<html><body><pre style=\"font-family:monospace\">" + crlf(html.EscapeString(body)) + "</pre>")
+	o.WriteString("<p><img src=\"cid:signalweg@omp\" alt=\"Signalweg\"></p></body></html>\r\n")
+	o.WriteString("--" + inner + "\r\nContent-Type: image/png; name=\"signalweg.png\"\r\nContent-Transfer-Encoding: base64\r\nContent-ID: <signalweg@omp>\r\nContent-Disposition: inline; filename=\"signalweg.png\"\r\n\r\n")
+	enc := base64.StdEncoding.EncodeToString(png)
+	for len(enc) > 76 {
+		o.WriteString(enc[:76] + "\r\n")
+		enc = enc[76:]
+	}
+	o.WriteString(enc + "\r\n--" + inner + "--\r\n--" + outer + "--\r\n")
+	return []byte(o.String())
 }
 
 // sanitizeHeader entfernt Zeilenumbrüche (Header-Injection).

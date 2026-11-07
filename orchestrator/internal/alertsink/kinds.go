@@ -123,6 +123,8 @@ func init() {
 		{Kind: "file-root-unreachable", Severity: SevWarning, Group: "files", Label: "Ort nicht erreichbar (Host offline oder Pfad fehlt)"},
 		{Kind: "file-mount-recovered", Severity: SevInfo, Group: "files", Label: "Ort antwortet wieder"},
 		{Kind: "file-force-delete", Severity: SevWarning, Group: "files", Label: "Gesperrte Datei erzwungen gelöscht"},
+		{Kind: "marker", Severity: SevWarning, Group: "support", Label: "Marker „Problem jetzt“ gesetzt", OptIn: true},
+		{Kind: "freeze", Severity: SevInfo, Group: "support", Label: "Momentaufnahme (Freeze) erstellt", OptIn: true},
 		{Kind: "user-action", Severity: SevInfo, Group: "user", Label: "Manuelle Benutzeraktion", OptIn: true},
 	} {
 		RegisterKind(k)

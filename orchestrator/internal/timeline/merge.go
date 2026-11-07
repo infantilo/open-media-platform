@@ -28,6 +28,8 @@ type Sources struct {
 	Audit  AuditLister
 	Domain DomainLister
 	Logs   LogLister
+	// OnMarker (optional) wird nach dem Speichern eines Markers aufgerufen (z. B. für eine Alarm-Mail).
+	OnMarker func(actor, note string)
 }
 
 // Item ist eine Zeile der Zeitleiste.

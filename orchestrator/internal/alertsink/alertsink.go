@@ -34,6 +34,9 @@ type Alert struct {
 	Processes []ProcessRef `json:"processes,omitempty"`
 	Time      time.Time    `json:"time"`
 	Text      string       `json:"text"` // Kurztext für Chat-Webhooks
+	// Status/StatusMode: Statusbeilage der Mail (nur E-Mail, nie im Webhook); wird erst bei der Zustellung gefüllt.
+	Status     *StatusReport `json:"-"`
+	StatusMode string        `json:"-"`
 }
 
 // WorkflowRef nennt einen Workflow (ID für Regeln, Name zur Anzeige).
@@ -56,6 +59,8 @@ type Sink struct {
 	Mail *Mailer
 	// Resolve (optional) ordnet einen Alarm Workflows zu; wird beim Senden einmal aufgerufen.
 	Resolve func(Alert) []WorkflowRef
+	// StatusProvider (optional) liefert die Statusbeilage zu einem Alarm; wird nur aufgerufen, wenn eine passende Regel sie wünscht.
+	StatusProvider func(Alert) *StatusReport
 	// MailProvider (optional) liefert den aktuellen Mailer je Zustellung und ersetzt Mail.
 	MailProvider func() *Mailer
 	// Debounce: gleiche (Art, Gegenstand, Meldung) höchstens einmal in dieser Zeit.
@@ -157,6 +162,10 @@ func (s *Sink) deliver(ctx context.Context, a Alert) {
 		m = s.MailProvider()
 	}
 	if m != nil {
+		if mode := m.StatusMode(a); mode != StatusNone && s.StatusProvider != nil {
+			a.StatusMode = mode
+			a.Status = s.StatusProvider(a)
+		}
 		s.try(ctx, a, "E-Mail", func() error { return m.Deliver(ctx, a) })
 	}
 }

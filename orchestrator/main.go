@@ -1032,6 +1032,7 @@ func main() {
 			}
 			return out
 		}
+		sink.StatusProvider = alertStatusProvider(clusterNode, store, graphSvc, hostStore, hostMetricsTracker, workflowSvc)
 		slog.Info("externes Alarming aktiv", "webhook", sink.URL != "", "email_env", sink.Mail != nil)
 		go sink.Run(ctx)
 		go runWhileLeader(ctx, clusterNode, func(ctx context.Context) { alertsink.NodeAlerts(ctx, hub, sink) })
@@ -1676,7 +1677,11 @@ func main() {
 			Data: map[string]any{"label": f.Label, "metric": f.Metric, "kind": f.Kind, "unit": f.Unit, "value": f.Value, "baseline": f.Baseline,
 				"hours": f.Hours, "hoursToLimit": f.HoursToLimit}})
 	}
+	timelineSrc.OnMarker = func(actor, note string) {
+		alertSink.Send(alertsink.Alert{Kind: "marker", Subject: "marker", Name: "Marker", Message: strings.TrimSpace("Marker gesetzt von " + actor + ". " + note)})
+	}
 	freezer.OnFrozen = func(m freeze.Meta) {
+		alertSink.Send(alertsink.Alert{Kind: "freeze", Subject: m.ID, Name: "Momentaufnahme", Message: strings.TrimSpace("Momentaufnahme erstellt (" + m.Trigger + "): " + m.Reason + " " + m.Note)})
 		timelineSink(timeline.Event{At: m.CreatedAt, Kind: "freeze", Severity: timeline.SevInfo, Subject: m.ID, Actor: m.CreatedBy,
 			Data: map[string]any{"trigger": m.Trigger, "reason": m.Reason, "note": m.Note, "minutes": m.WindowMinutes}})
 		hub.Broadcast(sse.Event{Type: "freeze.created", Data: json.RawMessage("null")})

@@ -19,7 +19,9 @@ type Route struct {
 	Processes []string `json:"processes"`
 	// Actions: nur für die Art „user-action“: Benutzeraktionen als „objektart.aktion“ (z. B. review.rejected); „review.*“ = alle der Objektart.
 	Actions []string `json:"actions"`
-	To      string   `json:"to"` // durch Komma/Semikolon getrennt
+	// Status: Statusbeilage in der Mail — "" (keine) | "text" (Orchestrator, Hosts, Workflows, Signalweg als Text) | "graph" (zusätzlich Node-Grafik als PNG) | "graph-svg" (als SVG-Anhang).
+	Status string `json:"status,omitempty"`
+	To     string `json:"to"` // durch Komma/Semikolon getrennt
 }
 
 // Matches prüft Art und Schweregrad.
@@ -100,6 +102,9 @@ func (r Route) Validate() error {
 			return fmt.Errorf("Regel „%s“: ungültige Alarmart %q", r.Name, k)
 		}
 	}
+	if !validStatusMode(r.Status) {
+		return fmt.Errorf("Regel „%s“: unbekannter Status-Modus %q (text|graph|graph-svg)", r.Name, r.Status)
+	}
 	for _, a := range r.Actions {
 		if strings.TrimSpace(a) == "" || len(a) > 128 || strings.ContainsAny(a, " \t\r\n,;") {
 			return fmt.Errorf("Regel „%s“: ungültige Benutzeraktion %q", r.Name, a)
@@ -164,4 +169,25 @@ func (m *Mailer) allRecipients() []string {
 		}
 	}
 	return out
+}
+
+// StatusMode bestimmt, welche Statusbeilage die Mail zu a bekommt: der „größte“ Wunsch aller passenden Regeln
+// (graph vor text vor keine). Gilt für die ganze Mail, also für alle Empfänger gleich.
+func (m *Mailer) StatusMode(a Alert) string {
+	mode := StatusNone
+	for _, r := range m.Routes {
+		if !r.Matches(a) || len(splitAddrs(r.To)) == 0 {
+			continue
+		}
+		switch {
+		case r.Status == StatusGraph || r.Status == StatusSVG:
+			if mode == StatusGraph || mode == StatusSVG {
+				continue // erste Grafik-Regel bestimmt das Format (entweder/oder, nicht beides)
+			}
+			mode = r.Status
+		case r.Status == StatusText && mode == StatusNone:
+			mode = StatusText
+		}
+	}
+	return mode
 }
