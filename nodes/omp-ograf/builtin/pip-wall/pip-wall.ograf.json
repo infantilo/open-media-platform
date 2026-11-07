@@ -1,0 +1,42 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "pip-wall",
+  "version": "1.0.0",
+  "name": "PIP-Wand (Hintergrund, Rahmen, Beschriftung)",
+  "description": "Nachrichten-Look für drei Bild-in-Bild-Fenster: Hintergrundbild mit drei durchsichtigen Fenstern, Rahmen und Beschriftung je Fenster. Die Fenster sind Zonen pip1..pip3 (data-ograf-zone). Mit einer Bindung vom Typ „follow“ folgen Fenster, Rahmen und Schrift der Pose des jeweiligen PIP-Slots im Bildmischer (auch beim Vergrößern per Klick im Monitor). Ohne Bindung stehen die Fenster auf den Standardpositionen (Szene „PIP 1“, 1280×720). Boxen als Bruchteile „x,y,b,h“ (0..1, links oben). Kein OGraf-Standard, nur die Zonen sind eine Erweiterung.",
+  "author": { "name": "OpenMediaPlatform" },
+  "main": "pip-wall.js",
+  "designWidth": 1920,
+  "designHeight": 1080,
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 1,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "backgroundImage": { "type": "string", "title": "Hintergrundbild (URL, leer = Verlauf)", "default": "" },
+      "backgroundColor": { "type": "string", "title": "Hintergrundfarbe (Verlauf unten)", "default": "#0b1530", "gddType": "color-rrggbb", "pattern": "^#[0-9a-f]{6}$" },
+      "accentColor": { "type": "string", "title": "Rahmenfarbe", "default": "#e10600", "gddType": "color-rrggbb", "pattern": "^#[0-9a-f]{6}$" },
+      "captionColor": { "type": "string", "title": "Schriftfarbe", "default": "#ffffff", "gddType": "color-rrggbb", "pattern": "^#[0-9a-f]{6}$" },
+      "borderWidth": { "type": "number", "title": "Rahmenstärke (px bei 1920)", "default": 6, "minimum": 0, "maximum": 40 },
+      "cornerRadius": { "type": "number", "title": "Eckenradius (px bei 1920, 0 = eckig)", "default": 0, "minimum": 0, "maximum": 200 },
+      "text1": { "type": "string", "title": "Schrift Fenster 1", "default": "LIVE · Washington" },
+      "text2": { "type": "string", "title": "Schrift Fenster 2", "default": "LIVE · London" },
+      "text3": { "type": "string", "title": "Schrift Fenster 3", "default": "LIVE · Berlin" },
+      "pip1Box": { "type": "string", "title": "Fenster 1 (x,y,b,h)", "default": "0,0.6486,0.3336,0.3333" },
+      "pip2Box": { "type": "string", "title": "Fenster 2 (x,y,b,h)", "default": "0.3422,0.3819,0.3336,0.3333" },
+      "pip3Box": { "type": "string", "title": "Fenster 3 (x,y,b,h)", "default": "0.6617,0.6292,0.3336,0.3333" },
+      "pip1On": { "type": "boolean", "title": "Fenster 1 sichtbar", "default": true },
+      "pip2On": { "type": "boolean", "title": "Fenster 2 sichtbar", "default": true },
+      "pip3On": { "type": "boolean", "title": "Fenster 3 sichtbar", "default": true },
+      "pip1Dim": { "type": "boolean", "title": "Fenster 1 abgeblendet (anderes vergrößert)", "default": false },
+      "pip2Dim": { "type": "boolean", "title": "Fenster 2 abgeblendet", "default": false },
+      "pip3Dim": { "type": "boolean", "title": "Fenster 3 abgeblendet", "default": false },
+      "moveMs": { "type": "number", "title": "Fahrzeit der Fenster (ms, wie Mischer)", "default": 500, "minimum": 0, "maximum": 10000 }
+    }
+  },
+  "renderRequirements": [
+    { "resolution": { "width": { "ideal": 1920 }, "height": { "ideal": 1080 } }, "frameRate": { "ideal": 25 } }
+  ]
+}

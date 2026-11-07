@@ -47,6 +47,10 @@ impl Binding {
     fn is_window(&self) -> bool {
         self.kind == "window"
     }
+    /// `follow` (umgekehrte Richtung): Pose des PIP-Slots → Fenster/Rahmen der Grafik (Zonenname = Elementname, z. B. `pip1`).
+    fn is_follow(&self) -> bool {
+        self.kind == "follow"
+    }
     fn key(&self) -> String {
         format!("{}/{}", self.layer, self.zone)
     }
@@ -60,6 +64,52 @@ pub struct Applied {
     pub source_set: bool,
     pub enabled: bool,
     pub pose: Option<[i32; 4]>,
+    /// `follow`: zuletzt an die Grafik gesendeter Datensatz (als Text) und Zeitpunkt der letzten Mischer-Abfrage.
+    pub sig: String,
+    pub polled: Option<Instant>,
+}
+
+/// Abfrageabstand der `follow`-Bindungen am Mischer (Slot-Posen ändern sich nur bei Szenen/Fokus).
+const FOLLOW_POLL: Duration = Duration::from_millis(40);
+/// Takt des Arbeitsthreads, solange nur `follow`-Bindungen bestehen.
+const FOLLOW_TICK: Duration = Duration::from_millis(20);
+
+/// Aktualisiert die Daten einer Grafik-Ebene (Node-intern, gesetzt nach dem Aufbau des Stores). `false` = Ebene nicht on air.
+pub type Updater = Box<dyn Fn(&str, serde_json::Map<String, Value>) -> bool + Send + Sync>;
+
+/// Zustand eines Slots aus `pip.slots`, normiert auf die Leinwand: `[x, y, b, h]` (0..1), sichtbar, vergrößert; `other_focus`:
+/// ein anderer Slot ist vergrößert.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlotView {
+    pub rect: [f64; 4],
+    pub enabled: bool,
+    pub focused: bool,
+    pub other_focus: bool,
+}
+
+/// Liest den Slot aus `pip.slots`; `None`, wenn es ihn nicht gibt.
+pub fn slot_view(slots: &Value, slot: u32, canvas: (u32, u32)) -> Option<SlotView> {
+    let arr = slots.as_array()?;
+    let me = arr.iter().find(|s| s["slot"].as_u64() == Some(slot as u64))?;
+    let (cw, ch) = (canvas.0 as f64, canvas.1 as f64);
+    let p = &me["pose"];
+    let g = |k: &str| p[k].as_f64().unwrap_or(0.0);
+    Some(SlotView {
+        rect: [g("x") / cw, g("y") / ch, g("width") / cw, g("height") / ch],
+        enabled: me["enabled"].as_bool().unwrap_or(false),
+        focused: me["focused"].as_bool().unwrap_or(false),
+        other_focus: arr.iter().any(|s| s["focused"].as_bool() == Some(true) && s["slot"].as_u64() != Some(slot as u64)),
+    })
+}
+
+/// Datensatz für die Grafik: `<zone>Box` ("x,y,b,h"), `<zone>On`, `<zone>Dim`.
+pub fn follow_data(zone: &str, v: &SlotView) -> serde_json::Map<String, Value> {
+    let mut m = serde_json::Map::new();
+    let r = v.rect.map(|f| format!("{:.5}", f)).join(",");
+    m.insert(format!("{zone}Box"), json!(r));
+    m.insert(format!("{zone}On"), json!(v.enabled));
+    m.insert(format!("{zone}Dim"), json!(v.other_focus));
+    m
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +119,11 @@ pub enum Action {
     Enable(bool),
     /// Paternoster-Fenster des Mischers setzen (`Some`) oder löschen (`None`).
     SetWindow(Option<[i32; 4]>),
+}
+
+/// Zone = Elementname der Grafik (ohne Beachtung der Groß-/Kleinschreibung, „PIP1“ = `pip1`).
+fn norm_zone(z: &str) -> String {
+    z.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase()
 }
 
 /// Zone (normiert) → Rechteck in Mischer-Pixeln `[x, y, w, h]`; mindestens 2×2.
@@ -139,6 +194,7 @@ struct Entry {
 }
 
 struct Shared {
+    updater: Arc<std::sync::OnceLock<Updater>>,
     bindings: Mutex<BTreeMap<String, (Binding, Entry)>>,
     wake: Condvar,
 }
@@ -157,20 +213,26 @@ impl Entry {
 
 impl Layout {
     pub fn new(registry: RegistryClient, zones: ZoneStore) -> Layout {
-        let shared = Arc::new(Shared { bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() });
+        let updater = Arc::new(std::sync::OnceLock::new());
+        let shared = Arc::new(Shared { updater: updater.clone(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() });
         let weak = Arc::downgrade(&shared);
         std::thread::Builder::new()
             .name("omp-ograf-layout".into())
-            .spawn(move || worker(weak, registry, zones))
+            .spawn(move || worker(weak, registry, zones, updater))
             .ok();
         Layout { shared }
     }
 
+    /// Setzt den Rückweg in den Grafik-Speicher (nötig für `follow`); einmalig nach dem Aufbau des Stores.
+    pub fn set_updater(&self, u: Updater) {
+        let _ = self.shared.updater.set(u);
+    }
+
     pub fn bind(&self, b: Binding) -> Result<(), String> {
-        if !matches!(b.kind.as_str(), "" | "pip" | "window") {
-            return Err("kind: pip oder window".into());
+        if !matches!(b.kind.as_str(), "" | "pip" | "window" | "follow") {
+            return Err("kind: pip, window oder follow".into());
         }
-        if b.layer.is_empty() || b.zone.is_empty() || b.mixer.is_empty() || (!b.is_window() && b.sender_id.is_empty()) {
+        if b.layer.is_empty() || b.zone.is_empty() || b.mixer.is_empty() || (!b.is_window() && !b.is_follow() && b.sender_id.is_empty()) {
             return Err("layerId, zone, mixer und (außer bei kind=window) senderId sind nötig".into());
         }
         if b.level > 16 || b.slot > 32 {
@@ -219,7 +281,7 @@ impl Layout {
                 .map(|(b, e)| {
                     let mut v = serde_json::to_value(b).unwrap_or(Value::Null);
                     // PIP: Slot an; Fenster-Bindung: „aktiv“, solange ein Fenster am Mischer gesetzt ist
-                    v["enabled"] = json!(e.applied.enabled || (b.is_window() && e.applied.pose.is_some()));
+                    v["enabled"] = json!(e.applied.enabled || (b.is_window() && e.applied.pose.is_some()) || (b.is_follow() && !e.applied.sig.is_empty()));
                     v["error"] = json!(e.last_error);
                     v["lagMs"] = json!(e.lag_ms);
                     v["lagMaxMs"] = json!(e.lag_max_ms);
@@ -234,9 +296,11 @@ struct MixerLink {
     peer: PeerClient,
     /// Je Bindungsebene gelesene Leinwandgröße.
     canvas: BTreeMap<u32, (u32, u32)>,
+    /// Zuletzt gelesenes `pip.slots` (für alle `follow`-Bindungen dieses Mischers gemeinsam).
+    slots: Option<(Instant, Value)>,
 }
 
-fn worker(weak: std::sync::Weak<Shared>, registry: RegistryClient, zones: ZoneStore) {
+fn worker(weak: std::sync::Weak<Shared>, registry: RegistryClient, zones: ZoneStore, updater: Arc<std::sync::OnceLock<Updater>>) {
     let mut links: BTreeMap<String, MixerLink> = BTreeMap::new();
     loop {
         let Some(shared) = weak.upgrade() else { return };
@@ -252,8 +316,10 @@ fn worker(weak: std::sync::Weak<Shared>, registry: RegistryClient, zones: ZoneSt
             }
             map.iter().map(|(k, (b, e))| (k.clone(), b.clone(), e.applied.clone(), e.unbound, e.created)).collect()
         };
+        // Nur `follow`-Bindungen fragen den Mischer ohnehin höchstens alle 40 ms ab — dann genügt ein längerer Takt (CPU).
+        let fast = work.iter().any(|(_, b, _, _, _)| !b.is_follow());
         for (key, b, mut st, unbound, created) in work {
-            let result = run_one(&mut links, &registry, &zones, &b, &mut st, unbound, created);
+            let result = run_one(&mut links, &registry, &zones, &updater, &b, &mut st, unbound, created);
             let mut map = shared.bindings.lock().expect("lock poisoned");
             if let Some((cur, e)) = map.get_mut(&key) {
                 if *cur != b {
@@ -277,7 +343,7 @@ fn worker(weak: std::sync::Weak<Shared>, registry: RegistryClient, zones: ZoneSt
             }
         }
         drop(shared);
-        std::thread::sleep(TICK);
+        std::thread::sleep(if fast { TICK } else { FOLLOW_TICK });
     }
 }
 
@@ -285,6 +351,7 @@ fn run_one(
     links: &mut BTreeMap<String, MixerLink>,
     registry: &RegistryClient,
     zones: &ZoneStore,
+    updater: &std::sync::OnceLock<Updater>,
     b: &Binding,
     st: &mut Applied,
     unbound: bool,
@@ -297,7 +364,7 @@ fn run_one(
             .into_iter()
             .find(|n| n.label == b.mixer)
             .ok_or_else(|| format!("Mischer „{}“ nicht gefunden", b.mixer))?;
-        links.insert(b.mixer.clone(), MixerLink { peer: PeerClient::new(node.href), canvas: BTreeMap::new() });
+        links.insert(b.mixer.clone(), MixerLink { peer: PeerClient::new(node.href), canvas: BTreeMap::new(), slots: None });
     }
     let link = links.get_mut(&b.mixer).ok_or("kein Mischer")?;
     let canvas = match link.canvas.get(&b.level) {
@@ -312,6 +379,40 @@ fn run_one(
             c
         }
     };
+    if b.is_follow() {
+        if unbound {
+            return Ok(None);
+        }
+        if st.polled.is_some_and(|t| t.elapsed() < FOLLOW_POLL) {
+            return Ok(None);
+        }
+        st.polled = Some(Instant::now());
+        let slots = match link.slots.as_ref().filter(|(t, _)| t.elapsed() < FOLLOW_POLL) {
+            Some((_, v)) => v.clone(),
+            None => {
+                let v = link.peer.get_param(&b.method("pip.slots")).map_err(|e| e.to_string());
+                let v = match v {
+                    Ok(v) => v,
+                    Err(e) => {
+                        links.remove(&b.mixer);
+                        return Err(e);
+                    }
+                };
+                link.slots = Some((Instant::now(), v.clone()));
+                v
+            }
+        };
+        let view = slot_view(&slots, b.slot, canvas).ok_or_else(|| format!("Slot {} am Mischer nicht vorhanden", b.slot))?;
+        let data = follow_data(&norm_zone(&b.zone), &view);
+        let sig = serde_json::to_string(&data).unwrap_or_default();
+        if sig != st.sig {
+            let up = updater.get().ok_or("Grafikspeicher noch nicht bereit")?;
+            if up(&b.layer, data) {
+                st.sig = sig; // nicht on air: beim nächsten Takt erneut versuchen
+            }
+        }
+        return Ok(None);
+    }
     let (layer_zones, seen) = if unbound { (Vec::new(), None) } else { zones.layer_seen(&b.layer) };
     let zone = layer_zones.into_iter().find(|z| z.id == b.zone);
     let mut next = st.clone();
@@ -386,9 +487,27 @@ mod tests {
         assert!(plan(&w, Some(&z(1.0)), (1920, 1080), &mut st).is_empty());
         assert_eq!(plan(&w, None, (1920, 1080), &mut st), vec![Action::SetWindow(None)]);
         assert!(plan(&w, None, (1920, 1080), &mut st).is_empty());
-        let l = Layout { shared: Arc::new(Shared { bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
+        let l = Layout { shared: Arc::new(Shared { updater: Default::default(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
         assert!(l.bind(w).is_ok());
         assert!(l.bind(Binding { kind: "x".into(), ..b() }).is_err());
+    }
+
+    #[test]
+    fn follow_maps_slot_pose_to_graphic_data() {
+        let slots = json!([
+            {"slot":0,"enabled":true,"focused":false,"pose":{"x":0,"y":467,"width":427,"height":240}},
+            {"slot":1,"enabled":true,"focused":true,"pose":{"x":38,"y":22,"width":1204,"height":676}}
+        ]);
+        let v0 = slot_view(&slots, 0, (1280, 720)).unwrap();
+        assert!(v0.enabled && !v0.focused && v0.other_focus);
+        let d = follow_data(&norm_zone(" PIP1"), &v0);
+        assert_eq!(d["pip1Box"], "0.00000,0.64861,0.33359,0.33333");
+        assert_eq!(d["pip1Dim"], true);
+        let v1 = slot_view(&slots, 1, (1280, 720)).unwrap();
+        assert!(v1.focused && !v1.other_focus);
+        assert!(slot_view(&slots, 7, (1280, 720)).is_none());
+        let l = Layout { shared: Arc::new(Shared { updater: Default::default(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
+        assert!(l.bind(Binding { kind: "follow".into(), sender_id: String::new(), ..b() }).is_ok());
     }
 
     #[test]
@@ -397,7 +516,7 @@ mod tests {
         assert_eq!(x.method("pip.setPose"), "pip.setPose");
         x.level = 2;
         assert_eq!(x.method("pip.setPose"), "level2.pip.setPose");
-        let l = Layout { shared: Arc::new(Shared { bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
+        let l = Layout { shared: Arc::new(Shared { updater: Default::default(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
         assert!(l.bind(Binding { sender_id: String::new(), ..b() }).is_err());
         assert!(l.bind(b()).is_ok());
         assert_eq!(l.to_json().as_array().unwrap().len(), 1);

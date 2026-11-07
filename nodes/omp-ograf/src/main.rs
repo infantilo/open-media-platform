@@ -570,13 +570,14 @@ impl ParamStore for OgrafStore {
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
         // Workflow-Sicherung (wie omp-video-mixer-me): Layout-Bindungen überleben einen Neustart.
         if method == "GET" && path == "/state" {
-            let payload = serde_json::to_vec(&serde_json::json!({ "state": { "layout": self.layout.export() } })).unwrap_or_default();
+            let payload = serde_json::to_vec(&serde_json::json!({ "state": { "layout": self.layout.export(), "layers": self.layers_state() } })).unwrap_or_default();
             return Some(RawResponse { status: 200, content_type: "application/json", body: payload });
         }
         if method == "POST" && path == "/state" {
             return Some(match serde_json::from_slice::<Value>(body) {
                 Ok(v) => {
                     self.layout.restore(v.get("state").unwrap_or(&Value::Null));
+                    self.restore_layers(v.get("state").unwrap_or(&Value::Null));
                     RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() }
                 }
                 Err(_) => RawResponse { status: 400, content_type: "application/json", body: br#"{"error":"invalid JSON body"}"#.to_vec() },
@@ -588,6 +589,43 @@ impl ParamStore for OgrafStore {
             return Some(RawResponse { status, content_type, body });
         }
         uibundle::route(method, path).or_else(|| templates::route(&self.templates_root, method, path))
+    }
+}
+
+impl OgrafStore {
+    /// Sichtbare Ebenen für die Workflow-Sicherung: nach einem Neustart blendet der Node sie wieder ein.
+    fn layers_state(&self) -> Value {
+        let all = self.layers.lock().expect("lock poisoned").to_json();
+        Value::Array(
+            all.as_array()
+                .map(|a| {
+                    a.iter()
+                        .map(|l| serde_json::json!({ "id": l["id"], "templateId": l["templateId"], "data": l["data"] }))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        )
+    }
+
+    /// Blendet gesicherte Ebenen wieder ein (nur solche, die noch nicht sichtbar sind; unbekannte Vorlagen werden übersprungen).
+    fn restore_layers(&self, state: &Value) {
+        let Some(list) = state.get("layers").and_then(Value::as_array) else { return };
+        for l in list {
+            let (Some(id), Some(tpl)) = (l.get("id").and_then(Value::as_str), l.get("templateId").and_then(Value::as_str)) else { continue };
+            let visible = self.layers.lock().expect("lock poisoned").to_json().as_array().is_some_and(|a| a.iter().any(|x| x["id"] == id));
+            if visible {
+                continue;
+            }
+            let mut args = serde_json::Map::new();
+            args.insert("templateId".into(), Value::String(tpl.to_string()));
+            args.insert("layerId".into(), Value::String(id.to_string()));
+            if let Some(d) = l.get("data").filter(|d| d.is_object()) {
+                args.insert("data".into(), d.clone());
+            }
+            if let Err(e) = self.invoke("show", &args) {
+                eprintln!("omp-ograf: Ebene {id} nach Neustart nicht eingeblendet: {e:?}");
+            }
+        }
     }
 }
 
@@ -666,6 +704,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     std::fs::create_dir_all(&templates_root).ok();
     subtitles::ensure_builtin_template(&templates_root);
     templates::ensure_builtin_paternoster_frame(&templates_root);
+    templates::ensure_builtin_pip_wall(&templates_root);
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
     let templates = templates::scan_templates(&templates_root);
@@ -764,6 +803,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Rückverweis für den Untertitel-Ticker (kein Zyklus: schwache Referenz).
     let store: Arc<dyn ParamStore> = concrete.clone();
     let _ = concrete.self_ref.set(Arc::downgrade(&store));
+    // Rückweg der Layout-Kopplung `follow` (Mischer-Pose → Grafikdaten): derselbe Pfad wie die Methode „update“.
+    {
+        let weak = Arc::downgrade(&concrete);
+        concrete.layout.set_updater(Box::new(move |layer, data| {
+            weak.upgrade().is_some_and(|c| {
+                let full = c.layers.lock().expect("lock poisoned").update(layer, &data);
+                match full {
+                    Some(full) => {
+                        c.pipeline.send(pipeline::Command::Update { layer_id: layer.to_string(), data: full });
+                        true
+                    }
+                    None => false,
+                }
+            })
+        }));
+    }
 
     // Port-Labels (Nutzerfund 2026-07-16, §22 Flow-Editor-Lesbarkeit):
     // ohne eigenes Label sähe man an der Kachel nur zwei gleich benannte

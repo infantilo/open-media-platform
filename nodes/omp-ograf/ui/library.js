@@ -1730,6 +1730,7 @@ var messages = {
     layoutBind: "Koppeln",
     kindPip: "Bild im Fenster (PIP)",
     kindWindow: "Fenster f\xFCr Paternoster",
+    kindFollow: "Fenster folgt PIP-Slot (Klick-Vergr\xF6\xDFern bleibt im Mischer)",
     mixer: "Mischer",
     source: "Quelle",
     slot: "PIP-Slot",
@@ -1902,6 +1903,7 @@ var messages = {
     layoutBind: "Couple",
     kindPip: "Picture in window (PIP)",
     kindWindow: "Window for paternoster",
+    kindFollow: "Window follows PIP slot (click-to-enlarge stays in the mixer)",
     mixer: "Mixer",
     source: "Source",
     slot: "PIP slot",
@@ -3301,8 +3303,8 @@ var OmpOgrafLayout = class extends HTMLElement {
       const card = this.#el("div", "zone");
       card.append(this.#el("h4", "", `${layer} \xB7 ${zone}${live ? "" : ` (${tr2("layoutHidden")})`}`));
       if (bound) {
-        const what = bound.kind === "window" ? tr2("kindWindow") : `${tr2("kindPip")} ${bound.slot + 1}`;
-        card.append(this.#el("div", bound.error ? "bad" : "ok", `${what} \u2192 ${bound.mixer}${bound.kind === "window" ? "" : ` \xB7 ${bound.senderId === "pst:1" ? tr2("srcPst") : (this.#sources.get(bound.mixer) ?? []).find((x) => x.senderId === bound.senderId)?.label ?? bound.senderId.slice(0, 8)}`}${bound.error ? ` \xB7 ${bound.error}` : bound.enabled ? ` \xB7 ${tr2("layoutOn")}` : ` \xB7 ${tr2("layoutOff")}`}${bound.lagMs !== void 0 && !bound.error ? ` \xB7 ${Math.round(bound.lagMs)} ms` : ""}`));
+        const what = bound.kind === "window" ? tr2("kindWindow") : bound.kind === "follow" ? `${tr2("kindFollow")} ${bound.slot + 1}` : `${tr2("kindPip")} ${bound.slot + 1}`;
+        card.append(this.#el("div", bound.error ? "bad" : "ok", `${what} \u2192 ${bound.mixer}${bound.kind === "window" || bound.kind === "follow" ? "" : ` \xB7 ${bound.senderId === "pst:1" ? tr2("srcPst") : (this.#sources.get(bound.mixer) ?? []).find((x) => x.senderId === bound.senderId)?.label ?? bound.senderId.slice(0, 8)}`}${bound.error ? ` \xB7 ${bound.error}` : bound.enabled ? ` \xB7 ${tr2("layoutOn")}` : ` \xB7 ${tr2("layoutOff")}`}${bound.lagMs !== void 0 && !bound.error ? ` \xB7 ${Math.round(bound.lagMs)} ms` : ""}`));
         const un = this.#el("button", "", tr2("layoutUnbind"));
         un.addEventListener("click", async () => {
           await this.#call("layout.unbind", {
@@ -3337,6 +3339,10 @@ var OmpOgrafLayout = class extends HTMLElement {
         [
           "window",
           tr2("kindWindow")
+        ],
+        [
+          "follow",
+          tr2("kindFollow")
         ]
       ], d.kind, (v) => {
         d.kind = v;
@@ -3352,19 +3358,21 @@ var OmpOgrafLayout = class extends HTMLElement {
         d.sender = "pst:1";
         this.#render(zones, bindings);
       }));
-      if (d.kind === "pip") {
-        const src = this.#sources.get(d.mixer) ?? [
-          {
-            senderId: "pst:1",
-            label: tr2("srcPst")
-          }
-        ];
-        row(tr2("source"), this.#select(src.map((s) => [
-          s.senderId,
-          s.label
-        ]), d.sender, (v) => {
-          d.sender = v;
-        }));
+      if (d.kind === "pip" || d.kind === "follow") {
+        if (d.kind === "pip") {
+          const src = this.#sources.get(d.mixer) ?? [
+            {
+              senderId: "pst:1",
+              label: tr2("srcPst")
+            }
+          ];
+          row(tr2("source"), this.#select(src.map((s) => [
+            s.senderId,
+            s.label
+          ]), d.sender, (v) => {
+            d.sender = v;
+          }));
+        }
         const slot = this.#el("input");
         slot.type = "number";
         slot.min = "1";
@@ -3382,8 +3390,8 @@ var OmpOgrafLayout = class extends HTMLElement {
           layerId: layer,
           zone,
           mixer: d.mixer,
-          kind: d.kind === "window" ? "window" : "",
-          senderId: d.kind === "window" ? "" : d.sender,
+          kind: d.kind === "window" || d.kind === "follow" ? d.kind : "",
+          senderId: d.kind === "pip" ? d.sender : "",
           slot: d.slot,
           level: d.level
         });

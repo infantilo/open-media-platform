@@ -164,8 +164,8 @@ class OmpOgrafLayout extends HTMLElement {
       const card = this.#el("div", "zone");
       card.append(this.#el("h4", "", `${layer} · ${zone}${live ? "" : ` (${tr("layoutHidden")})`}`));
       if (bound) {
-        const what = bound.kind === "window" ? tr("kindWindow") : `${tr("kindPip")} ${bound.slot + 1}`;
-        card.append(this.#el("div", bound.error ? "bad" : "ok", `${what} → ${bound.mixer}${bound.kind === "window" ? "" : ` · ${bound.senderId === "pst:1" ? tr("srcPst") : ((this.#sources.get(bound.mixer) ?? []).find((x) => x.senderId === bound.senderId)?.label ?? bound.senderId.slice(0, 8))}`}${bound.error ? ` · ${bound.error}` : bound.enabled ? ` · ${tr("layoutOn")}` : ` · ${tr("layoutOff")}`}${bound.lagMs !== undefined && !bound.error ? ` · ${Math.round(bound.lagMs)} ms` : ""}`));
+        const what = bound.kind === "window" ? tr("kindWindow") : bound.kind === "follow" ? `${tr("kindFollow")} ${bound.slot + 1}` : `${tr("kindPip")} ${bound.slot + 1}`;
+        card.append(this.#el("div", bound.error ? "bad" : "ok", `${what} → ${bound.mixer}${bound.kind === "window" || bound.kind === "follow" ? "" : ` · ${bound.senderId === "pst:1" ? tr("srcPst") : ((this.#sources.get(bound.mixer) ?? []).find((x) => x.senderId === bound.senderId)?.label ?? bound.senderId.slice(0, 8))}`}${bound.error ? ` · ${bound.error}` : bound.enabled ? ` · ${tr("layoutOn")}` : ` · ${tr("layoutOff")}`}${bound.lagMs !== undefined && !bound.error ? ` · ${Math.round(bound.lagMs)} ms` : ""}`));
         const un = this.#el("button", "", tr("layoutUnbind"));
         un.addEventListener("click", async () => {
           await this.#call("layout.unbind", { layerId: layer, zone });
@@ -183,12 +183,14 @@ class OmpOgrafLayout extends HTMLElement {
         r.append(this.#el("label", "", label), el);
         card.append(r);
       };
-      row(tr("kind"), this.#select([["pip", tr("kindPip")], ["window", tr("kindWindow")]], d.kind, (v) => { d.kind = v; this.#last = ""; this.#render(zones, bindings); }));
+      row(tr("kind"), this.#select([["pip", tr("kindPip")], ["window", tr("kindWindow")], ["follow", tr("kindFollow")]], d.kind, (v) => { d.kind = v; this.#last = ""; this.#render(zones, bindings); }));
       if (!this.#mixers.length) card.append(this.#el("div", "bad", tr("noMixer")));
       row(tr("mixer"), this.#select(this.#mixers.map((m): [string, string] => [m.label, m.label]), d.mixer, (v) => { d.mixer = v; d.sender = "pst:1"; this.#render(zones, bindings); }));
-      if (d.kind === "pip") {
-        const src = this.#sources.get(d.mixer) ?? [{ senderId: "pst:1", label: tr("srcPst") }];
-        row(tr("source"), this.#select(src.map((s): [string, string] => [s.senderId, s.label]), d.sender, (v) => { d.sender = v; }));
+      if (d.kind === "pip" || d.kind === "follow") {
+        if (d.kind === "pip") {
+          const src = this.#sources.get(d.mixer) ?? [{ senderId: "pst:1", label: tr("srcPst") }];
+          row(tr("source"), this.#select(src.map((s): [string, string] => [s.senderId, s.label]), d.sender, (v) => { d.sender = v; }));
+        }
         const slot = this.#el("input");
         slot.type = "number";
         slot.min = "1";
@@ -200,7 +202,7 @@ class OmpOgrafLayout extends HTMLElement {
       go.disabled = !this.#mixers.length || !live;
       go.title = live ? "" : tr("layoutHiddenHint");
       go.addEventListener("click", async () => {
-        const err = await this.#call("layout.bind", { layerId: layer, zone, mixer: d.mixer, kind: d.kind === "window" ? "window" : "", senderId: d.kind === "window" ? "" : d.sender, slot: d.slot, level: d.level });
+        const err = await this.#call("layout.bind", { layerId: layer, zone, mixer: d.mixer, kind: d.kind === "window" || d.kind === "follow" ? d.kind : "", senderId: d.kind === "pip" ? d.sender : "", slot: d.slot, level: d.level });
         if (err) card.append(this.#el("div", "bad", err));
         this.#last = "";
         void this.#tick();

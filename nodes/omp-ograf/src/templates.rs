@@ -188,6 +188,18 @@ pub fn ensure_builtin_paternoster_frame(templates_root: &Path) {
     }
 }
 
+/// Mitgelieferte PIP-Wand (Hintergrund, Rahmen, Beschriftung für drei PIP-Fenster; Layout-Kopplung `follow`).
+pub fn ensure_builtin_pip_wall(templates_root: &Path) {
+    let dir = templates_root.join("pip-wall");
+    if dir.join("pip-wall.ograf.json").exists() {
+        return;
+    }
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let _ = std::fs::write(dir.join("pip-wall.ograf.json"), include_str!("../builtin/pip-wall/pip-wall.ograf.json"));
+        let _ = std::fs::write(dir.join("pip-wall.js"), include_str!("../builtin/pip-wall/pip-wall.js"));
+    }
+}
+
 const HARNESS_HTML: &str = include_str!("../ui/harness.html");
 
 /// `ParamStore::extra_route`-Implementierung für die Harness-Seite
