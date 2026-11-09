@@ -71,7 +71,11 @@ export default class PipWall extends HTMLElement {
       const k = `pip${i + 1}`;
       if (d[`text${i + 1}`] !== undefined) b.cap.textContent = d[`text${i + 1}`];
       if (d[`${k}On`] !== undefined) { b.on = !!d[`${k}On`]; b.el.classList.toggle("off", !b.on); }
-      if (d[`${k}Dim`] !== undefined) { b.dim = !!d[`${k}Dim`]; b.el.classList.toggle("dim", b.dim); }
+      // Abblenden erst, wenn die Fahrt zu Ende ist (das vergrößerte Fenster überdeckt die anderen dann ohnehin); Einblenden sofort.
+      if (d[`${k}Dim`] !== undefined) {
+        b.dimWant = !!d[`${k}Dim`];
+        if (!b.dimWant) { b.dim = false; b.el.classList.remove("dim"); }
+      }
       // Fahrt des Mischers (von, nach, Start Unix-ms, Dauer): gleiche Ease-in/out-Kurve und gleiche Uhr wie der Mischer.
       if (d[`${k}Anim`] !== undefined) {
         const a = String(d[`${k}Anim`]).split(",").map(Number);
@@ -114,6 +118,7 @@ export default class PipWall extends HTMLElement {
       b.cap.style.fontSize = `${Math.max(0, th * 0.62)}px`;
       b.cap.style.visibility = th < 12 ? "hidden" : "visible";
     }
+    if (!moving) for (const b of this._boxes) if (b.dimWant && !b.dim) { b.dim = true; b.el.classList.add("dim"); }
     // Fenster ausschneiden: ein schwarzes Rechteck je sichtbarem Fenster in der Maske (Überlappung bleibt ein Loch).
     this._boxes.forEach((b, i) => {
       const r = this._holes.children[i];
