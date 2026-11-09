@@ -115,6 +115,12 @@ const T = (() => {
       "delete": "Löschen",
       "cancel": "Abbrechen",
       "confirmDelete": "PIP-Preset \"{name}\" wirklich löschen?",
+      "sceneDsk": "DSK der Szene",
+      "sceneDskKeep": "unverändert",
+      "sceneDskOff": "aus",
+      "sceneGraphic": "Grafik der Szene",
+      "sceneGraphicNone": "keine",
+      "sceneGraphicTitle": "Wird beim Anzeigen der Szene eingeblendet und beim Ausschalten wieder ausgeblendet",
       "saveOnly": "Nur speichern",
       "saveOnlyTitle": "Preset speichern, ohne es zu aktivieren",
       "saveShow": "Speichern & Anzeigen",
@@ -221,6 +227,12 @@ const T = (() => {
       "delete": "Delete",
       "cancel": "Cancel",
       "confirmDelete": "Really delete PIP preset \"{name}\"?",
+      "sceneDsk": "Scene keyer (DSK)",
+      "sceneDskKeep": "unchanged",
+      "sceneDskOff": "off",
+      "sceneGraphic": "Scene graphic",
+      "sceneGraphicNone": "none",
+      "sceneGraphicTitle": "Shown when the scene is displayed and hidden again when it is switched off",
       "saveOnly": "Save only",
       "saveOnlyTitle": "Save the preset without activating it",
       "saveShow": "Save & show",
@@ -1833,8 +1845,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
       });
       const openPipEditor = (scene) => {
         const draft = scene
-          ? { id: scene.id, name: scene.name, entries: (scene.entries && scene.entries.length ? scene.entries : [{ slot: 0, senderId: scene.senderId, pose: scene.box, start: scene.start, end: scene.end, inMs: scene.inMs, outMs: scene.outMs }]).map(entryFromServer) }
-          : { id: newPresetId(), name: `PIP ${latestPipPresets.length + 1}`, entries: [newEntry(0)] };
+          ? { id: scene.id, name: scene.name, keyer: scene.keyer || null, graphic: scene.graphic || null, entries: (scene.entries && scene.entries.length ? scene.entries : [{ slot: 0, senderId: scene.senderId, pose: scene.box, start: scene.start, end: scene.end, inMs: scene.inMs, outMs: scene.outMs }]).map(entryFromServer) }
+          : { id: newPresetId(), name: `PIP ${latestPipPresets.length + 1}`, keyer: null, graphic: null, entries: [newEntry(0)] };
         let cur = 0; // gerade bearbeiteter Eintrag
         let editing = "hold";
         const entry = () => draft.entries[cur];
@@ -2182,6 +2194,55 @@ class OmpVideoMixerMePanel extends HTMLElement {
         window.addEventListener("pointermove", onMove);
         window.addEventListener("pointerup", onUp);
 
+        // ── DSK und Grafik der Szene (optional): ohne Eintrag bleibt der DSK, wie er ist, und es wird keine Grafik geschaltet.
+        const extrasField = document.createElement("div");
+        extrasField.className = "field";
+        const dskLabel = document.createElement("label");
+        dskLabel.textContent = T("sceneDsk");
+        const dskPick = document.createElement("select");
+        const addOpt = (sel, value, text) => { const o = document.createElement("option"); o.value = value; o.textContent = text; sel.append(o); };
+        addOpt(dskPick, "", T("sceneDskKeep"));
+        addOpt(dskPick, "__off__", T("sceneDskOff"));
+        for (const k of latestKeyerInputs) addOpt(dskPick, k.label, shortLabel(k.label));
+        dskPick.value = !draft.keyer ? "" : !draft.keyer.enabled ? "__off__" : draft.keyer.label || "";
+        if (dskPick.value !== (!draft.keyer ? "" : !draft.keyer.enabled ? "__off__" : draft.keyer.label || "")) addOpt(dskPick, draft.keyer.label, draft.keyer.label), (dskPick.value = draft.keyer.label);
+        dskPick.addEventListener("change", () => {
+          const v = dskPick.value;
+          draft.keyer = v === "" ? null : v === "__off__" ? { label: "", enabled: false } : { label: v, enabled: true };
+        });
+        const gfxLabel = document.createElement("label");
+        gfxLabel.textContent = T("sceneGraphic");
+        gfxLabel.title = T("sceneGraphicTitle");
+        const gfxPick = document.createElement("select");
+        gfxPick.title = T("sceneGraphicTitle");
+        addOpt(gfxPick, "", T("sceneGraphicNone"));
+        const gfxKey = (g) => (g ? JSON.stringify([g.node, g.templateId]) : "");
+        if (draft.graphic) { addOpt(gfxPick, gfxKey(draft.graphic), `${draft.graphic.node} · ${draft.graphic.templateId}`); gfxPick.value = gfxKey(draft.graphic); }
+        gfxPick.addEventListener("change", () => {
+          if (gfxPick.value === "") { draft.graphic = null; return; }
+          const [node, templateId] = JSON.parse(gfxPick.value);
+          draft.graphic = { node, templateId, layerId: templateId };
+        });
+        // Grafik-Knoten und Vorlagen nachladen (best effort; ohne Grafik-Knoten bleibt nur „keine“)
+        (async () => {
+          try {
+            const [instRes, nodesRes] = await Promise.all([fetch("/api/v1/instances"), fetch("/api/v1/nodes")]);
+            if (!instRes.ok || !nodesRes.ok) return;
+            const labels = new Set((await instRes.json()).filter((i) => i.type === "omp-ograf").map((i) => i.label));
+            const nodes = (await nodesRes.json()).filter((n) => labels.has(n.label));
+            for (const n of nodes) {
+              const tr = await fetch(`/api/v1/nodes/${n.id}/params/templates`);
+              if (!tr.ok) continue;
+              for (const t of (await tr.json()).value || []) {
+                const key = gfxKey({ node: n.label, templateId: t.id });
+                if (![...gfxPick.options].some((o) => o.value === key)) addOpt(gfxPick, key, `${n.label} · ${t.name || t.id}`);
+              }
+            }
+            gfxPick.value = draft.graphic ? gfxKey(draft.graphic) : "";
+          } catch { /* Auswahl bleibt, wie sie war */ }
+        })();
+        extrasField.append(dskLabel, dskPick, gfxLabel, gfxPick);
+
         const actions = document.createElement("div");
         actions.className = "actions";
         if (scene) {
@@ -2217,7 +2278,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
             outMs: e.end || e.start ? e.outMs : 0,
             z: e.z,
           }));
-          await call("pip.savePreset", { id: draft.id, name, entries: JSON.stringify(entries) });
+          await call("pip.savePreset", { id: draft.id, name, entries: JSON.stringify(entries), keyer: JSON.stringify(draft.keyer), graphic: JSON.stringify(draft.graphic) });
         };
         const saveOnlyBtn = document.createElement("omp-button");
         saveOnlyBtn.textContent = T("saveOnly");
@@ -2229,7 +2290,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         saveBtn.addEventListener("click", async () => { await savePreset(); await call("pip.applyPreset", { id: draft.id }); close(); });
         actions.append(spacer, cancelBtn, saveOnlyBtn, saveBtn);
 
-        bodyEl.append(nameField, tabsRow, sourceField, pointsField, timingRow, twoDRow, editorField, actions);
+        bodyEl.append(nameField, tabsRow, sourceField, pointsField, timingRow, twoDRow, editorField, extrasField, actions);
         syncAll();
         const cleanup = () => {
           window.removeEventListener("pointermove", onMove);
@@ -2597,60 +2658,13 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // Bank — bleibt daher außerhalb der Ebenen-Schleife oben. Nimmt seit
     // 2026-09-04 auch die PIP-Presets jeder Ebene mit (main.rs::
     // capture_level_state).
-    const presetSaveBtn = document.createElement("omp-button");
-    presetSaveBtn.textContent = T("savePreset");
-    const presetList = document.createElement("div");
-    presetList.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;margin-top:var(--omp-space-2, 8px);";
-
-    const renderPresets = async () => {
-      presetList.replaceChildren();
-      const res = await fetch("/api/v1/snapshots");
-      if (!res.ok) return;
-      const snaps = await res.json();
-      const mine = snaps.filter(
-        (s) => Array.isArray(s.nodeIds) && s.nodeIds.length === 1 && s.nodeIds[0] === nodeId,
-      );
-      if (mine.length === 0) {
-        const empty_ = document.createElement("span");
-        empty_.textContent = T("noPresets");
-        empty_.style.cssText = "color:var(--omp-text-dim, #9aa0a6);font-size:11px;";
-        presetList.appendChild(empty_);
-        return;
-      }
-      for (const snap of mine) {
-        const chip = document.createElement("omp-button");
-        chip.textContent = snap.label || snap.id.slice(0, 8);
-        chip.title = T("applyPreset");
-        chip.addEventListener("click", async () => {
-          await fetch(`/api/v1/snapshots/${snap.id}/apply`, { method: "POST" });
-          await refreshAll();
-        });
-        presetList.appendChild(chip);
-      }
-    };
-
-    presetSaveBtn.addEventListener("click", async () => {
-      const label = await promptDialog(T("promptName"), T("newPresetName"), T("apply"), T("cancel"));
-      if (!label) return;
-      await fetch("/api/v1/snapshots", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label, nodeIds: [nodeId] }),
-      });
-      await renderPresets();
-    });
-
-    const presetSection = document.createElement("omp-panel-section");
-    presetSection.setAttribute("label", "Presets");
-    presetSection.append(presetSaveBtn, presetList);
-
+    // Der frühere Abschnitt „Presets“ (Momentaufnahmen nur dieses Mischers) ist entfallen: Szenen (PIP-Szenen-Editor) und
+    // „Im Workflow speichern“ sichern den Zustand; globale Momentaufnahmen bleiben im Flow-Editor.
     shadow.append(
       style,
       consoleSection,
       ...(levelsSection ? [levelsSection] : []),
-      presetSection,
     );
-    renderPresets();
 
     // Ein gemeinsamer Graph/Workflows-Fetch je Poll für alle Banken (s.
     // `graphContext()`-Doku oben) statt N-facher Redundanz.

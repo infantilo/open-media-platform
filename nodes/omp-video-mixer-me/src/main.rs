@@ -152,6 +152,8 @@ struct MixerStore {
     /// zuletzt per Low-Level-Methode statt per Preset gesetzt) — nur für
     /// die UI-Anzeige, welcher "Mixer"-Button gerade leuchten soll.
     active_pip_preset: PerLevel<Option<String>>,
+    /// NMOS-Registry (für Szenen mit Grafik: der Mischer findet den Grafik-Knoten über seinen Namen).
+    registry_url: String,
     pipeline: pipeline::PipelineHandle,
     /// Freezes (Standbilder des PGM, wie Quellen aufrufbar), s. `freeze.rs`.
     freezes: Arc<freeze::Freezes>,
@@ -694,6 +696,9 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
         MethodSpec {
             name: n("pip.savePreset"),
             args: vec![
+                // Optional (JSON-Text): DSK `{label, enabled}` und Grafik `{node, templateId, layerId}` der Szene.
+                MethodArg { name: "keyer".to_string(), kind: ParamType::String },
+                MethodArg { name: "graphic".to_string(), kind: ParamType::String },
                 MethodArg { name: "id".to_string(), kind: ParamType::String },
                 MethodArg { name: "name".to_string(), kind: ParamType::String },
                 MethodArg { name: "senderId".to_string(), kind: ParamType::String },
@@ -1060,6 +1065,11 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 let scene = active_id.and_then(|id| store.pip_presets[level].lock().expect("lock poisoned").iter().find(|p| p.id == id).cloned());
                 let actions = store.pip[level].lock().expect("lock poisoned").plan_disable(slot, scene.as_ref());
                 actions.iter().for_each(|a| a.run(&store.pipeline, level));
+                if slot.is_none() {
+                    if let Some(g) = scene.as_ref().and_then(|p| p.graphic.clone()) {
+                        scene_graphic(store.registry_url.clone(), g, false);
+                    }
+                }
                 return Ok(());
             }
             let slot = slot.unwrap_or(0);
@@ -1165,13 +1175,23 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
             if entries.is_empty() || entries.iter().any(|e| e.slot >= slots || !seen.insert(e.slot)) {
                 return Err(InvokeError::Unknown);
             }
+            // Optional: DSK und Grafik der Szene (JSON-Text); fehlt das Argument, bleibt der bisherige Wert.
+            let parse = |k: &str| args.get(k).and_then(Value::as_str).map(|raw| serde_json::from_str::<Value>(raw).unwrap_or(Value::Null));
+            let keyer = parse("keyer").map(|v| pipstate::keyer_from_json(Some(&v)));
+            let graphic = parse("graphic").map(|v| pipstate::graphic_from_json(Some(&v)));
             let mut presets = store.pip_presets[level].lock().expect("lock poisoned");
             match presets.iter_mut().find(|p| p.id == id) {
                 Some(existing) => {
                     existing.name = name;
                     existing.entries = entries;
+                    if let Some(k) = keyer {
+                        existing.keyer = k;
+                    }
+                    if let Some(g) = graphic {
+                        existing.graphic = g;
+                    }
                 }
-                None => presets.push(PipPreset { id, name, entries }),
+                None => presets.push(PipPreset { keyer: keyer.flatten(), graphic: graphic.flatten(), id, name, entries }),
             }
             Ok(())
         }
@@ -1198,11 +1218,54 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 .ok_or(InvokeError::Unknown)?;
             let actions = store.pip[level].lock().expect("lock poisoned").plan_apply(&preset);
             actions.iter().for_each(|a| a.run(&store.pipeline, level));
+            apply_scene_extras(store, level, &preset);
             *store.active_pip_preset[level].lock().expect("lock poisoned") = Some(preset.id);
             Ok(())
         }
         _ => Err(InvokeError::Unknown),
     }
+}
+
+/// DSK und Grafik einer Szene anwenden (nach den PIP-Slots): Keyer ein/aus mit Quelle per Name, Grafik-Ebene einblenden.
+fn apply_scene_extras(store: &MixerStore, level: usize, scene: &PipPreset) {
+    if let Some(k) = &scene.keyer {
+        store.pipeline.set_keyer_enabled(level, k.enabled);
+        if !k.label.is_empty() {
+            *store.keyer_label[level].lock().expect("lock poisoned") = Some(k.label.clone());
+            store.pipeline.set_keyer_label(level, k.label.clone());
+        }
+    }
+    if let Some(g) = scene.graphic.clone() {
+        scene_graphic(store.registry_url.clone(), g, true);
+    }
+}
+
+/// Grafik einer Szene ein-/ausblenden (im Hintergrund, die Registry-Abfrage blockiert). Beim Einblenden bleibt eine bereits
+/// sichtbare Ebene unverändert (ihre Daten gehen nicht auf die Vorlagen-Vorgaben zurück).
+fn scene_graphic(registry_url: String, g: pipstate::SceneGraphic, show: bool) {
+    std::thread::spawn(move || {
+        let registry = RegistryClient::new(registry_url);
+        let Some(node) = registry.list_nodes().ok().and_then(|n| n.into_iter().find(|n| n.label == g.node)) else {
+            eprintln!("omp-video-mixer-me: Szenen-Grafik: Knoten „{}“ nicht gefunden", g.node);
+            return;
+        };
+        let peer = omp_node_sdk::peer::PeerClient::new(node.href);
+        if show {
+            let visible = peer
+                .get_param("layers")
+                .ok()
+                .and_then(|v| v.as_array().map(|a| a.iter().any(|l| l["id"] == g.layer_id.as_str())))
+                .unwrap_or(false);
+            if visible {
+                return;
+            }
+            if let Err(e) = peer.invoke_with("show", serde_json::json!({"templateId": g.template_id, "layerId": g.layer_id})) {
+                eprintln!("omp-video-mixer-me: Szenen-Grafik einblenden fehlgeschlagen: {e}");
+            }
+        } else {
+            let _ = peer.invoke_with("hide", serde_json::json!({"layerId": g.layer_id}));
+        }
+    });
 }
 
 impl MixerStore {
@@ -1563,6 +1626,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         transition_position: transition_position.clone(),
         pip_presets: pip_presets.clone(),
         active_pip_preset: active_pip_preset.clone(),
+        registry_url: registry_url.clone(),
         pipeline: pipeline_handle.clone(),
         monitor: monitor.clone(),
     });

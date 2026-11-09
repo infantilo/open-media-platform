@@ -257,7 +257,7 @@ fn pip_scene_with_entry_animation_appears() {
         focus: None,
     };
     let mut pips = LevelPips::new(2, 0, W, H);
-    let actions = pips.plan_apply(&PipPreset { id: "t".into(), name: "t".into(), entries: vec![entry] });
+    let actions = pips.plan_apply(&PipPreset { keyer: None, graphic: None, id: "t".into(), name: "t".into(), entries: vec![entry] });
     actions.iter().for_each(|a| a.run(&h, 0));
     std::thread::sleep(Duration::from_millis(1800));
     let d = grab(&ctx, &out_flow);
@@ -332,7 +332,7 @@ fn pip_scene_three_slots_with_2d_entry_animation_all_appear() {
         entry(2, r(847, 453, 427, 240), r(-427, 472, 427, 240)), // von links
     ];
     let mut pips = LevelPips::new(4, 2, 1280, 720);
-    let actions = pips.plan_apply(&PipPreset { id: "p1".into(), name: "PIP 1".into(), entries });
+    let actions = pips.plan_apply(&PipPreset { keyer: None, graphic: None, id: "p1".into(), name: "PIP 1".into(), entries });
     actions.iter().for_each(|a| a.run(&h, 0));
     std::thread::sleep(Duration::from_millis(2500));
     let d = grab(&ctx, &out_flow);
@@ -458,7 +458,7 @@ fn pip_scene_entry_moves_every_slot() {
         entry(2, r(847, 453, 427, 240), r(-427, 472, 427, 240)),
     ];
     let mut pips = LevelPips::new(4, 2, 1280, 720);
-    let actions = pips.plan_apply(&PipPreset { id: "p1".into(), name: "PIP 1".into(), entries });
+    let actions = pips.plan_apply(&PipPreset { keyer: None, graphic: None, id: "p1".into(), name: "PIP 1".into(), entries });
     let t0 = std::time::Instant::now();
     actions.iter().for_each(|a| a.run(&h, 0));
 

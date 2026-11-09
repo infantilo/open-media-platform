@@ -43,6 +43,25 @@ pub struct PipPreset {
     pub id: String,
     pub name: String,
     pub entries: Vec<PipEntry>,
+    /// Optional: DSK (Keyer) der Szene. `None` = Keyer bleibt, wie er ist.
+    pub keyer: Option<SceneKeyer>,
+    /// Optional: Grafik-Ebene, die beim Anwenden der Szene eingeblendet wird (beim Ausschalten der Szene wieder ausgeblendet).
+    pub graphic: Option<SceneGraphic>,
+}
+
+/// DSK-Einstellung einer Szene: Quelle als Name (Basis-Label, überlebt Neustarts der Grafik); leer = Quelle unverändert.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SceneKeyer {
+    pub label: String,
+    pub enabled: bool,
+}
+
+/// Grafik einer Szene: Knoten (Anzeigename, z. B. „Grafik“), Vorlage und Ebene.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SceneGraphic {
+    pub node: String,
+    pub template_id: String,
+    pub layer_id: String,
 }
 
 fn opt_pose_json(p: &Option<PipPose>) -> Value {
@@ -87,6 +106,8 @@ pub fn preset_to_json(p: &PipPreset) -> Value {
         "id": p.id,
         "name": p.name,
         "entries": p.entries.iter().map(entry_to_json).collect::<Vec<_>>(),
+        "keyer": p.keyer.as_ref().map(|k| serde_json::json!({"label": k.label, "enabled": k.enabled})),
+        "graphic": p.graphic.as_ref().map(|g| serde_json::json!({"node": g.node, "templateId": g.template_id, "layerId": g.layer_id})),
     });
     if let Some(first) = p.entries.first() {
         let m = v.as_object_mut().expect("object");
@@ -112,7 +133,25 @@ pub fn preset_from_json(v: &Value) -> Option<PipPreset> {
         Some(list) => list.iter().filter_map(entry_from_json).collect(),
         None => vec![entry_from_json(v)?],
     };
-    Some(PipPreset { id, name, entries })
+    Some(PipPreset { keyer: keyer_from_json(v.get("keyer")), graphic: graphic_from_json(v.get("graphic")), id, name, entries })
+}
+
+pub fn keyer_from_json(v: Option<&Value>) -> Option<SceneKeyer> {
+    let v = v.filter(|x| x.is_object())?;
+    Some(SceneKeyer {
+        label: v.get("label").and_then(Value::as_str).unwrap_or_default().to_string(),
+        enabled: v.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+    })
+}
+
+pub fn graphic_from_json(v: Option<&Value>) -> Option<SceneGraphic> {
+    let v = v.filter(|x| x.is_object())?;
+    let t = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    let g = SceneGraphic { node: t("node"), template_id: t("templateId"), layer_id: t("layerId") };
+    if g.node.is_empty() || g.template_id.is_empty() {
+        return None;
+    }
+    Some(SceneGraphic { layer_id: if g.layer_id.is_empty() { g.template_id.clone() } else { g.layer_id.clone() }, ..g })
 }
 
 #[derive(Debug, Clone)]
@@ -416,6 +455,7 @@ mod tests {
 
     fn scene3() -> PipPreset {
         PipPreset {
+            keyer: None, graphic: None,
             id: "sc".into(),
             name: "drei".into(),
             entries: vec![entry(0, pose(0, 0, 300, 200)), entry(1, pose(400, 0, 300, 200)), entry(2, pose(800, 0, 300, 200))],
@@ -442,7 +482,7 @@ mod tests {
         let mut e = entry(0, pose(0, 0, 100, 100));
         e.start = Some(pose(-100, 0, 100, 100));
         e.in_ms = 400;
-        let acts = l.plan_apply(&PipPreset { id: "a".into(), name: "a".into(), entries: vec![e] });
+        let acts = l.plan_apply(&PipPreset { keyer: None, graphic: None, id: "a".into(), name: "a".into(), entries: vec![e] });
         assert!(acts.iter().any(|a| matches!(a, Action::Animate { slot: 0, from: Some(_), ms: 400, then_disable: false, .. })));
         // Die Zielpose wird nicht hart gesetzt; nur die Startpose (vor dem Einschalten).
         assert!(!acts.contains(&Action::Pose(0, pose(0, 0, 100, 100))));
@@ -455,7 +495,7 @@ mod tests {
         let mut e = entry(0, pose(0, 0, 100, 100));
         e.start = Some(pose(-100, 0, 100, 100));
         e.in_ms = 400;
-        let acts = l.plan_apply(&PipPreset { id: "a".into(), name: "a".into(), entries: vec![e] });
+        let acts = l.plan_apply(&PipPreset { keyer: None, graphic: None, id: "a".into(), name: "a".into(), entries: vec![e] });
         let enable = acts.iter().position(|a| *a == Action::Enable(0, true)).expect("enable");
         let animate = acts.iter().position(|a| matches!(a, Action::Animate { slot: 0, .. })).expect("animate");
         assert!(enable < animate, "Enable muss vor Animate laufen: {acts:?}");
@@ -504,7 +544,7 @@ mod tests {
     fn focus_ignores_disabled_slots_and_repeat() {
         let mut l = LevelPips::new(2, 0, 1280, 720);
         assert!(l.plan_focus(0, 500).is_empty());
-        l.plan_apply(&PipPreset { id: "a".into(), name: "a".into(), entries: vec![entry(0, pose(0, 0, 100, 100))] });
+        l.plan_apply(&PipPreset { keyer: None, graphic: None, id: "a".into(), name: "a".into(), entries: vec![entry(0, pose(0, 0, 100, 100))] });
         assert_eq!(l.plan_focus(0, 500).len(), 1);
         assert!(l.plan_focus(0, 500).is_empty());
     }
@@ -515,7 +555,7 @@ mod tests {
         let mut e = entry(0, pose(0, 0, 100, 100));
         e.end = Some(pose(2000, 0, 100, 100));
         e.out_ms = 300;
-        let scene = PipPreset { id: "a".into(), name: "a".into(), entries: vec![e, entry(1, pose(500, 0, 100, 100))] };
+        let scene = PipPreset { keyer: None, graphic: None, id: "a".into(), name: "a".into(), entries: vec![e, entry(1, pose(500, 0, 100, 100))] };
         l.plan_apply(&scene);
         l.plan_focus(0, 500);
         let acts = l.plan_disable(None, Some(&scene));
@@ -541,7 +581,7 @@ mod tests {
         e.in_ms = 250;
         e.z = Some(9);
         e.focus = Some(pose(5, 5, 500, 300));
-        let p = PipPreset { id: "x".into(), name: "n".into(), entries: vec![e] };
+        let p = PipPreset { keyer: None, graphic: None, id: "x".into(), name: "n".into(), entries: vec![e] };
         assert_eq!(preset_from_json(&preset_to_json(&p)), Some(p));
 
         let legacy = serde_json::json!({"id": "old", "name": "Alt", "senderId": "abc", "box": {"x": 1, "y": 2, "width": 3, "height": 4},
@@ -552,5 +592,21 @@ mod tests {
         assert_eq!(p.entries[0].sender_id.as_deref(), Some("abc"));
         assert_eq!(p.entries[0].out_ms, 200);
         assert!(p.entries[0].end.is_some());
+    }
+
+    #[test]
+    fn scene_keyer_and_graphic_roundtrip() {
+        let mut p = scene3();
+        p.keyer = Some(SceneKeyer { label: "Grafik".into(), enabled: true });
+        p.graphic = Some(SceneGraphic { node: "Grafik".into(), template_id: "pip-wall".into(), layer_id: "pip-wall".into() });
+        let back = preset_from_json(&preset_to_json(&p)).expect("roundtrip");
+        assert_eq!(back.keyer, p.keyer);
+        assert_eq!(back.graphic, p.graphic);
+        // Altformat ohne die Felder bleibt gültig, leere Vorlage = keine Grafik, leere Ebene = Vorlagenname
+        let old = preset_from_json(&preset_to_json(&scene3())).expect("old");
+        assert!(old.keyer.is_none() && old.graphic.is_none());
+        let g = graphic_from_json(Some(&serde_json::json!({"node": "G", "templateId": "t"}))).expect("g");
+        assert_eq!(g.layer_id, "t");
+        assert!(graphic_from_json(Some(&serde_json::json!({"node": "G"}))).is_none());
     }
 }
