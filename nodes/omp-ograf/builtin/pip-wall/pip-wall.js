@@ -71,11 +71,8 @@ export default class PipWall extends HTMLElement {
       const k = `pip${i + 1}`;
       if (d[`text${i + 1}`] !== undefined) b.cap.textContent = d[`text${i + 1}`];
       if (d[`${k}On`] !== undefined) { b.on = !!d[`${k}On`]; b.el.classList.toggle("off", !b.on); }
-      // Abblenden erst, wenn die Fahrt zu Ende ist (das vergrößerte Fenster überdeckt die anderen dann ohnehin); Einblenden sofort.
-      if (d[`${k}Dim`] !== undefined) {
-        b.dimWant = !!d[`${k}Dim`];
-        if (!b.dimWant) { b.dim = false; b.el.classList.remove("dim"); }
-      }
+      // „Anderes Fenster ist vergrößert“: Ausblenden entscheidet _tick je Bild (nur wenn das Fenster ganz verdeckt ist).
+      if (d[`${k}Dim`] !== undefined) b.dimWant = !!d[`${k}Dim`];
       // Fahrt des Mischers (von, nach, Start Unix-ms, Dauer): gleiche Ease-in/out-Kurve und gleiche Uhr wie der Mischer.
       if (d[`${k}Anim`] !== undefined) {
         const a = String(d[`${k}Anim`]).split(",").map(Number);
@@ -118,7 +115,25 @@ export default class PipWall extends HTMLElement {
       b.cap.style.fontSize = `${Math.max(0, th * 0.62)}px`;
       b.cap.style.visibility = th < 12 ? "hidden" : "visible";
     }
-    if (!moving) for (const b of this._boxes) if (b.dimWant && !b.dim) { b.dim = true; b.el.classList.add("dim"); }
+    // Ein Fenster verschwindet nur, wenn es ganz vom vergrößerten verdeckt ist; ist es teilweise verdeckt, bleibt es stehen und
+    // sein Rahmen wird nur dort ausgespart, wo das vergrößerte Fenster darüber liegt.
+    const focused = this._boxes.some((b) => b.dimWant) ? this._boxes.find((b) => !b.dimWant && b.on) : null;
+    for (const b of this._boxes) {
+      let dim = false;
+      let clip = "none";
+      if (b.dimWant && focused) {
+        const [x, y, w, h] = b.cur, [fx, fy, fw, fh] = focused.cur, e = 1e-3;
+        dim = x >= fx - e && y >= fy - e && x + w <= fx + fw + e && y + h <= fy + fh + e;
+        const ox = Math.max(x, fx), oy = Math.max(y, fy), ox2 = Math.min(x + w, fx + fw), oy2 = Math.min(y + h, fy + fh);
+        if (!dim && ox2 > ox && oy2 > oy && w > 0 && h > 0) {
+          const px = (v, o, s) => `${((v - o) / s) * 100}%`;
+          clip = `polygon(evenodd, -100% -100%, 200% -100%, 200% 200%, -100% 200%, -100% -100%, ` +
+            `${px(ox, x, w)} ${px(oy, y, h)}, ${px(ox2, x, w)} ${px(oy, y, h)}, ${px(ox2, x, w)} ${px(oy2, y, h)}, ${px(ox, x, w)} ${px(oy2, y, h)}, ${px(ox, x, w)} ${px(oy, y, h)})`;
+        }
+      }
+      if (b.dim !== dim) { b.dim = dim; b.el.classList.toggle("dim", dim); }
+      if (b.clip !== clip) { b.clip = clip; b.el.style.clipPath = clip; }
+    }
     // Fenster ausschneiden: ein schwarzes Rechteck je sichtbarem Fenster in der Maske (Überlappung bleibt ein Loch).
     this._boxes.forEach((b, i) => {
       const r = this._holes.children[i];
