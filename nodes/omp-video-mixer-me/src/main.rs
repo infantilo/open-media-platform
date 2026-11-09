@@ -977,8 +977,15 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
             set_slot_pose(store, level, slot_arg(args).unwrap_or(0), PipPose::from_box(&box_))
         }
         "pip.setPose" => {
-            let raw = args.get("pose").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
-            let pose = serde_json::from_str::<Value>(raw).ok().and_then(|v| PipPose::from_json(&v)).ok_or(InvokeError::Unknown)?;
+            // `pose` darf JSON-Text oder direkt ein Objekt sein; sonst eine verstaendliche Meldung statt „unknown method“.
+            let v = match args.get("pose") {
+                Some(Value::String(raw)) => serde_json::from_str::<Value>(raw).ok(),
+                Some(o @ Value::Object(_)) => Some(o.clone()),
+                _ => None,
+            };
+            let pose = v
+                .and_then(|v| PipPose::from_json(&v))
+                .ok_or_else(|| InvokeError::Message("pose: JSON {x,y,width,height} oder {corners:[[x,y]x4]} erwartet".to_string()))?;
             set_slot_pose(store, level, slot_arg(args).unwrap_or(0), pose)
         }
         "dve.reset" => {
