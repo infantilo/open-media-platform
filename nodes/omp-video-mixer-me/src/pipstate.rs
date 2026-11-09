@@ -424,7 +424,9 @@ impl LevelPips {
                 .map(|(i, s)| {
                     serde_json::json!({
                         "slot": i,
-                        "enabled": s.enabled,
+                        // Während einer Ausfahrt ist der Slot logisch schon aus, das Bild aber noch sichtbar: Folger (Grafik) sollen
+                        // bis zum Ende der Fahrt mitlaufen.
+                        "enabled": s.enabled || self.anims.get(i).copied().flatten().is_some_and(|a| now_ms() < a.t0_ms + a.ms as u64),
                         "senderId": s.source,
                         "pose": self.target_pose(i).to_json(),
                         "anim": self.anim_json(i),
