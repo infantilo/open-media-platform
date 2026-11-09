@@ -1,0 +1,50 @@
+{
+  "name": "OGraf folgt PIPs (Demo)",
+  "definition": {
+    "title": "OGraf folgt PIPs (Demo)",
+    "description": "Demo für die Vorlage „PIP-Wand“: Drei Testquellen liegen als PIP-Slots 1–3 im Bildmischer; die Grafik „PIP-Wand“ (OGraf) liegt als Keyer über den PIPs und ihre Fenster, Rahmen und Beschriftungen folgen der Pose der PIP-Slots (Layout-Kopplung „Fenster folgt PIP-Slot“). Klick auf ein PIP im PGM-Monitor vergrößert es, die Grafik fährt mit. Einrichtung (Slots, Quellen, Keyer, Kopplung) steht in docs/examples/README-ograf-folgt-pips.md. Läuft bewusst in 480p25 (Workflow-Einstellung), damit die Fahrten der PIPs auch auf schwacher Hardware flüssig bleiben.",
+    "category": "Demo",
+    "tags": [
+      "demo",
+      "ograf",
+      "pip"
+    ],
+    "roles": [
+      {
+        "name": "Quelle 1",
+        "nodeType": "omp-source"
+      },
+      {
+        "name": "Quelle 2",
+        "nodeType": "omp-source"
+      },
+      {
+        "name": "Quelle 3",
+        "nodeType": "omp-source"
+      },
+      {
+        "name": "Bildmischer",
+        "nodeType": "omp-video-mixer-me"
+      },
+      {
+        "name": "Grafik",
+        "nodeType": "omp-ograf"
+      },
+      {
+        "name": "Viewer",
+        "nodeType": "omp-viewer"
+      }
+    ],
+    "connections": [
+      {
+        "fromRole": "Bildmischer",
+        "fromSender": "PGM",
+        "toRole": "Viewer",
+        "toReceiver": "Viewer Receiver 1"
+      }
+    ],
+    "settings": {
+      "programFormat": "480p25"
+    }
+  }
+}

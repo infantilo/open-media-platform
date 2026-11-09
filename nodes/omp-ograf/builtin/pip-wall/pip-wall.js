@@ -1,7 +1,7 @@
 /**
  * PIP-Wand: Hintergrundbild mit drei durchsichtigen Fenstern (clip-path, even-odd), Rahmen + Beschriftung je Fenster.
  * Jedes Fenster ist ein Element mit data-ograf-zone="pip1".."pip3". Die Pose kommt als Bruchteile "x,y,b,h" per update
- * (vom Layout-Kopplungstyp „follow“ des Grafik-Nodes aus dem PIP-Slot des Mischers); die Seite fährt linear in `moveMs`
+ * (vom Layout-Kopplungstyp „follow“ des Grafik-Nodes aus dem PIP-Slot des Mischers); die Seite fährt in `moveMs` linear (ohne Mischerfahrt) oder rechnet die Fahrt des Mischers mit gleicher Kurve nach
  * (der Mischer fährt linear) — so bleiben Rahmen und Bild beim Klick-Vergrößern deckungsgleich.
  * Kein oGraf-Standard: nur die Zonen sind eine Erweiterung dieses Projekts.
  */
@@ -65,14 +65,21 @@ export default class PipWall extends HTMLElement {
     if (d.captionColor) this.style.setProperty("--cap", d.captionColor);
     if (typeof d.borderWidth === "number") this.style.setProperty("--bw", `${d.borderWidth / 1920 * 100}vw`);
     if (typeof d.cornerRadius === "number") { this._rad = Math.max(0, d.cornerRadius) / 1920; this.style.setProperty("--rad", `${this._rad * 100}vw`); }
+    if (typeof d.leadMs === "number") this._leadMs = d.leadMs;
     if (typeof d.moveMs === "number") this._moveMs = Math.max(0, d.moveMs);
     this._boxes.forEach((b, i) => {
       const k = `pip${i + 1}`;
       if (d[`text${i + 1}`] !== undefined) b.cap.textContent = d[`text${i + 1}`];
       if (d[`${k}On`] !== undefined) { b.on = !!d[`${k}On`]; b.el.classList.toggle("off", !b.on); }
       if (d[`${k}Dim`] !== undefined) { b.dim = !!d[`${k}Dim`]; b.el.classList.toggle("dim", b.dim); }
+      // Fahrt des Mischers (von, nach, Start Unix-ms, Dauer): gleiche Ease-in/out-Kurve und gleiche Uhr wie der Mischer.
+      if (d[`${k}Anim`] !== undefined) {
+        const a = String(d[`${k}Anim`]).split(",").map(Number);
+        b.anim = a.length === 10 && a.every(Number.isFinite) ? { from: a.slice(0, 4), to: a.slice(4, 8), t0: a[8], ms: a[9] } : null;
+      }
       const nb = parseBox(d[`${k}Box`]);
-      if (nb && nb.some((v, j) => Math.abs(v - b.to[j]) > 1e-6)) {
+      if (b.anim) { b.to = nb || b.to; }
+      else if (nb && nb.some((v, j) => Math.abs(v - b.to[j]) > 1e-6)) {
         b.from = b.cur.slice();
         b.to = nb;
         b.t0 = performance.now();
@@ -86,9 +93,17 @@ export default class PipWall extends HTMLElement {
     const now = performance.now();
     let moving = false;
     for (const b of this._boxes) {
+      if (b.anim) {
+        const lead = this._leadMs || 0;
+        const u = b.anim.ms <= 0 ? 1 : Math.max(0, Math.min(1, (Date.now() + lead - b.anim.t0) / b.anim.ms));
+        const e = u * u * (3 - 2 * u);
+        b.cur = b.anim.from.map((f, j) => f + (b.anim.to[j] - f) * e);
+        if (u < 1) moving = true; else { b.cur = b.anim.to.slice(); b.from = b.cur.slice(); b.to = b.cur.slice(); }
+      } else {
       const t = this._moveMs <= 0 ? 1 : Math.min(1, (now - b.t0) / this._moveMs);
       b.cur = b.from.map((f, j) => f + (b.to[j] - f) * t);
       if (t < 1) moving = true;
+      }
       const [x, y, w, h] = b.cur;
       Object.assign(b.el.style, { left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` });
       // Beschriftung als Reiter über dem Rahmen (innen läge sie unter dem PIP-Video des Mischers): so hoch wie der Platz erlaubt.

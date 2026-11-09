@@ -736,8 +736,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         key_flow_id: key_flow_id.clone(),
         label: label.clone(),
         harness_url,
-        width: pipeline::WIDTH,
-        height: pipeline::HEIGHT,
+        width: pipeline::width(),
+        height: pipeline::height(),
     };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
@@ -847,8 +847,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     transport: Some(TRANSPORT_MXL.to_string()),
                     flow: Some(FlowSpec::Video {
                         id: Some(fill_flow_id),
-                        frame_width: pipeline::WIDTH,
-                        frame_height: pipeline::HEIGHT,
+                        frame_width: pipeline::width(),
+                        frame_height: pipeline::height(),
                         grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
                         grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
                     }),
@@ -863,8 +863,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     transport: Some(TRANSPORT_MXL.to_string()),
                     flow: Some(FlowSpec::Video {
                         id: Some(key_flow_id),
-                        frame_width: pipeline::WIDTH,
-                        frame_height: pipeline::HEIGHT,
+                        frame_width: pipeline::width(),
+                        frame_height: pipeline::height(),
                         grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
                         grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
                     }),

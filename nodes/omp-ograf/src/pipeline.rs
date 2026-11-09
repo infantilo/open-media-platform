@@ -39,6 +39,17 @@ use tokio::sync::oneshot;
 // verdrahtet, wie `omp-source`s `WIDTH`/`HEIGHT`).
 pub const WIDTH: u32 = 1280;
 pub const HEIGHT: u32 = 720;
+/// Breite/Höhe der Grafik: `OMP_WIDTH`/`OMP_HEIGHT` (Workflow-Einstellung „Programmformat“, durch 8 teilbar,
+/// höchstens 3840×2160), sonst 1280×720. So passt die Grafik zur Mischer-Auflösung und muss nicht skaliert werden.
+pub fn width() -> u32 {
+    env_dim("OMP_WIDTH", WIDTH, 3840)
+}
+pub fn height() -> u32 {
+    env_dim("OMP_HEIGHT", HEIGHT, 2160)
+}
+fn env_dim(key: &str, default: u32, max: u32) -> u32 {
+    std::env::var(key).ok().and_then(|v| v.trim().parse::<u32>().ok()).filter(|v| *v >= 64 && *v <= max && v % 8 == 0).unwrap_or(default)
+}
 pub const FRAMERATE_NUMERATOR: u32 = 25;
 pub const FRAMERATE_DENOMINATOR: u32 = 1;
 

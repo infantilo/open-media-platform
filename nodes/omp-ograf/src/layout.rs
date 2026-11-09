@@ -85,6 +85,8 @@ pub struct SlotView {
     pub enabled: bool,
     pub focused: bool,
     pub other_focus: bool,
+    /// Laufende Mischerfahrt: `[x,y,b,h]` von/nach (0..1), Startzeit (Unix-ms), Dauer (ms).
+    pub anim: Option<([f64; 4], [f64; 4], u64, u64)>,
 }
 
 /// Liest den Slot aus `pip.slots`; `None`, wenn es ihn nicht gibt.
@@ -94,7 +96,13 @@ pub fn slot_view(slots: &Value, slot: u32, canvas: (u32, u32)) -> Option<SlotVie
     let (cw, ch) = (canvas.0 as f64, canvas.1 as f64);
     let p = &me["pose"];
     let g = |k: &str| p[k].as_f64().unwrap_or(0.0);
+    let norm = |p: &Value| -> [f64; 4] {
+        let g = |k: &str| p[k].as_f64().unwrap_or(0.0);
+        [g("x") / cw, g("y") / ch, g("width") / cw, g("height") / ch]
+    };
+    let anim = me.get("anim").filter(|a| a.is_object()).map(|a| (norm(&a["from"]), norm(&a["to"]), a["t0"].as_u64().unwrap_or(0), a["ms"].as_u64().unwrap_or(0)));
     Some(SlotView {
+        anim,
         rect: [g("x") / cw, g("y") / ch, g("width") / cw, g("height") / ch],
         enabled: me["enabled"].as_bool().unwrap_or(false),
         focused: me["focused"].as_bool().unwrap_or(false),
@@ -109,6 +117,12 @@ pub fn follow_data(zone: &str, v: &SlotView) -> serde_json::Map<String, Value> {
     m.insert(format!("{zone}Box"), json!(r));
     m.insert(format!("{zone}On"), json!(v.enabled));
     m.insert(format!("{zone}Dim"), json!(v.other_focus));
+    // Fahrt des Mischers: die Vorlage rechnet sie mit derselben Ease-in/out-Kurve nach (Zeitbezug Unix-ms).
+    let anim = v.anim.map_or(String::new(), |(f, t, t0, ms)| {
+        let n = |a: [f64; 4]| a.map(|x| format!("{:.5}", x)).join(",");
+        format!("{},{},{},{}", n(f), n(t), t0, ms)
+    });
+    m.insert(format!("{zone}Anim"), json!(anim));
     m
 }
 

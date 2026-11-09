@@ -128,9 +128,30 @@ pub struct SlotState {
     pub scene_z: u32,
 }
 
+/// Laufende oder zuletzt gestartete Fahrt eines Slots (für `pip.slots`, damit Grafiken die Fahrt gleich nachrechnen).
+#[derive(Debug, Clone, Copy)]
+pub struct AnimRec {
+    pub from: PipPose,
+    pub to: PipPose,
+    /// Startzeit (Unix-ms) und Dauer.
+    pub t0_ms: u64,
+    pub ms: u32,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+/// Fortschritt mit derselben Weichzeichnung wie die Fahrt in der Pipeline (Ease in/out).
+fn smooth(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 #[derive(Debug, Clone)]
 pub struct LevelPips {
     pub slots: Vec<SlotState>,
+    anims: Vec<Option<AnimRec>>,
     pub focused: Option<usize>,
     /// Die ersten `two_d` Slots haben ein Transform-Element (Trapez/Rotation).
     two_d: usize,
@@ -176,10 +197,35 @@ impl LevelPips {
                     scene_z: base_z(s),
                 })
                 .collect(),
+            anims: vec![None; slots.max(1)],
             focused: None,
             two_d,
             width,
             height,
+        }
+    }
+
+    /// Pose des Slots jetzt: mitten in einer Fahrt der berechnete Zwischenstand, sonst die zuletzt gemeldete Pose.
+    fn live_pose(&self, slot: usize) -> PipPose {
+        match self.anims.get(slot).copied().flatten() {
+            Some(a) if a.ms > 0 && now_ms() < a.t0_ms + a.ms as u64 => {
+                let t = (now_ms().saturating_sub(a.t0_ms)) as f64 / a.ms as f64;
+                a.from.lerp(&a.to, smooth(t))
+            }
+            Some(a) => a.to,
+            None => self.slots[slot].pose,
+        }
+    }
+
+    /// Merkt sich die Fahrten aus `actions` (Startzeit = jetzt) für `slots_json`.
+    fn note_anims(&mut self, actions: &[Action]) {
+        for a in actions {
+            if let Action::Animate { slot, from, to, ms, .. } = a {
+                if *slot < self.anims.len() {
+                    let from = from.unwrap_or_else(|| self.live_pose(*slot));
+                    self.anims[*slot] = Some(AnimRec { from, to: *to, t0_ms: now_ms(), ms: *ms });
+                }
+            }
         }
     }
 
@@ -227,6 +273,7 @@ impl LevelPips {
                 }
             }
         }
+        self.note_anims(&out);
         out
     }
 
@@ -256,6 +303,7 @@ impl LevelPips {
             }
             self.slots[s].enabled = false;
         }
+        self.note_anims(&out);
         out
     }
 
@@ -276,12 +324,17 @@ impl LevelPips {
         st.z = FOCUS_Z;
         out.push(Action::Animate { slot, from: None, to: st.focus_pose, ms, then_disable: false, z_during: Some(FOCUS_Z), z_after: Some(FOCUS_Z) });
         self.focused = Some(slot);
+        self.note_anims(&out);
         out
     }
 
     pub fn plan_unfocus(&mut self, ms: u32) -> Vec<Action> {
         match self.focused.take() {
-            Some(prev) => vec![self.back_to_hold(prev, ms)],
+            Some(prev) => {
+                let out = vec![self.back_to_hold(prev, ms)];
+                self.note_anims(&out);
+                out
+            }
             None => Vec::new(),
         }
     }
@@ -302,6 +355,16 @@ impl LevelPips {
         Some((hit, self.plan_toggle(hit, ms)))
     }
 
+    /// Fahrt des Slots für Grafiken (`from`/`to` als Pose, `t0` Unix-ms, `ms` Dauer); `null`, wenn keine läuft.
+    fn anim_json(&self, slot: usize) -> Value {
+        match self.anims.get(slot).copied().flatten() {
+            Some(a) if a.ms > 0 && now_ms() < a.t0_ms + a.ms as u64 + 200 => {
+                serde_json::json!({"from": a.from.to_json(), "to": a.to.to_json(), "t0": a.t0_ms, "ms": a.ms})
+            }
+            _ => Value::Null,
+        }
+    }
+
     pub fn slots_json(&self) -> Value {
         Value::Array(
             self.slots
@@ -313,6 +376,7 @@ impl LevelPips {
                         "enabled": s.enabled,
                         "senderId": s.source,
                         "pose": self.target_pose(i).to_json(),
+                        "anim": self.anim_json(i),
                         "holdPose": s.hold.to_json(),
                         "focusPose": s.focus_pose.to_json(),
                         "z": s.z,
