@@ -1416,8 +1416,12 @@ class OmpVideoMixerMePanel extends HTMLElement {
       let monInFlight = 0;
       let monSeq = 0;
       let monShown = 0;
+      let monFails = 0;
+      let monPauseUntil = 0;
       const monTick = async () => {
         if (monInFlight >= MON_MAX_IN_FLIGHT || !monitorOn || !latestPgmPreview) return;
+        // Node weg/nicht erreichbar: nach mehreren Fehlern nur noch alle 2 s versuchen statt 25×/s.
+        if (Date.now() < monPauseUntil) return;
         monInFlight++;
         const seq = ++monSeq;
         try {
@@ -1432,8 +1436,13 @@ class OmpVideoMixerMePanel extends HTMLElement {
               monImg.dataset.blobUrl = url;
               if (old) URL.revokeObjectURL(old);
             }
+            monFails = 0;
+          } else if (++monFails >= 5) {
+            monPauseUntil = Date.now() + 2000;
           }
-        } catch { /* nächster Takt */ }
+        } catch {
+          if (++monFails >= 5) monPauseUntil = Date.now() + 2000;
+        }
         monInFlight--;
       };
       const renderMonitor = () => {

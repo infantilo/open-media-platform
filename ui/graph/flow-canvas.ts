@@ -1148,6 +1148,9 @@ export class FlowCanvas extends HTMLElement {
   async #fetchAndRender() {
     const response = await apiFetch("/api/v1/graph");
     this.#graph = await response.json();
+    // Node beendet, während sein Parameter-Tab offen ist: Tab schließen, sonst pollt das Panel-Bundle (Mischer-Monitor
+    // 25×/s, Graph-Abruf alle 2 s) ins Leere und hängt die Seite auf.
+    if (this.#panelNodeId !== null && !this.#graph.nodes.some((n) => n.id === this.#panelNodeId)) this.#closePanel();
     this.#cleanupStalePreviewState();
     this.#portTransport.clear();
     for (const node of this.#graph.nodes) {
