@@ -37,6 +37,11 @@ const T = (() => {
       lockedBy: "{u} bearbeitet diese Sendung gerade — schreibgeschützt.", lockTake: "Bearbeitung übernehmen", lockLost: "Die Bearbeitung wurde von {u} übernommen — schreibgeschützt.", lockMine: "Du bearbeitest",
       tp: "Teleprompter", tpClose: "Schließen", tpMirror: "Spiegeln", tpSpeed: "Auto-Scroll", tpSize: "Schrift", tpEmpty: "Keine Karten in dieser Sendung.", readTime: "Lesezeit ≈ {t}", readOver: "länger als geplant ({m} min)",
       tabLive: "Sendebetrieb", tabPlan: "Planung", tabList: "Playlist", tabMod: "Moderation", tabLog: "Protokoll", tabTrans: "Übergänge", transHint: "Die Übergänge der Playlist: Segue-Punkt, Blenden und Einsatz je Titelpaar. „Bearbeiten“ öffnet den Segue-Editor (auch per Doppelklick auf die Zeit in der Playlist).", transStd: "Standardblende", transEdit: "Bearbeiten", transNone: "Weniger als zwei Zeilen in der Playlist.", transFadeOut: "aus", transFadeIn: "ein", transShift: "Einsatz", tabsLabel: "Bereiche",
+      lay: "Layout", layZones: "Bereiche (Reihenfolge, sichtbar)", layListH: "Höhe der Playlist", laySideW: "Breite der rechten Spalte", layCur: "Farbe: läuft", layNext: "Farbe: bereit", layReset: "Standard", layHint: "Gilt für diese Sendung (wird mit „Speichern“ in der Sendung abgelegt) und merkt sich dieser Browser als Vorgabe.", "z.cmd": "Tasten", "z.pfl": "Vorhören", "z.card": "Moderationskarte", "z.hot": "Hotkeys", "z.lib": "Bibliothek",
+      lib: "Bibliothek", libSoon: "Die Bibliothek (Suche im Bestand, Ziehen in die Playlist) wird angebunden, sobald die Datenquellen feststehen.", libSearch: "Titel, Interpret …",
+      pfl: "Vorhören (PFL)", pflNone: "Zeile in der Playlist wählen", pflLoading: "lädt …", pflFail: "Vorhören nicht möglich: {d}", pflSel: "gewählt",
+      bCue: "Cue", bReset: "Reset", bLoad: "Laden", bNav: "Navigator", bEdit: "Bearbeiten", bDiag: "Protokoll", bPlan: "Planung", bMod: "Modtext", bTp: "Teleprompter", bStart: "Start", bStop: "Stopp", bTrans: "Übergang",
+      cOnAir: "on air", cOff: "aus", cAuto: "Auto", cNextIn: "Nächstes in", cReady: "bereit", cPlaying: "spielt", cPlayed: "gespielt", cPlan: "Playlist", cNoShow: "Keine Sendung geladen", cEmptyList: "Keine Playlist geladen — Reiter „Playlist“ oder „Planung“.", cIntro: "Intro", cOutro: "Outro", cHard: "feste Zeit", cDeckNext: "Nächster Titel", cDeckNone: "—", cCart: "Hotkeys",
       hint: "Eine harte Marke (Uhrzeit) lässt das Element zu dieser Zeit einsetzen: beim Start werden Füller weggelassen/eingefügt und Segue-Punkte verschoben (Entscheidungen im As-Run). Der Segue-Punkt ist die Stelle in der Datei, ab der der Nachfolger starten darf; ohne Angabe 3 s vor Dateiende. Der Log wird erst mit „Log laden“ übernommen.",
     },
     en: {
@@ -73,6 +78,11 @@ const T = (() => {
       lockedBy: "{u} is editing this show — read only.", lockTake: "Take over editing", lockLost: "Editing was taken over by {u} — read only.", lockMine: "You are editing",
       tp: "Teleprompter", tpClose: "Close", tpMirror: "Mirror", tpSpeed: "Auto-scroll", tpSize: "Size", tpEmpty: "No cards in this show.", readTime: "Reading time ≈ {t}", readOver: "longer than planned ({m} min)",
       tabLive: "On air", tabPlan: "Planning", tabList: "Playlist", tabMod: "Presenter", tabLog: "Log", tabTrans: "Transitions", transHint: "The playlist transitions: segue point, blends and start per pair. “Edit” opens the segue editor (also by double-clicking the time cell in the playlist).", transStd: "Default blend", transEdit: "Edit", transNone: "Fewer than two playlist rows.", transFadeOut: "out", transFadeIn: "in", transShift: "start", tabsLabel: "Sections",
+      lay: "Layout", layZones: "Zones (order, visible)", layListH: "Playlist height", laySideW: "Right column width", layCur: "Colour: playing", layNext: "Colour: ready", layReset: "Default", layHint: "Applies to this show (stored in the show with “Save”) and is remembered by this browser as default.", "z.cmd": "Buttons", "z.pfl": "Pre-listen", "z.card": "Presenter card", "z.hot": "Hotkeys", "z.lib": "Library",
+      lib: "Library", libSoon: "The library (search the stock, drag into the playlist) will be connected once the data sources are settled.", libSearch: "Title, artist …",
+      pfl: "Pre-listen (PFL)", pflNone: "Select a playlist row", pflLoading: "loading …", pflFail: "Pre-listen failed: {d}", pflSel: "selected",
+      bCue: "Cue", bReset: "Reset", bLoad: "Load", bNav: "Navigator", bEdit: "Edit", bDiag: "Log", bPlan: "Planning", bMod: "Presenter", bTp: "Teleprompter", bStart: "Start", bStop: "Stop", bTrans: "Transition",
+      cOnAir: "on air", cOff: "off", cAuto: "Auto", cNextIn: "Next in", cReady: "ready", cPlaying: "playing", cPlayed: "played", cPlan: "Playlist", cNoShow: "No show loaded", cEmptyList: "No playlist loaded — see tab “Playlist” or “Planning”.", cIntro: "Intro", cOutro: "Outro", cHard: "fixed time", cDeckNext: "Next track", cDeckNone: "—", cCart: "Hotkeys",
       hint: "A hard mark (time of day) makes the item start at that time: at start, fillers are dropped/inserted and segue points are moved (decisions in the as-run). The segue point is the position in the file from which the next item may start; without it, 3 s before the end. The log only takes effect with “Load log”.",
     },
   };
@@ -177,6 +187,43 @@ const STYLE = `
   .hkkey .nm { font-weight: 700; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,.6); } .hkkey .tm { font-variant-numeric: tabular-nums; font-size: 11px; opacity: .9; }
   .hkkey .pr { position: absolute; left: 0; bottom: 0; height: 4px; background: #fff; opacity: .85; } .hkkey.playing { box-shadow: 0 0 0 2px #fff; }
   .hkkey.c-red { background: #b03030; } .hkkey.c-green { background: #2f8a3e; } .hkkey.c-blue { background: #2f5fb0; } .hkkey.c-orange { background: #c7731d; } .hkkey.c-purple { background: #7a3fa0; } .hkkey.c-teal { background: #1f8a86; } .hkkey.c-grey { background: #55555c; }
+  /* Sendeplatz (Konsole) — feste Größen, damit nichts springt */
+  .cons { display: grid; gap: 10px; margin-bottom: 10px; }
+  .c-top { display: grid; grid-template-columns: auto 1fr auto auto; gap: 18px; align-items: center; padding: 10px 14px; background: linear-gradient(90deg, #0f1522, #172033); border: 1px solid #223049; border-radius: 10px; min-height: 64px; }
+  .c-clock { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .02em; min-width: 150px; }
+  .c-date { color: var(--mut); font-size: 12px; line-height: 1.5; } .c-show { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-onair { min-width: 96px; text-align: center; padding: 6px 14px; border-radius: 8px; font-size: 20px; font-weight: 800; letter-spacing: .06em; text-transform: lowercase; background: #2c2c30; color: var(--mut); border: 1px solid var(--bd); }
+  .c-onair.on { background: #e53935; color: #fff; border-color: #ff8a80; box-shadow: 0 0 12px 2px rgba(229,57,53,.55); }
+  .c-auto { min-width: 130px; text-align: center; padding: 6px 10px; border-radius: 8px; background: #0b101b; border: 1px solid #223049; font-size: 13px; }
+  .c-main { display: grid; grid-template-columns: minmax(0, 1fr) var(--c-sidew, 380px); gap: 10px; }
+  .c-lay { display: none; padding: 10px 14px; border: 1px dashed #3a4a68; border-radius: 10px; gap: 14px; flex-wrap: wrap; align-items: end; } .c-lay.open { display: flex; } .c-lay label { display: flex; flex-direction: column; gap: 3px; color: var(--mut); } .c-lay .zr { display: flex; gap: 4px; align-items: center; color: var(--t, #e6e6e6); } .c-lay .zr span { min-width: 120px; }
+  .c-list { height: var(--c-listh, 560px); overflow-y: auto; border: 1px solid #223049; border-radius: 10px; background: #0b101b; padding: 4px; }
+  .c-row { display: grid; grid-template-columns: 74px 28px minmax(0, 1fr) 150px 64px 70px; gap: 8px; align-items: center; min-height: 52px; padding: 4px 10px; margin-bottom: 3px; border-radius: 7px; background: #172033; border-left: 6px solid #3a4a68; }
+  .c-row.jingle { border-left-color: #c7731d; } .c-row.speech { border-left-color: #7a3fa0; } .c-row.song { border-left-color: #2f8cff; }
+  .c-row.fix { box-shadow: inset 0 0 0 1px #e0a030; }
+  .c-row.next { background: var(--c-next, #1c5a30); } .c-row.cur { background: var(--c-cur, #b02a2a); box-shadow: 0 0 10px rgba(229,57,53,.45); } .c-row.done { opacity: .5; }
+  .c-row .tm { font-variant-numeric: tabular-nums; font-weight: 600; } .c-row .ic { text-align: center; font-size: 15px; }
+  .c-row .nm { min-width: 0; } .c-row .nm b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .c-row .nm span { display: block; color: rgba(255,255,255,.65); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-row .mk { font-size: 11px; line-height: 1.4; color: rgba(255,255,255,.75); font-variant-numeric: tabular-nums; } .c-row .du { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; } .c-row .st { text-align: right; font-size: 11px; color: rgba(255,255,255,.8); }
+  .c-hint { padding: 18px; color: var(--mut); }
+  .c-side { display: grid; gap: 10px; min-width: 0; align-content: start; }
+  .c-deck { display: grid; grid-template-columns: minmax(0, 1fr) 130px minmax(0, 1fr); gap: 10px; }
+  .c-pl { border-radius: 10px; padding: 10px 14px; min-height: 150px; border: 1px solid #223049; background: #0f1522; display: grid; grid-template-rows: auto auto auto auto; gap: 4px; }
+  .c-pl.m1.live { background: #8f1f1f; border-color: #ff8a80; } .c-pl.m2.live { background: #17613a; border-color: #7bd89a; }
+  .c-pl .hd { display: flex; justify-content: space-between; font-weight: 800; font-size: 18px; } .c-pl .ti { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .c-pl .su { font-size: 11px; opacity: .75; }
+  .c-pl .bar { height: 8px; background: rgba(0,0,0,.4); border-radius: 4px; overflow: hidden; margin: 0; align-self: end; } .c-pl .bar > div { height: 100%; background: #fff; }
+  .c-pl .rem { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+  .c-count { display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 10px; background: #e9e9ee; color: #1b1b1d; min-height: 150px; }
+  .c-count small { font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: .05em; } .c-count b { font-size: 64px; line-height: 1; font-variant-numeric: tabular-nums; } .c-count.hot b { color: #d32f2f; }
+  .c-side .cardlive { height: 150px; margin: 0; } .c-side details.sec { margin: 0; }
+  .c-row.sel { background: #f2e24a; color: #1b1b1d; } .c-row.sel .nm span, .c-row.sel .mk, .c-row.sel .st { color: rgba(0,0,0,.65); } .c-row { cursor: pointer; }
+  .c-card { border: 1px solid #223049; border-radius: 10px; background: #0f1522; padding: 8px 10px; }
+  .c-card h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--mut); } .c-card.soon { opacity: .6; } .c-card.soon p { margin: 6px 0 0; font-size: 11px; }
+  .c-pflbar { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; } .c-pflbar b { font-size: 22px; font-variant-numeric: tabular-nums; min-width: 80px; }
+  .c-pflbar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--mut); }
+  canvas.wf { display: block; width: 100%; height: 48px; margin-top: 6px; background: #0b101b; border-radius: 6px; } .c-pl canvas.wf { background: rgba(0,0,0,.35); height: 40px; margin: 0; }
+  .c-cmd { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; } .c-cmd button { min-height: 38px; font-weight: 600; background: #26324a; } .c-cmd button.go { background: #17613a; border-color: #7bd89a; } .c-cmd button.stop { background: #8f1f1f; border-color: #ff8a80; } .c-cmd button.cue { background: #b57b1a; color: #fff; }
+  @media (max-width: 1100px) { .c-main, .c-deck { grid-template-columns: 1fr; } .c-top { grid-template-columns: 1fr auto; } }
   .hked { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; align-items: end; padding: 6px; border: 1px solid var(--bd); border-radius: 5px; margin-bottom: 6px; } .hked label { display: flex; flex-direction: column; gap: 2px; color: var(--mut); }
 `;
 
@@ -539,12 +586,13 @@ class OmpRadioAutomationPanel extends HTMLElement {
     const markShow = () => { if (!curShow) return; showDirty = true; unsavedEl.textContent = T("showUnsaved"); if (typeof updTabs === "function") updTabs(); };
     const clearShowDirty = () => { showDirty = false; unsavedEl.textContent = ""; if (typeof updTabs === "function") updTabs(); };
     const verSel = h("select");
-    const docFromState = () => ({ log: toWire(), carts: showCarts, cards, notes: notesText.trim() ? [{ id: "n1", text: notesText }] : [] });
+    const docFromState = () => ({ log: toWire(), carts: showCarts, cards, layout: lay, notes: notesText.trim() ? [{ id: "n1", text: notesText }] : [] });
     const applyDoc = (c) => {
       const doc = c || {};
       if (doc.log && doc.log.items) fromWire(doc.log); else { rows = []; fillers = []; blockTargets = {}; }
       logIdInput.value = logId; showCarts = (doc.carts || []).map((x) => ({ ...x })); cards = (doc.cards || []).map((x) => ({ ...x }));
       notesText = (doc.notes && doc.notes[0] && doc.notes[0].text) || ""; notesArea.value = notesText;
+      if (doc.layout && typeof applyLay === "function") { lay = { ...defLay(), ...doc.layout }; applyLay(); renderLay(); }
       renderRows(); renderCards(); renderShowBar(); cartsEdit = null; hkEditBtn.textContent = T("hotEdit"); renderCarts();
     };
     const renderShowBar = () => {
@@ -762,6 +810,146 @@ class OmpRadioAutomationPanel extends HTMLElement {
     };
     const cartSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("hot")), h("div", { class: "body" }, h("div", { class: "bar" }, hkEditBtn, hkAdd, hkSave), hkEdit, hkGrid));
 
+    // ---- Sendeplatz (Konsole im Stil klassischer Sendeoberflächen, in unserem Look) ----
+    const cClock = h("div", { class: "c-clock" }), cDate = h("div", { class: "c-date" }), cShow = h("div", { class: "c-show" }), cOn = h("div", { class: "c-onair" }), cAuto = h("div", { class: "c-auto" });
+    const cList = h("div", { class: "c-list" });
+    const mkDeck = (cls, label) => { const ti = h("div", { class: "ti" }), su = h("div", { class: "su" }), rem = h("div", { class: "rem" }), pr = h("div"); const cv = h("canvas", { class: "wf", width: 600, height: 80 }); return { ti, su, rem, pr, cv, key: "", el: h("div", { class: `c-pl ${cls}` }, h("div", { class: "hd" }, h("span", {}, label), rem), h("div", {}, ti, su), cv, h("div", { class: "bar" }, pr)) }; };
+    const m1 = mkDeck("m1", "M1"), m2 = mkDeck("m2", "M2");
+    const cCountNum = h("b", {}), cCount = h("div", { class: "c-count" }, h("small", {}, T("cNextIn")), cCountNum);
+    // Wellenform (Spitzenwerte vom Node, je Datei einmal geholt) und Vorhören im Browser (PFL, nicht im Sendeweg)
+    const peakCache = new Map();
+    const getPeaks = (file, dur) => { const k = `${file}|${dur}`; if (!peakCache.has(k)) { peakCache.set(k, null); fetch(`${base}/segue/peaks?file=${encodeURIComponent(file)}&durationMs=${dur}&bins=300`).then((r) => (r.ok ? r.json() : null)).then((j) => { if (j && j.peaks) { peakCache.set(k, j.peaks); wfDirty = true; } else peakCache.delete(k); }).catch(() => peakCache.delete(k)); } return peakCache.get(k); };
+    let wfDirty = false;
+    const drawWf = (cv, peaks, frac, color) => {
+      const g = cv.getContext("2d"), W = cv.width, H = cv.height; g.clearRect(0, 0, W, H);
+      if (!peaks) return;
+      const n = peaks.length, bw = W / n;
+      for (let i = 0; i < n; i++) { const v = (peaks[i] / 255) * H * 0.95; g.fillStyle = i / n <= frac ? color : "rgba(255,255,255,.28)"; g.fillRect(i * bw, (H - v) / 2, Math.max(1, bw - 1), Math.max(1, v)); }
+      if (frac > 0) { g.fillStyle = "#fff"; g.fillRect(Math.min(W - 2, frac * W), 0, 2, H); }
+    };
+    let selIdx = -1, pflCtx = null, pflSrc = null, pflStart = 0, pflLen = 0, pflBusy = false;
+    const pflTime = h("b", {}, "0:00"), pflName = h("span", {}, T("pflNone")), pflCv = h("canvas", { class: "wf", width: 600, height: 96 });
+    const pflStop = () => { try { if (pflSrc) { pflSrc.onended = null; pflSrc.stop(); } } catch { /* schon gestoppt */ } pflSrc = null; if (pflCtx) { pflCtx.close().catch(() => {}); pflCtx = null; } };
+    const pflPlay = async () => {
+      const it = (view.items || [])[selIdx]; if (!it || pflBusy) return;
+      if (pflSrc) { pflStop(); return; }
+      pflBusy = true; pflName.textContent = T("pflLoading");
+      try {
+        const dur = it.endMs - it.startMs, r = (rows[selIdx] && rows[selIdx].somMs) || 0, to = Math.min(dur, r + 120000);
+        const res = await fetch(`${base}/segue/audio?file=${encodeURIComponent(it.file)}&fromMs=${r}&toMs=${to}`);
+        if (!res.ok) throw new Error(res.status);
+        const pcm = new Int16Array(await res.arrayBuffer()), n = pcm.length >> 1;
+        pflCtx = new AudioContext({ sampleRate: 48000 }); const buf = pflCtx.createBuffer(2, n, 48000);
+        const L = buf.getChannelData(0), R = buf.getChannelData(1); for (let i = 0; i < n; i++) { L[i] = pcm[2 * i] / 32768; R[i] = pcm[2 * i + 1] / 32768; }
+        pflSrc = pflCtx.createBufferSource(); pflSrc.buffer = buf; pflSrc.connect(pflCtx.destination); const ctx = pflCtx;
+        pflSrc.onended = () => { if (pflCtx === ctx) { pflStop(); pflTime.textContent = "0:00"; } };
+        pflStart = performance.now(); pflLen = n / 48; pflSrc.start();
+      } catch (e) { pflStop(); show(T("pflFail", { d: e.message })); }
+      pflBusy = false; renderPfl();
+    };
+    const renderPfl = () => {
+      const it = (view.items || [])[selIdx];
+      pflName.textContent = it ? `${nameOf(selIdx) || it.id}` : T("pflNone");
+      const play = pflSrc ? Math.min(1, (performance.now() - pflStart) / Math.max(1, pflLen)) : 0;
+      pflTime.textContent = it ? `PFL: ${fmtMs(pflSrc ? pflLen - (performance.now() - pflStart) : 0)}` : "PFL: 0:00";
+      drawWf(pflCv, it ? getPeaks(it.file, it.endMs - it.startMs) : null, play, "#f2c14a");
+    };
+    const selectRow = (k) => { if (pflSrc) pflStop(); selIdx = k; cRowEls.forEach((e, i) => e.row.classList.toggle("sel", i === k)); renderPfl(); };
+    const jump = (t) => () => selectTab(t);
+    const cb = (cls, label, fn) => h("button", { class: cls, onclick: fn }, label);
+    const cmdGrid = h("div", { class: "c-cmd" },
+      cb("go", T("bStart"), () => startBtn.click()), cb("stop", T("bStop"), () => stopBtn.click()), cb("", T("bLoad"), () => loadBtn.click()),
+      cb("cue", T("bCue"), () => pflPlay()), cb("", T("bReset"), () => { pflStop(); renderPfl(); }), cb("", T("bTrans"), () => { if (selIdx > 0) openSegueEditor(selIdx); else show(T("pflNone")); }),
+      cb("", T("bNav"), jump("list")), cb("", T("bEdit"), jump("list")), cb("", T("bPlan"), jump("plan")),
+      cb("", T("bMod"), jump("mod")), cb("", T("bTp"), () => openTp()), cb("", T("bDiag"), jump("log")));
+    const libCard = h("div", { class: "c-card soon" }, h("h4", {}, T("lib")), h("input", { type: "text", disabled: "", placeholder: T("libSearch"), style: "width:100%" }), h("p", {}, T("libSoon")));
+    const pflCard = h("div", { class: "c-card" }, h("div", { class: "c-pflbar" }, pflTime, pflName), pflCv);
+    addEventListener("pagehide", pflStop);
+    let cSig = "", cRowEls = [];
+    const absTime = (it) => (view.startUnixMs > 0 ? new Date(view.startUnixMs + it.startMs).toLocaleTimeString(LOCALE) : `+${fmtMs(it.startMs)}`);
+    const renderConsole = () => {
+      const nowMs = view.nowUnixMs || Date.now(), d = new Date(nowMs);
+      cClock.textContent = d.toLocaleTimeString(LOCALE);
+      cDate.replaceChildren(d.toLocaleDateString(LOCALE, { weekday: "long" }), h("br"), d.toLocaleDateString(LOCALE));
+      cShow.textContent = curShow ? `${curShow.title}${curShow.slotStart ? " · " + new Date(curShow.slotStart).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" }) : ""}` : T("cNoShow");
+      const its = view.items || [], running = view.state === "running" && view.startUnixMs > 0;
+      cOn.textContent = T(running ? "cOnAir" : "cOff"); cOn.classList.toggle("on", running);
+      cAuto.textContent = autoChk.checked ? `${T("cAuto")} ${autoSt.textContent || ""}`.trim() : T("cAuto") + " —";
+      const el = running ? nowMs - view.startUnixMs : null;
+      const idx = el === null ? -1 : its.findIndex((i) => el >= i.startMs && el < i.endMs);
+      const nxtIdx = el === null ? (its.length ? 0 : -1) : its.findIndex((i, k) => k > idx && i.startMs > (idx >= 0 ? its[idx].startMs : el - 1) && i.startMs >= (idx >= 0 ? 0 : el));
+      const valid = !dirty && its.length === rows.length;
+      // Struktur nur bei geänderter Playlist neu bauen, sonst an Ort und Stelle aktualisieren (Scroll und Klicks bleiben)
+      const sig = JSON.stringify(its.map((i) => [i.id, i.endMs - i.startMs])) + "|" + valid;
+      if (sig !== cSig) {
+        cSig = sig; cRowEls = [];
+        if (!its.length) cList.replaceChildren(h("div", { class: "c-hint" }, T("cEmptyList")));
+        else cList.replaceChildren(...its.map((it, k) => {
+          const r = valid ? rows[k] : null; const kind = (r && r.kind) || it.kind || "song";
+          const tm = h("div", { class: "tm" }), st = h("div", { class: "st" });
+          const mk = h("div", { class: "mk" }, r && r.introMs ? h("div", {}, `${T("cIntro")} ${(r.introMs / 1000).toFixed(0)}`) : null, r && r.outroMs ? h("div", {}, `${T("cOutro")} ${(r.outroMs / 1000).toFixed(1)}`) : null);
+          const row = h("div", { class: `c-row ${kind}${r && r.fixText ? " fix" : ""}` }, tm, h("div", { class: "ic" }, kind === "jingle" ? "♪" : kind === "speech" ? "🎙" : "♫"),
+            h("div", { class: "nm" }, h("b", {}, nameOf(k) || it.id), h("span", {}, [r && r.block, r && r.fixText ? `${T("cHard")} ${r.fixText}` : "", it.file].filter(Boolean).join(" · "))), mk, h("div", { class: "du" }, fmtMs(it.endMs - it.startMs)), st);
+          row.addEventListener("click", () => selectRow(k)); cRowEls.push({ row, tm, st }); if (k === selIdx) row.classList.add("sel"); return row;
+        }));
+      }
+      its.forEach((it, k) => {
+        const e = cRowEls[k]; if (!e) return;
+        const cur = k === idx, done = el !== null && el >= it.endMs, next = k === nxtIdx && !cur && !done;
+        e.row.classList.toggle("cur", cur); e.row.classList.toggle("done", done); e.row.classList.toggle("next", next);
+        e.tm.textContent = absTime(it); e.st.textContent = cur ? T("cPlaying") : done ? T("cPlayed") : next ? T("cReady") : "";
+      });
+      const cu = cRowEls[idx >= 0 ? idx : nxtIdx]; if (cu && idx !== cLast) { cLast = idx; const top = cu.row.offsetTop - 60; if (cList.scrollTo) cList.scrollTo({ top: Math.max(0, top) }); }
+      const fill = (dk, i, live) => {
+        dk.el.classList.toggle("live", !!live);
+        if (i < 0 || !its[i]) { dk.ti.textContent = T("cDeckNone"); dk.su.textContent = ""; dk.rem.textContent = ""; dk.pr.style.width = "0"; return; }
+        const it = its[i]; dk.ti.textContent = nameOf(i) || it.id; dk.su.textContent = it.file || "";
+        if (live) { dk.rem.textContent = fmtMs(it.endMs - el); dk.pr.style.width = `${Math.min(100, ((el - it.startMs) / Math.max(1, it.endMs - it.startMs)) * 100)}%`; }
+        else { dk.rem.textContent = fmtMs(it.endMs - it.startMs); dk.pr.style.width = "0"; }
+      };
+      fill(m1, idx, true); fill(m2, nxtIdx, false);
+      for (const [dk, i, live, col] of [[m1, idx, true, "#fff"], [m2, nxtIdx, false, "#fff"]]) {
+        const it = its[i]; const key = it ? `${it.file}|${it.endMs - it.startMs}|${live ? Math.round((el - it.startMs) / 500) : 0}` : "";
+        if (key !== dk.key || wfDirty) { dk.key = key; drawWf(dk.cv, it ? getPeaks(it.file, it.endMs - it.startMs) : null, live && it ? Math.min(1, (el - it.startMs) / Math.max(1, it.endMs - it.startMs)) : 0, col); }
+      }
+      wfDirty = false; renderPfl();
+      const left = el !== null && its[nxtIdx] ? Math.max(0, Math.ceil((its[nxtIdx].startMs - el) / 1000)) : null;
+      cCountNum.textContent = left === null ? "–" : left > 99 ? fmtMs(left * 1000) : String(left); cCountNum.style.fontSize = left !== null && left > 99 ? "40px" : ""; cCount.classList.toggle("hot", left !== null && left <= 10);
+    };
+    let cLast = -2;
+    // ---- Layout dynamisch: Bereiche ein/aus + Reihenfolge, Maße, Farben — je Sendung (im Dokument) und als Browser-Vorgabe ----
+    const ZONES = ["cmd", "pfl", "card", "hot", "lib"];
+    const defLay = () => ({ side: ZONES.slice(), hidden: [], listH: 560, sideW: 380, cur: "#b02a2a", next: "#1c5a30" });
+    const layKey = `omp-radio-layout-${nodeId}`;
+    let lay = (() => { try { return { ...defLay(), ...JSON.parse(localStorage.getItem(layKey) || "{}") }; } catch { return defLay(); } })();
+    const zoneEl = { cmd: cmdGrid, pfl: pflCard, card: cardLive, hot: cartSec, lib: libCard };
+    const zoneWrap = Object.fromEntries(ZONES.map((k) => [k, h("div", { class: "zone" }, zoneEl[k])]));
+    const sideEl = h("div", { class: "c-side" });
+    const layBox = h("div", { class: "c-lay" });
+    const applyLay = () => {
+      const order = [...lay.side.filter((k) => ZONES.includes(k)), ...ZONES.filter((k) => !lay.side.includes(k))];
+      sideEl.replaceChildren(...order.filter((k) => !lay.hidden.includes(k)).map((k) => zoneWrap[k]));
+      cons.style.setProperty("--c-listh", `${lay.listH}px`); cons.style.setProperty("--c-sidew", `${lay.sideW}px`); cons.style.setProperty("--c-cur", lay.cur); cons.style.setProperty("--c-next", lay.next);
+      cons.querySelector(".c-main").style.gridTemplateColumns = lay.hidden.length === ZONES.length ? "1fr" : "";
+    };
+    const changeLay = () => { try { localStorage.setItem(layKey, JSON.stringify(lay)); } catch { /* ohne Speicher */ } applyLay(); renderLay(); markShow(); };
+    const renderLay = () => {
+      const order = [...lay.side.filter((k) => ZONES.includes(k)), ...ZONES.filter((k) => !lay.side.includes(k))];
+      const mv = (i, d) => { const o = order.slice(); const j = i + d; if (j < 0 || j >= o.length) return; [o[i], o[j]] = [o[j], o[i]]; lay.side = o; changeLay(); };
+      const rng = (key, min, max, label) => h("label", {}, `${label}: ${lay[key]}`, h("input", { type: "range", min, max, step: 10, value: lay[key], onchange: (e) => { lay[key] = Number(e.target.value); changeLay(); } }));
+      const col = (key, label) => h("label", {}, label, h("input", { type: "color", value: lay[key], onchange: (e) => { lay[key] = e.target.value; changeLay(); } }));
+      layBox.replaceChildren(
+        h("div", {}, h("div", { class: "muted" }, T("layZones")), ...order.map((k, i) => h("div", { class: "zr" }, h("input", { type: "checkbox", style: "width:auto", checked: !lay.hidden.includes(k), onchange: (e) => { lay.hidden = e.target.checked ? lay.hidden.filter((x) => x !== k) : [...lay.hidden, k]; changeLay(); } }), h("span", {}, T("z." + k)), h("button", { onclick: () => mv(i, -1) }, "↑"), h("button", { onclick: () => mv(i, 1) }, "↓")))),
+        rng("listH", 240, 900, T("layListH")), rng("sideW", 240, 640, T("laySideW")), col("cur", T("layCur")), col("next", T("layNext")),
+        h("button", { onclick: () => { lay = defLay(); changeLay(); } }, T("layReset")), h("div", { class: "muted", style: "flex-basis:100%" }, T("layHint")));
+    };
+    const cons = h("div", { class: "cons" },
+      h("div", { class: "c-top" }, cClock, h("div", {}, cShow, cDate), cOn, h("div", {}, cAuto, h("button", { style: "margin-top:4px;width:100%", onclick: () => layBox.classList.toggle("open") }, "⚙ " + T("lay")))),
+      layBox,
+      h("div", { class: "c-main" }, cList, sideEl),
+      h("div", { class: "c-deck" }, m1.el, cCount, m2.el));
+
+    applyLay(); renderLay();
     // ---- Reiter: Sendebetrieb · Planung · Playlist · Moderation · Protokoll ----
     // Oben bleiben Einstellungen, „Jetzt“ und die Live-Karte stehen (immer sichtbar im Betrieb); darunter wechselt der Bereich.
     const mkPane = (...els) => h("div", { class: "pane" }, ...els);
@@ -784,7 +972,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
       transBody.replaceChildren(h("p", { class: "hint" }, T("transHint")), rows.length < 2 ? h("p", { class: "muted" }, T("transNone")) : h("table", {}, h("tbody", {}, ...list)));
     };
     const transSec = h("details", { class: "sec", open: "" }, h("summary", {}, T("tabTrans")), transBody);
-    const panes = { live: mkPane(cartSec, planSec), plan: mkPane(weekSec, showSec), list: mkPane(logSec), trans: mkPane(transSec), mod: mkPane(cardsSec), log: mkPane(asRunSec) };
+    const panes = { live: mkPane(cons, planSec), plan: mkPane(weekSec, showSec), list: mkPane(logSec), trans: mkPane(transSec), mod: mkPane(cardsSec), log: mkPane(asRunSec) };
     const TABS = [["live", "tabLive"], ["plan", "tabPlan"], ["list", "tabList"], ["trans", "tabTrans"], ["mod", "tabMod"], ["log", "tabLog"]];
     const tabKey = `omp-radio-tab-${nodeId}`;
     let tab = (() => { try { const v = localStorage.getItem(tabKey); return TABS.some(([k]) => k === v) ? v : "live"; } catch { return "live"; } })();
@@ -803,9 +991,9 @@ class OmpRadioAutomationPanel extends HTMLElement {
       tabCnt.log.textContent = asRun.length ? String(asRun.length) : "";
     };
     shadow.addEventListener("contextmenu", (e) => { if (e.target && e.target.closest && e.target.closest("button")) e.preventDefault(); });
-    shadow.append(h("style", {}, STYLE), banner, tp, head, nowBar, cardLive, tabBar, panes.live, panes.plan, panes.list, panes.trans, panes.mod, panes.log);
+    shadow.append(h("style", {}, STYLE), banner, tp, head, tabBar, panes.live, panes.plan, panes.list, panes.trans, panes.mod, panes.log);
     updTabs();
-    renderRows(); renderPlan(); renderAsRun(); renderNow(); renderCarts(); renderCards(); renderShowBar(); loadWeek(); refreshShows().then(async () => { const c = await api("GET", API + "/current"); if (c && c.show && c.show.status === "live" && !curShow) { showSel.value = c.show.id; await openShow(c.show.id); } });
+    renderRows(); renderPlan(); renderAsRun(); renderNow(); renderConsole(); renderCarts(); renderCards(); renderShowBar(); loadWeek(); refreshShows().then(async () => { const c = await api("GET", API + "/current"); if (c && c.show && c.show.status === "live" && !curShow) { showSel.value = c.show.id; await openShow(c.show.id); } });
 
     const loadTargets = async () => {
       try {
@@ -839,7 +1027,7 @@ class OmpRadioAutomationPanel extends HTMLElement {
         startBtn.disabled = running || view.state === "empty" || dirty; stopBtn.disabled = !running; loadBtn.disabled = running;
         if (lastError) { banner.textContent = lastError; banner.className = "banner show"; }
         else if (banner.className === "banner show") banner.className = "banner";
-        fillTargets(); renderPlan(); renderAsRun(); renderNow(); updateTimes(); if (!cartsEdit) renderCarts(); updTabs();
+        fillTargets(); renderPlan(); renderAsRun(); renderNow(); renderConsole(); updateTimes(); if (!cartsEdit) renderCarts(); updTabs();
       } catch { /* nächster Takt */ }
     };
     loadTargets().then(poll);
