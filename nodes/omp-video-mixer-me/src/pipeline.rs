@@ -4017,8 +4017,15 @@ pub fn run(
                         let anim_gen = pips.anim_gen[level][slot].clone();
                         let cmd_tx = anim_tx.clone();
                         let (w, h) = (config.width, config.height);
+                        let delay_ms = crate::pipstate::anim_delay_ms();
                         std::thread::spawn(move || {
                             let steps = (duration_ms / STEP_MS).max(1);
+                            if delay_ms > 0 {
+                                std::thread::sleep(Duration::from_millis(delay_ms));
+                                if anim_gen.load(Ordering::Acquire) != my_gen {
+                                    return;
+                                }
+                            }
                             let t0 = std::time::Instant::now();
                             for i in 1..=steps {
                                 let target = Duration::from_millis(duration_ms * i / steps);

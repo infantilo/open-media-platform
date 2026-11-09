@@ -360,6 +360,7 @@ impl ParamStore for OgrafStore {
                     ],
                 },
                 MethodSpec { name: "library.delete".to_string(), args: vec![MethodArg { name: "id".to_string(), kind: ParamType::String }] },
+                MethodSpec { name: "layout.setLead".to_string(), args: vec![MethodArg { name: "ms".to_string(), kind: ParamType::Number }] },
                 MethodSpec {
                     name: "layout.unbind".to_string(),
                     args: vec![
@@ -557,6 +558,11 @@ impl ParamStore for OgrafStore {
                 self.layout.bind(b).map_err(|e| InvokeError::Message(e))
             }
             _ if name.starts_with("library.") => self.library_invoke(&name["library.".len()..], args),
+            "layout.setLead" => {
+                let ms = args.get("ms").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or(InvokeError::Unknown)?;
+                layout::set_follow_lead_ms(ms as i64);
+                Ok(())
+            }
             "layout.unbind" => {
                 let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_string();
                 self.layout.unbind(&text("layerId"), &text("zone"));

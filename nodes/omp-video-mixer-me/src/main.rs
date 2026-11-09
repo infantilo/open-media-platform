@@ -599,6 +599,7 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
                 MethodArg { name: "slot".to_string(), kind: ParamType::Number },
             ],
         },
+        MethodSpec { name: n("pip.setAnimDelay"), args: vec![MethodArg { name: "ms".to_string(), kind: ParamType::Number }] },
         MethodSpec {
             name: n("pip.setZ"),
             args: vec![
@@ -983,6 +984,11 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 st.hold = PipPose::from_box(&DveBox::full_frame(store.width, store.height));
             }
             store.pipeline.reset_dve(level, slot);
+            Ok(())
+        }
+        "pip.setAnimDelay" => {
+            let ms = args.get("ms").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0).ok_or(InvokeError::Unknown)?;
+            pipstate::set_anim_delay_ms(ms as u64);
             Ok(())
         }
         "pip.setZ" => {

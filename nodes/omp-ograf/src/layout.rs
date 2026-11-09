@@ -22,6 +22,32 @@ const MIN_OPACITY: f64 = 0.02;
 /// Takt der Nachführung (Abfrage des Speichers, billig; bestimmt den Nachlauf mit — bei 40 ms lag er bei ≈ 60 ms).
 const TICK: Duration = Duration::from_millis(8);
 
+/// Vorlauf der Seite bei gekoppelten Fahrten (ms): sie zeigt die Pose von „jetzt + Vorlauf“, damit sie nach der Render-Latenz
+/// bis zum Mischerausgang bildgleich mit dem Video steht. Standard `OMP_OGRAF_FOLLOW_LEAD_MS`, sonst 250 ms (unter Last gemessen: Lücke ab ca. 300 ms)
+/// (`OMP_OGRAF_RENDER_LATENCY_MS`, 110). Zur Laufzeit per `layout.setLead` einstellbar (Kalibrierung).
+static FOLLOW_LEAD_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(i64::MIN);
+/// Gesetzt, wenn die Verzögerung an den Mischern neu zu setzen ist.
+static LEAD_DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// Zusatz für Abfragetakt (40 ms) und Übertragung: um so viel später beginnt die Fahrt des Mischers als der Seitenvorlauf.
+const START_MARGIN_MS: i64 = 150;
+
+pub fn follow_lead_ms() -> i64 {
+    use std::sync::atomic::Ordering::Relaxed;
+    let v = FOLLOW_LEAD_MS.load(Relaxed);
+    if v != i64::MIN {
+        return v;
+    }
+    let env = |k: &str| std::env::var(k).ok().and_then(|s| s.trim().parse::<i64>().ok());
+    let v = env("OMP_OGRAF_FOLLOW_LEAD_MS").or_else(|| env("OMP_OGRAF_RENDER_LATENCY_MS")).unwrap_or(250).clamp(0, 1500);
+    FOLLOW_LEAD_MS.store(v, Relaxed);
+    v
+}
+
+pub fn set_follow_lead_ms(ms: i64) {
+    FOLLOW_LEAD_MS.store(ms.clamp(0, 1500), std::sync::atomic::Ordering::Relaxed);
+    LEAD_DIRTY.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Binding {
     #[serde(rename = "layerId")]
@@ -123,6 +149,7 @@ pub fn follow_data(zone: &str, v: &SlotView) -> serde_json::Map<String, Value> {
         format!("{},{},{},{}", n(f), n(t), t0, ms)
     });
     m.insert(format!("{zone}Anim"), json!(anim));
+    m.insert("leadMs".to_string(), json!(follow_lead_ms()));
     m
 }
 
@@ -332,6 +359,13 @@ fn worker(weak: std::sync::Weak<Shared>, registry: RegistryClient, zones: ZoneSt
         };
         // Nur `follow`-Bindungen fragen den Mischer ohnehin höchstens alle 40 ms ab — dann genügt ein längerer Takt (CPU).
         let fast = work.iter().any(|(_, b, _, _, _)| !b.is_follow());
+        // Fahrten des Mischers beginnen um Vorlauf + Reserve später, damit die Seite sie von Anfang an mitfahren kann.
+        if LEAD_DIRTY.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            let delay = follow_lead_ms() + START_MARGIN_MS;
+            for link in links.values() {
+                let _ = link.peer.invoke_with("pip.setAnimDelay", json!({"ms": delay}));
+            }
+        }
         for (key, b, mut st, unbound, created) in work {
             let result = run_one(&mut links, &registry, &zones, &updater, &b, &mut st, unbound, created);
             let mut map = shared.bindings.lock().expect("lock poisoned");
@@ -378,7 +412,11 @@ fn run_one(
             .into_iter()
             .find(|n| n.label == b.mixer)
             .ok_or_else(|| format!("Mischer „{}“ nicht gefunden", b.mixer))?;
-        links.insert(b.mixer.clone(), MixerLink { peer: PeerClient::new(node.href), canvas: BTreeMap::new(), slots: None });
+        let peer = PeerClient::new(node.href);
+        if b.is_follow() {
+            let _ = peer.invoke_with("pip.setAnimDelay", json!({"ms": follow_lead_ms() + START_MARGIN_MS}));
+        }
+        links.insert(b.mixer.clone(), MixerLink { peer, canvas: BTreeMap::new(), slots: None });
     }
     let link = links.get_mut(&b.mixer).ok_or("kein Mischer")?;
     let canvas = match link.canvas.get(&b.level) {

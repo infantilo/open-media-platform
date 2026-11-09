@@ -138,6 +138,18 @@ pub struct AnimRec {
     pub ms: u32,
 }
 
+/// Verzögerung (ms), um die jede PIP-Fahrt später beginnt (`pip.setAnimDelay`): Grafiken, die dem PIP folgen, bekommen so
+/// Vorlauf für Render-Latenz und Abfragetakt und starten bildgleich mit dem Video.
+static ANIM_DELAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn anim_delay_ms() -> u64 {
+    ANIM_DELAY_MS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_anim_delay_ms(ms: u64) {
+    ANIM_DELAY_MS.store(ms.min(2000), std::sync::atomic::Ordering::Relaxed);
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
@@ -223,7 +235,7 @@ impl LevelPips {
             if let Action::Animate { slot, from, to, ms, .. } = a {
                 if *slot < self.anims.len() {
                     let from = from.unwrap_or_else(|| self.live_pose(*slot));
-                    self.anims[*slot] = Some(AnimRec { from, to: *to, t0_ms: now_ms(), ms: *ms });
+                    self.anims[*slot] = Some(AnimRec { from, to: *to, t0_ms: now_ms() + anim_delay_ms(), ms: *ms });
                 }
             }
         }
