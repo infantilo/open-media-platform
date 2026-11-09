@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -682,6 +683,7 @@ func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 		return Workflow{}, ErrNotStopped
 	}
 	wasStarted := wf.Status == StatusStarted
+	topologyChanged := roleTopologyChanged(wf.Definition, def)
 	wf.Name = name
 	wf.Definition = def
 	wf.UpdatedAt = time.Now()
@@ -701,11 +703,39 @@ func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 		// 2026-10-14: Quellen vergaßen ihr Testbild nach "Im Workflow
 		// speichern", weil das Leeren hier den Stop-Snapshot ersetzte).
 		go s.pinRoleState(wf) // HTTP pro Rolle: PUT nicht blockieren
+	} else if !topologyChanged {
+		// Nur Name/Zeitplan/Beschreibung o. Ae. geaendert: der gesicherte Zustand bleibt gueltig (Nutzerfund 2026-11-09).
 	} else if err := s.store.ClearRoleState(id); err != nil {
 		slog.Warn("workflows: failed to clear role state after update", "workflow", id, "error", err)
 	}
 	s.publish(wf)
 	return wf, nil
+}
+
+// roleTopologyChanged: aendern sich Rollen (Name/Typ) oder Verbindungen? Nur dann gehoert ein gesicherter Rollen-Zustand
+// zur alten Topologie (s. Update); Name, Zeitplan, Titel, Format usw. machen ihn nicht ungueltig.
+func roleTopologyChanged(a, b Definition) bool {
+	key := func(d Definition) []string {
+		var k []string
+		for _, r := range d.Roles {
+			k = append(k, "R\x00"+r.Name+"\x00"+r.NodeType)
+		}
+		for _, c := range d.Connections {
+			k = append(k, "C\x00"+c.FromRole+"\x00"+c.FromSender+"\x00"+c.ToRole+"\x00"+c.ToReceiver)
+		}
+		sort.Strings(k)
+		return k
+	}
+	ka, kb := key(a), key(b)
+	if len(ka) != len(kb) {
+		return true
+	}
+	for i := range ka {
+		if ka[i] != kb[i] {
+			return true
+		}
+	}
+	return false
 }
 
 // Start provisioniert alle Rollen eines Workflows (lokal oder remote,

@@ -228,7 +228,13 @@ func (s *Store) UpdateSchedules(id string, schedules []Schedule) error {
 // schreiben könnte.
 func (s *Store) SetRoleState(id, role string, state json.RawMessage) error {
 	_, err := s.db.Exec(`
-		UPDATE workflows SET role_state = jsonb_set(role_state, ARRAY[$2], $3::jsonb) WHERE id = $1
+		UPDATE workflows SET
+			role_state_backup = CASE
+				WHEN role_state ? $2 AND length(($3::jsonb)::text) < length((role_state -> $2)::text)
+				THEN jsonb_set(role_state_backup, ARRAY[$2], role_state -> $2)
+				ELSE role_state_backup END,
+			role_state = jsonb_set(role_state, ARRAY[$2], $3::jsonb)
+		WHERE id = $1
 	`, id, role, []byte(state))
 	return err
 }
@@ -243,8 +249,27 @@ func (s *Store) SetRoleState(id, role string, state json.RawMessage) error {
 // hätte sonst z. B. den Mixer nach dem nächsten Start wieder auf eine
 // inzwischen entfernte oder anders verkabelte Quelle gesetzt.
 func (s *Store) ClearRoleState(id string) error {
-	_, err := s.db.Exec(`UPDATE workflows SET role_state = '{}'::jsonb WHERE id = $1`, id)
+	// Vorher je Rolle sichern (role_state_backup): ein Loeschen darf nie der einzige Stand sein.
+	_, err := s.db.Exec(`UPDATE workflows SET role_state_backup = coalesce((
+		SELECT jsonb_object_agg(k, v) FROM (
+			SELECT DISTINCT ON (k) k, v FROM (
+				SELECT key AS k, value AS v FROM jsonb_each(role_state_backup)
+				UNION ALL SELECT key, value FROM jsonb_each(role_state)
+			) u ORDER BY k, length(v::text) DESC
+		) m), '{}'::jsonb), role_state = '{}'::jsonb WHERE id = $1`, id)
 	return err
+}
+
+// RestoreRoleStateBackup kopiert die Sicherungskopie zurueck in den aktiven Rollen-Zustand (Rollen, die dort schon
+// einen Eintrag haben, werden ueberschrieben). Rueckgabe: Anzahl wiederhergestellter Rollen.
+func (s *Store) RestoreRoleStateBackup(id string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`
+		WITH u AS (
+			UPDATE workflows SET role_state = role_state || role_state_backup WHERE id = $1
+			RETURNING (SELECT count(*) FROM jsonb_object_keys(role_state_backup)) AS n
+		) SELECT coalesce(max(n), 0) FROM u`, id).Scan(&n)
+	return n, err
 }
 
 // GetRoleState liefert die zuletzt erfassten Bedienzustände aller

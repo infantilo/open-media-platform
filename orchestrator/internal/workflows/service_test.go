@@ -2493,3 +2493,19 @@ func TestAlertRulesFollowWorkflowLifecycle(t *testing.T) {
 		t.Fatalf("Import ohne Konfiguration: %v %+v", err, re2.ImportNotes)
 	}
 }
+
+func TestRoleTopologyChanged(t *testing.T) {
+	base := Definition{Roles: []Role{{Name: "A", NodeType: "x"}, {Name: "B", NodeType: "y"}},
+		Connections: []Connection{{FromRole: "A", ToRole: "B"}}}
+	same := base
+	same.Title = "neu"
+	same.Roles = []Role{{Name: "B", NodeType: "y", Format: "480p25"}, {Name: "A", NodeType: "x"}}
+	if roleTopologyChanged(base, same) {
+		t.Fatal("Titel/Format/Reihenfolge duerfen den Zustand nicht ungueltig machen")
+	}
+	ren := base
+	ren.Roles = []Role{{Name: "A2", NodeType: "x"}, {Name: "B", NodeType: "y"}}
+	if !roleTopologyChanged(base, ren) {
+		t.Fatal("Umbenennen einer Rolle muss erkannt werden")
+	}
+}

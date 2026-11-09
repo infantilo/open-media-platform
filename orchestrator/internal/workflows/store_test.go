@@ -216,3 +216,29 @@ func mustParseTime(t *testing.T, s string) time.Time {
 	}
 	return ts
 }
+
+func TestStoreRoleStateBackupKeepsShrunkenState(t *testing.T) {
+	s := NewStore(testDB(t))
+	if err := s.Put(Workflow{ID: "wfb", Name: "x", Status: StatusStopped}); err != nil {
+		t.Fatal(err)
+	}
+	good := []byte(`{"__kind":"node-state","__blob":{"state":{"layers":[1,2,3,4,5]}}}`)
+	empty := []byte(`{"__kind":"node-state","__blob":{"state":{}}}`)
+	_ = s.SetRoleState("wfb", "Grafik", good)
+	_ = s.SetRoleState("wfb", "Grafik", empty) // schrumpft: gut -> Backup
+	_ = s.SetRoleState("wfb", "Grafik", empty) // gleich: Backup bleibt
+	if err := s.ClearRoleState("wfb"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.GetRoleState("wfb"); len(st) != 0 {
+		t.Fatalf("nach Clear nicht leer: %v", st)
+	}
+	n, err := s.RestoreRoleStateBackup("wfb")
+	if err != nil || n != 1 {
+		t.Fatalf("Restore n=%d err=%v", n, err)
+	}
+	st, _ := s.GetRoleState("wfb")
+	if len(st["Grafik"]) < 50 {
+		t.Fatalf("guter Stand nicht zurueck: %s", st["Grafik"])
+	}
+}

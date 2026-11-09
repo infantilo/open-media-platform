@@ -276,6 +276,10 @@ func (s *Service) captureRoleStateMode(wf Workflow, role string, senderToAlias m
 		slog.Warn("workflows: failed to alias role state", "workflow", wf.ID, "role", role, "error", err)
 		return
 	}
+	if old, ok := s.savedRoleState(wf.ID, role); ok && len(state) < len(old)/2 {
+		slog.Warn("workflows: gesicherter Rollen-Zustand schrumpft stark (alter Stand bleibt in role_state_backup)",
+			"workflow", wf.ID, "role", role, "oldBytes", len(old), "newBytes", len(state), "mode", int(mode))
+	}
 	if err := s.store.SetRoleState(wf.ID, role, state); err != nil {
 		slog.Warn("workflows: failed to persist role state", "workflow", wf.ID, "role", role, "error", err)
 	}
@@ -1050,4 +1054,13 @@ func (s *Service) MarkRespawned(instanceIDs []string) {
 			}
 		}
 	}
+}
+
+func (s *Service) savedRoleState(id, role string) (json.RawMessage, bool) {
+	saved, err := s.store.GetRoleState(id)
+	if err != nil {
+		return nil, false
+	}
+	raw, ok := saved[role]
+	return raw, ok
 }
