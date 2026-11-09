@@ -1067,7 +1067,7 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 actions.iter().for_each(|a| a.run(&store.pipeline, level));
                 if slot.is_none() {
                     if let Some(g) = scene.as_ref().and_then(|p| p.graphic.clone()) {
-                        scene_graphic_hide(store.registry_url.clone(), g);
+                        scene_graphic_hide(store.registry_url.clone(), g, scene.as_ref().map_or(0, |p| p.entries.iter().map(|e| e.out_ms as u64).max().unwrap_or(0)));
                     }
                 }
                 return Ok(());
@@ -1280,9 +1280,9 @@ fn scene_graphic_show(registry_url: &str, g: &pipstate::SceneGraphic) {
     }
 }
 
-/// Szenen-Grafik ausblenden: sofort angefordert, zeitgenau zum Beginn der PIP-Ausfahrt (`atUtcMs`), im Hintergrund.
-fn scene_graphic_hide(registry_url: String, g: pipstate::SceneGraphic) {
-    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64) + pipstate::anim_delay_ms();
+/// Szenen-Grafik ausblenden: sofort angefordert, zeitgenau zum Ende der PIP-Ausfahrt (`atUtcMs`), im Hintergrund.
+fn scene_graphic_hide(registry_url: String, g: pipstate::SceneGraphic, exit_ms: u64) {
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64) + pipstate::anim_delay_ms() + exit_ms;
     std::thread::spawn(move || {
         if let Some(peer) = graphic_peer(&registry_url, &g.node) {
             let _ = peer.invoke_with("hide", serde_json::json!({"layerId": g.layer_id, "atUtcMs": at}));

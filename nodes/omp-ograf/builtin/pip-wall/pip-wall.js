@@ -11,9 +11,10 @@ const STYLE_TEXT = `
 :host(.in) { opacity: 1; }
 .bg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .stop2 { stop-color: var(--bgc, #0b1530); }
-.box { position: absolute; box-sizing: border-box; border-radius: var(--rad, 0px); outline: var(--bw, 6px) solid var(--accent, #e10600); transition: opacity 300ms ease; }
-.box.off { opacity: 0; }
-.box.dim { opacity: 0; }
+.box { position: absolute; box-sizing: border-box; border-radius: var(--rad, 0px); outline: var(--bw, 6px) solid var(--accent, #e10600); }
+/* Einblenden sofort (deckungsgleich mit dem PIP), nur Ausblenden weich */
+.box.off { opacity: 0; transition: opacity 300ms ease; }
+.box.dim { opacity: 0; transition: opacity 300ms ease; }
 .cap { position: absolute; left: 0; bottom: calc(100% + var(--bw, 6px)); display: flex; align-items: center; padding: 0 0.8em 0 0; background: linear-gradient(90deg, var(--accent, #e10600) 0 0.5em, rgba(8,12,24,0.92) 0.5em);
   padding-left: 1em; font: 700 30px/1 system-ui, sans-serif; letter-spacing: 0.03em; color: var(--cap, #fff); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }
 `;
