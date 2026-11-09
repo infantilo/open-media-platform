@@ -93,7 +93,13 @@ pub struct Applied {
     /// `follow`: zuletzt an die Grafik gesendeter Datensatz (als Text) und Zeitpunkt der letzten Mischer-Abfrage.
     pub sig: String,
     pub polled: Option<Instant>,
+    /// Zeitpunkt des letzten Sendens an die Grafik (für die regelmäßige Wiederholung des Stands).
+    pub sent: Option<Instant>,
 }
+
+/// Der aktuelle Stand wird auch ohne Änderung in diesem Abstand erneut an die Grafik geschickt: ein verlorenes oder von der
+/// Seite verworfenes Update heilt so von selbst (Seite stand sonst dauerhaft auf einer alten Pose).
+const FOLLOW_RESYNC: Duration = Duration::from_millis(1000);
 
 /// Abfrageabstand der `follow`-Bindungen am Mischer (Slot-Posen ändern sich nur bei Szenen/Fokus).
 const FOLLOW_POLL: Duration = Duration::from_millis(40);
@@ -457,10 +463,11 @@ fn run_one(
         let view = slot_view(&slots, b.slot, canvas).ok_or_else(|| format!("Slot {} am Mischer nicht vorhanden", b.slot))?;
         let data = follow_data(&norm_zone(&b.zone), &view);
         let sig = serde_json::to_string(&data).unwrap_or_default();
-        if sig != st.sig {
+        if sig != st.sig || st.sent.is_none_or(|t| t.elapsed() >= FOLLOW_RESYNC) {
             let up = updater.get().ok_or("Grafikspeicher noch nicht bereit")?;
             if up(&b.layer, data) {
                 st.sig = sig; // nicht on air: beim nächsten Takt erneut versuchen
+                st.sent = Some(Instant::now());
             }
         }
         return Ok(None);

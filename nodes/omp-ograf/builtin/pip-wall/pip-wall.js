@@ -67,6 +67,7 @@ export default class PipWall extends HTMLElement {
     if (typeof d.cornerRadius === "number") { this._rad = Math.max(0, d.cornerRadius) / 1920; this.style.setProperty("--rad", `${this._rad * 100}vw`); }
     if (typeof d.leadMs === "number") this._leadMs = d.leadMs;
     if (typeof d.moveMs === "number") this._moveMs = Math.max(0, d.moveMs);
+    const now0 = performance.now();
     this._boxes.forEach((b, i) => {
       const k = `pip${i + 1}`;
       if (d[`text${i + 1}`] !== undefined) b.cap.textContent = d[`text${i + 1}`];
@@ -80,7 +81,9 @@ export default class PipWall extends HTMLElement {
       }
       const nb = parseBox(d[`${k}Box`]);
       if (b.anim) { b.to = nb || b.to; }
-      else if (nb && nb.some((v, j) => Math.abs(v - b.to[j]) > 1e-6)) {
+      // Soll mit dem tatsächlich gezeigten Stand vergleichen (nach abgeschlossener Fahrt ist das `cur`): so holt die Seite eine
+      // verpasste Fahrt beim nächsten (wiederholten) Update von selbst nach, statt auf der alten Pose stehenzubleiben.
+      else if (nb && nb.some((v, j) => Math.abs(v - (now0 - b.t0 < this._moveMs ? b.to : b.cur)[j]) > 1e-6)) {
         b.from = b.cur.slice();
         b.to = nb;
         b.t0 = performance.now();
