@@ -72,7 +72,8 @@ export default class PipWall extends HTMLElement {
     this._boxes.forEach((b, i) => {
       const k = `pip${i + 1}`;
       if (d[`text${i + 1}`] !== undefined) b.cap.textContent = d[`text${i + 1}`];
-      if (d[`${k}On`] !== undefined) { b.on = !!d[`${k}On`]; b.el.classList.toggle("off", !b.on); }
+      let turnedOn = false;
+      if (d[`${k}On`] !== undefined) { turnedOn = !b.on && !!d[`${k}On`]; b.on = !!d[`${k}On`]; b.el.classList.toggle("off", !b.on); }
       // „Anderes Fenster ist vergrößert“: Ausblenden entscheidet _tick je Bild (nur wenn das Fenster ganz verdeckt ist).
       if (d[`${k}Dim`] !== undefined) b.dimWant = !!d[`${k}Dim`];
       // Fahrt des Mischers (von, nach, Start Unix-ms, Dauer): gleiche Ease-in/out-Kurve und gleiche Uhr wie der Mischer.
@@ -81,7 +82,9 @@ export default class PipWall extends HTMLElement {
         b.anim = a.length === 10 && a.every(Number.isFinite) ? { from: a.slice(0, 4), to: a.slice(4, 8), t0: a[8], ms: a[9] } : null;
       }
       const nb = parseBox(d[`${k}Box`]);
-      if (b.anim) { b.to = nb || b.to; }
+      // Frisch eingeschaltet ohne Fahrt: nicht von der alten Pose aus gleiten, sondern direkt an die Sollpose.
+      if (turnedOn && !b.anim && nb) { b.cur = nb.slice(); b.from = nb.slice(); b.to = nb.slice(); b.t0 = 0; }
+      else if (b.anim) { b.to = nb || b.to; }
       // Soll mit dem tatsächlich gezeigten Stand vergleichen (nach abgeschlossener Fahrt ist das `cur`): so holt die Seite eine
       // verpasste Fahrt beim nächsten (wiederholten) Update von selbst nach, statt auf der alten Pose stehenzubleiben.
       else if (nb && nb.some((v, j) => Math.abs(v - (now0 - b.t0 < this._moveMs ? b.to : b.cur)[j]) > 1e-6)) {
@@ -90,7 +93,7 @@ export default class PipWall extends HTMLElement {
         b.t0 = performance.now();
       }
     });
-    this._start();
+    this._tick(); // sofort positionieren: kein Bild an der alten Pose
   }
   _start() { if (!this._raf) this._raf = requestAnimationFrame((t) => this._tick(t)); }
   _tick() {

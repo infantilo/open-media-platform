@@ -1282,10 +1282,14 @@ fn scene_graphic_show(registry_url: &str, g: &pipstate::SceneGraphic) {
 
 /// Szenen-Grafik ausblenden: sofort angefordert, zeitgenau zum Ende der PIP-Ausfahrt (`atUtcMs`), im Hintergrund.
 fn scene_graphic_hide(registry_url: String, g: pipstate::SceneGraphic, exit_ms: u64) {
-    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64) + pipstate::anim_delay_ms() + exit_ms;
+    // Bewusst hier warten statt mit `atUtcMs`: ein zeitgesteuerter Befehl blockiert die Befehlsschlange der Grafik, und die
+    // Folge-Updates der Rahmen kämen während der Ausfahrt nicht an.
+    let wait = pipstate::anim_delay_ms() + exit_ms;
     std::thread::spawn(move || {
-        if let Some(peer) = graphic_peer(&registry_url, &g.node) {
-            let _ = peer.invoke_with("hide", serde_json::json!({"layerId": g.layer_id, "atUtcMs": at}));
+        let peer = graphic_peer(&registry_url, &g.node);
+        std::thread::sleep(std::time::Duration::from_millis(wait));
+        if let Some(peer) = peer {
+            let _ = peer.invoke_with("hide", serde_json::json!({"layerId": g.layer_id}));
         }
     });
 }
