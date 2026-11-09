@@ -1733,6 +1733,15 @@ bedienberechtigt:
   Deck** gibt es für jedes eingeschaltete PIP eine Taste „PIP n / Fokus".
   Wird eine andere PIP-Szene gewählt oder PIP ausgeschaltet, endet der
   Fokus.
+  **DSK und Grafik je PIP-Szene:** Im Szenen-Editor lassen sich zusätzlich
+  die **DSK-Quelle** (per Name, bleibt über Neustarts gültig; „aus" schaltet
+  den Keyer mit der Szene ab) und eine **Grafik-Ebene** (Grafik-Node, Vorlage,
+  Ebene) hinterlegen. Beim Anwenden blendet der Mischer die Grafik zuerst ein
+  und lässt der Seite 700 ms Vorlauf (`OMP_SCENE_GRAPHIC_PREROLL_MS`; entfällt,
+  wenn die Grafik schon steht), dann starten die PIP-Fahrten. Beim Ausschalten
+  bleibt die Grafik bis zum Ende der Ausfahrt (Verzögerung + Ausfahrtzeit) auf
+  Sendung, ihre Rahmen fahren mit hinaus, danach wird sie ausgeblendet. Einen
+  Bereich „Presets" mit Momentaufnahmen gibt es im Bildmischer nicht mehr.
 - **Grafik** — Vorlage auswählen (Suchfeld + Dropdown), Formularfelder
   befüllen, „▶ Ein"/„■ Aus" schaltet die Grafik auf Sendung (im
   Screenshot bereits aktiv: „On Air: Hello Lower Third").

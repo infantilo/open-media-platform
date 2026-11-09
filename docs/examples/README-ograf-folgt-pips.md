@@ -10,6 +10,7 @@ Einrichtung nach dem Start (steckt im gespeicherten Zustand des Demo-Workflows, 
 2. **Keyer:** Quelle „Grafik“ (Fill) wählen und einschalten (liegt über den PIPs).
 3. **Grafik:** Vorlage „PIP-Wand“ auf Ebene `pip-wall` einblenden.
 4. **Layout-Kopplung** im Grafik-Panel: je Fenster *Fenster folgt PIP-Slot*, Mischer „Bildmischer“, Slot 1–3.
-5. Im Flow-Editor **Im Workflow speichern**, damit der Zustand beim nächsten Start zurückkommt.
+5. **Szene „PIP-Wand“** (Szenen-Editor des Mischers): Einfahrt/Ausfahrt je Slot, DSK-Quelle „Grafik“ und Grafik-Ebene `pip-wall` hinterlegen. Das Anwenden der Szene blendet Grafik und PIPs zusammen ein, das Ausschalten fährt beide gemeinsam hinaus.
+6. Im Flow-Editor **Im Workflow speichern** (auch nach jeder Änderung an Szenen), damit der Zustand beim nächsten Start zurückkommt.
 
 Vorführen: im PGM-Monitor ein PIP anklicken – es vergrößert sich, Rahmen/Beschriftung fahren mit, die anderen Fenster blenden aus; zweiter Klick fährt zurück. Slot-Posen ändern → die Grafik folgt.

@@ -573,6 +573,7 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   after a bridged outage, and it absorbs the workflow's delay compensation
   (`setOutputDelay`). Marked as `anchor` in the catalog: not removable in the
   workflow editor, the start preview warns if a workflow has none
+- **PIP scenes with DSK and graphics, graphics that follow the PIPs** — a video-mixer PIP scene stores slots (with fly-in/out), the DSK source (by name) and an OGraf layer. The PIP-wall template follows the mixer's animations frame-accurately (absolute-clock sync with calibrated lead, partial-cover clipping, self-healing); applying/removing a scene brings graphics and PIPs in and out together. See `docs/examples/README-ograf-folgt-pips.md`.
 - **Stream Deck control surface (browser, WebHID)** — a connected Stream Deck (XL, +, + XL, 15-key family) operates the node UIs of the operator
   console: top row = Home + one tab per open node, the rest belongs to the active node. Dedicated pages for the video mixer (PGM/PRE/CUT/AUTO/DSK/PIP),
   the audio mixer (mute/PFL/select, EQ/dynamics/pan with a live **EQ curve and compressor curve** across keys or the touch strip, dials on the "+" / "+ XL"),
