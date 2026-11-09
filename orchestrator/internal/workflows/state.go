@@ -1018,3 +1018,36 @@ func (s *Service) RunRoleStateBackup(ctx context.Context) {
 		}
 	}
 }
+
+// MarkRespawned markiert für laufende Workflows alle Rollen, deren Instanz nach einem Neustart/Reboot frisch
+// (leer) gestartet wurde, als noch nicht wiederhergestellt. Die Backup-Runde (RunRoleStateBackup) stellt den
+// gespeicherten Zustand dann wieder her und erfasst die Rolle bis dahin nicht (sonst überschriebe der leere
+// Ist-Stand den guten: Mischer ohne DSK, Grafik ohne gesendete Seite). Nur frisch gestartete Instanzen —
+// überlebende Nodes behalten ihren Live-Zustand.
+func (s *Service) MarkRespawned(instanceIDs []string) {
+	if len(instanceIDs) == 0 {
+		return
+	}
+	fresh := make(map[string]bool, len(instanceIDs))
+	for _, id := range instanceIDs {
+		fresh[id] = true
+	}
+	wfs, err := s.store.List()
+	if err != nil {
+		return
+	}
+	for _, wf := range wfs {
+		if wf.Status != StatusStarted {
+			continue
+		}
+		saved, err := s.store.GetRoleState(wf.ID)
+		if err != nil {
+			continue
+		}
+		for role, rt := range wf.Runtime {
+			if _, ok := saved[role]; ok && fresh[rt.InstanceID] {
+				s.markUnrestored(wf.ID, role)
+			}
+		}
+	}
+}

@@ -363,6 +363,8 @@ type Launcher struct {
 	serviceToken string
 	// nodeAPIToken s. SetNodeAPIToken (gleiche Sperr-Regel wie serviceToken).
 	nodeAPIToken string
+	// respawned: IDs der Instanzen, die RestoreLocal nach Neustart/Reboot frisch (leer) gestartet hat.
+	respawned []string
 
 	binaryResolver BinaryResolver
 	binaryLookup   BinaryLookup
@@ -2530,10 +2532,21 @@ func (l *Launcher) RestoreLocal() {
 			continue
 		}
 		slog.Info("launcher: restored local instance", "id", inst.ID, "type", inst.Type)
+		l.mu.Lock()
+		l.respawned = append(l.respawned, inst.ID)
+		l.mu.Unlock()
 	}
 	l.mu.Lock()
 	l.pendingRestore = rest
 	l.mu.Unlock()
+}
+
+// RespawnedAtBoot liefert die IDs der von RestoreLocal frisch gestarteten Instanzen (sie laufen ohne
+// ihren früheren Zustand und müssen aus dem Workflow-Zustand befüllt werden).
+func (l *Launcher) RespawnedAtBoot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.respawned...)
 }
 
 func (l *Launcher) respawnLocal(inst Instance) error {

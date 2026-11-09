@@ -931,6 +931,9 @@ func main() {
 	workflowRunStore := workflows.NewRunStore(database)
 	workflowSvc.SetRunRecorder(workflowRunStore)
 	workflowSvc.ReconcileRuns()
+	// Nach Reboot/Absturz startet der Launcher die Nodes leer neu: ihr Zustand kommt aus dem Workflow zurück,
+	// und die periodische Sicherung darf den leeren Stand nicht über den gespeicherten schreiben.
+	workflowSvc.MarkRespawned(launcherSvc.RespawnedAtBoot())
 	go workflowRunStore.RunRetention(ctx, cfg.WorkflowRunRetentionDays)
 	// Aufräumen der übrigen unbegrenzt wachsenden Tabellen (Outbox, Host-
 	// Einmaltokens, abgeschlossene Prozess-Ausführungen, Alarm-Quittierungen).
