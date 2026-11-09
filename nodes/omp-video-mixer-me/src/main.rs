@@ -1067,7 +1067,7 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 actions.iter().for_each(|a| a.run(&store.pipeline, level));
                 if slot.is_none() {
                     if let Some(g) = scene.as_ref().and_then(|p| p.graphic.clone()) {
-                        scene_graphic(store.registry_url.clone(), g, false);
+                        scene_graphic_hide(store.registry_url.clone(), g);
                     }
                 }
                 return Ok(());
@@ -1216,6 +1216,9 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 .find(|p| p.id == id)
                 .cloned()
                 .ok_or(InvokeError::Unknown)?;
+            if let Some(g) = &preset.graphic {
+                scene_graphic_show(&store.registry_url, g);
+            }
             let actions = store.pip[level].lock().expect("lock poisoned").plan_apply(&preset);
             actions.iter().for_each(|a| a.run(&store.pipeline, level));
             apply_scene_extras(store, level, &preset);
@@ -1235,35 +1238,54 @@ fn apply_scene_extras(store: &MixerStore, level: usize, scene: &PipPreset) {
             store.pipeline.set_keyer_label(level, k.label.clone());
         }
     }
-    if let Some(g) = scene.graphic.clone() {
-        scene_graphic(store.registry_url.clone(), g, true);
+}
+
+/// Zuletzt gefundene Grafik-Nodes (Label → href): die Registry-Abfrage ist unter Last langsam und verzögerte Ein-/Ausblenden.
+fn graphic_peer(registry_url: &str, label: &str) -> Option<omp_node_sdk::peer::PeerClient> {
+    static CACHE: std::sync::OnceLock<Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let cached = cache.lock().expect("lock poisoned").get(label).cloned();
+    let probe = |href: &str| omp_node_sdk::peer::PeerClient::new(href.to_string()).get_param("layers").ok().map(|_| ());
+    if let Some(href) = cached {
+        if probe(&href).is_some() {
+            return Some(omp_node_sdk::peer::PeerClient::new(href));
+        }
+    }
+    let node = RegistryClient::new(registry_url.to_string()).list_nodes().ok()?.into_iter().find(|n| n.label == label)?;
+    cache.lock().expect("lock poisoned").insert(label.to_string(), node.href.clone());
+    Some(omp_node_sdk::peer::PeerClient::new(node.href))
+}
+
+/// Szenen-Grafik einblenden und warten, bis die Seite Zeit zum Aufbauen hatte (nur wenn sie neu erscheint): erst danach
+/// starten die PIP-Fahrten, sonst käme die Grafik sichtbar zu spät. Läuft im Aufrufer (kurz, Peer ist gecacht).
+fn scene_graphic_show(registry_url: &str, g: &pipstate::SceneGraphic) {
+    let Some(peer) = graphic_peer(registry_url, &g.node) else {
+        eprintln!("omp-video-mixer-me: Szenen-Grafik: Knoten „{}“ nicht gefunden", g.node);
+        return;
+    };
+    let visible = peer
+        .get_param("layers")
+        .ok()
+        .and_then(|v| v.as_array().map(|a| a.iter().any(|l| l["id"] == g.layer_id.as_str())))
+        .unwrap_or(false);
+    if visible {
+        return;
+    }
+    match peer.invoke_with("show", serde_json::json!({"templateId": g.template_id, "layerId": g.layer_id})) {
+        Ok(_) => {
+            let ms: u64 = std::env::var("OMP_SCENE_GRAPHIC_PREROLL_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(700);
+            std::thread::sleep(std::time::Duration::from_millis(ms.min(3000)));
+        }
+        Err(e) => eprintln!("omp-video-mixer-me: Szenen-Grafik einblenden fehlgeschlagen: {e}"),
     }
 }
 
-/// Grafik einer Szene ein-/ausblenden (im Hintergrund, die Registry-Abfrage blockiert). Beim Einblenden bleibt eine bereits
-/// sichtbare Ebene unverändert (ihre Daten gehen nicht auf die Vorlagen-Vorgaben zurück).
-fn scene_graphic(registry_url: String, g: pipstate::SceneGraphic, show: bool) {
+/// Szenen-Grafik ausblenden: sofort angefordert, zeitgenau zum Beginn der PIP-Ausfahrt (`atUtcMs`), im Hintergrund.
+fn scene_graphic_hide(registry_url: String, g: pipstate::SceneGraphic) {
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64) + pipstate::anim_delay_ms();
     std::thread::spawn(move || {
-        let registry = RegistryClient::new(registry_url);
-        let Some(node) = registry.list_nodes().ok().and_then(|n| n.into_iter().find(|n| n.label == g.node)) else {
-            eprintln!("omp-video-mixer-me: Szenen-Grafik: Knoten „{}“ nicht gefunden", g.node);
-            return;
-        };
-        let peer = omp_node_sdk::peer::PeerClient::new(node.href);
-        if show {
-            let visible = peer
-                .get_param("layers")
-                .ok()
-                .and_then(|v| v.as_array().map(|a| a.iter().any(|l| l["id"] == g.layer_id.as_str())))
-                .unwrap_or(false);
-            if visible {
-                return;
-            }
-            if let Err(e) = peer.invoke_with("show", serde_json::json!({"templateId": g.template_id, "layerId": g.layer_id})) {
-                eprintln!("omp-video-mixer-me: Szenen-Grafik einblenden fehlgeschlagen: {e}");
-            }
-        } else {
-            let _ = peer.invoke_with("hide", serde_json::json!({"layerId": g.layer_id}));
+        if let Some(peer) = graphic_peer(&registry_url, &g.node) {
+            let _ = peer.invoke_with("hide", serde_json::json!({"layerId": g.layer_id, "atUtcMs": at}));
         }
     });
 }
