@@ -3408,8 +3408,10 @@ export class FlowCanvas extends HTMLElement {
       saveBtn.textContent = isLive ? "Im Workflow speichern" : tt("flow.b97d23");
       if (dirty) saveBtn.className = "omp-btn-primary";
       saveBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
-      saveBtn.disabled = !dirty;
-      saveBtn.title = dirty ? "" : tt("flow.27e3d2");
+      // Laufender Workflow: immer speicherbar. Einstellungen der Nodes (Muster, Keyer, Kanäle …) lassen sich nicht billig mit dem
+      // gespeicherten Startzustand vergleichen; Speichern erfasst sie und pinnt sie als Startzustand.
+      saveBtn.disabled = !dirty && !isLive;
+      saveBtn.title = dirty ? "" : isLive ? tt("flow.save_live_state") : tt("flow.27e3d2");
       saveBtn.addEventListener("click", () => {
         if (isLive) this.#saveRunningWorkflowFromLiveTopology();
         else this.#saveWorkflowEditDraft();

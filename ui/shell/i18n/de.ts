@@ -935,6 +935,7 @@ export const de = {
   "flow.486700": "Kacheln nach Signalfluss anordnen — Quellen links, Senken rechts.",
   "flow.b97d23": "Speichern",
   "flow.27e3d2": "Keine ungespeicherten Änderungen",
+  "flow.save_live_state": "Speichert auch den aktuellen Zustand der Nodes (Muster, Keyer, Kanäle …) als Startzustand",
   "flow.82f357": "Verlassen",
   "flow.05b4ea": "Alle einpassen",
   "flow.9f38fa": "In der Host-Ansicht bestimmen die Host-Zonen die Anordnung.",

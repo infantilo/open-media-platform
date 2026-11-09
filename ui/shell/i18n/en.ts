@@ -936,6 +936,7 @@ export const en: Record<keyof typeof de, string> = {
   "flow.486700": "Arrange tiles by signal flow — sources left, sinks right.",
   "flow.b97d23": "Save",
   "flow.27e3d2": "No unsaved changes",
+  "flow.save_live_state": "Also saves the current state of the nodes (pattern, keyer, channels …) as the start state",
   "flow.82f357": "Leave",
   "flow.05b4ea": "Fit all",
   "flow.9f38fa": "In host view the host zones determine the layout.",
