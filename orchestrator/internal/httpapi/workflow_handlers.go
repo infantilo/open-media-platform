@@ -436,3 +436,20 @@ func handleWorkflowInterfaceDisconnect(svc WorkflowService) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]any{"unpinned": n})
 	}
 }
+
+// handleWorkflowDrift liefert GET /api/v1/workflows/{id}/drift: {"roles":[…]} — Rollen mit gepinntem Startzustand, der vom
+// Live-Stand abweicht (Warnung vor dem Stop; nur lesend).
+func handleWorkflowDrift(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		roles, err := svc.PinnedDrift(id)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"roles": roles})
+	}
+}

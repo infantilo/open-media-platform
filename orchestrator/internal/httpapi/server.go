@@ -172,6 +172,8 @@ type WorkflowService interface {
 	Delete(id string) error
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string, confirm bool) error
+	// PinnedDrift: Rollen, deren gespeicherter Startzustand vom Live-Stand abweicht (Warnung vor dem Stop).
+	PinnedDrift(id string) ([]string, error)
 	// RestartRole (Nutzerwunsch 2026-07-29, mixerLevels-Parameter
 	// 2026-08-24) — s. workflows.Service.RestartRole-Doku: startet nur EINE
 	// Rolle eines laufenden Workflows neu, optional mit neuem role.Format
@@ -442,6 +444,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/workflows/{id}/interface/inputs/{name}/connect", g.requireVerbGlobal(authz.VerbOperate, handleWorkflowInterfaceConnect(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/interface/inputs/{name}/disconnect", g.requireVerbGlobal(authz.VerbOperate, handleWorkflowInterfaceDisconnect(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}/plan", g.requireAuth(handleWorkflowPlan(workflowSvc)))
+	mux.HandleFunc("GET /api/v1/workflows/{id}/drift", g.requireAuth(handleWorkflowDrift(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/events", g.requireAuth(handleEvents(events)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/descriptor.json", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))

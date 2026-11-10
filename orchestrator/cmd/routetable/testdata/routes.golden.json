@@ -206,6 +206,12 @@
   },
   {
     "method": "POST",
+    "path": "/api/v1/admin/settings/alert-mail/status-preview",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
     "path": "/api/v1/admin/settings/alert-mail/test",
     "auth": "verb:Admin",
     "domain": "core"
@@ -2616,6 +2622,12 @@
     "method": "PUT",
     "path": "/api/v1/workflows/{id}",
     "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/workflows/{id}/drift",
+    "auth": "auth",
     "domain": "core"
   },
   {

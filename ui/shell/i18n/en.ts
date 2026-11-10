@@ -625,6 +625,8 @@ export const en: Record<keyof typeof de, string> = {
   "wf.6212ff": "Create",
   "wf.b5f13f": "Really stop workflow “{p0}”?",
   "wf.4c4650": "Stop",
+  "wf.drift1": "Warning: for these roles the current state differs from the saved start state: {p0}.\nWhen stopped, the next start uses the SAVED state — your changes since saving will be lost.\n(Cancel and use “Save in workflow” to keep the current state.)",
+  "wf.drift2": "Stop anyway",
   "wf.2fcdd3": "Stopping failed: {p0}",
   "wf.a85624": "Really pause workflow “{p0}”?",
   "wf.d63f99": "Pause",

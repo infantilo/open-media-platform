@@ -601,6 +601,8 @@ func (f fakeWorkflowService) DisconnectInput(_ context.Context, _, _ string) (in
 	return 0, nil
 }
 
+func (f fakeWorkflowService) PinnedDrift(id string) ([]string, error) { return []string{}, nil }
+
 func (f fakeWorkflowService) PlanStart(id string) (workflows.StartPlan, error) {
 	return workflows.StartPlan{WorkflowID: id}, nil
 }

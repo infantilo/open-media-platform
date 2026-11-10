@@ -538,6 +538,20 @@ class WorkflowsView extends HTMLElement {
       const ok = await confirmDialog(tt("wf.b5f13f", { p0: wf.name }), { confirmLabel: tt("wf.4c4650") });
       if (!ok) return;
     }
+    // Nutzerfund 2026-11-10: gepinnte Rollen starten mit dem GESPEICHERTEN Stand; Live-Änderungen seit dem Speichern
+    // gingen beim Stop still verloren. Vorher warnen (nur lesend; Fehler hier verhindern den Stop nicht).
+    try {
+      const dr = await apiFetch(`/api/v1/workflows/${wf.id}/drift`);
+      if (dr.ok) {
+        const roles: string[] = (await dr.json()).roles ?? [];
+        if (roles.length > 0) {
+          const go = await confirmDialog(tt("wf.drift1", { p0: roles.join(", ") }), { confirmLabel: tt("wf.drift2") });
+          if (!go) return;
+        }
+      }
+    } catch {
+      /* Prüfung nicht möglich — Stop wie bisher */
+    }
     try {
       const res = await apiFetch(`/api/v1/workflows/${wf.id}/stop`, {
         method: "POST",

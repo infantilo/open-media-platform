@@ -624,6 +624,8 @@ export const de = {
   "wf.6212ff": "Anlegen",
   "wf.b5f13f": "Workflow „{p0}\" wirklich stoppen?",
   "wf.4c4650": "Stoppen",
+  "wf.drift1": "Achtung: Bei diesen Rollen weicht der aktuelle Stand vom gespeicherten Startzustand ab: {p0}.\nBeim Stoppen gilt beim nächsten Start der GESPEICHERTE Stand — Ihre Änderungen seit dem Speichern gehen verloren.\n(Abbrechen und „Im Workflow speichern“ übernimmt den aktuellen Stand.)",
+  "wf.drift2": "Trotzdem stoppen",
   "wf.2fcdd3": "Stoppen fehlgeschlagen: {p0}",
   "wf.a85624": "Workflow „{p0}\" wirklich pausieren?",
   "wf.d63f99": "Pausieren",
