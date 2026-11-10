@@ -407,6 +407,8 @@ func (s *Service) restoreOneRoleStateN(wf Workflow, role string, raw json.RawMes
 
 func (s *Service) restoreOneRoleStateTry(wf Workflow, role string, raw json.RawMessage, retries int) error {
 	raw = stripUnrestoredMarker(raw)
+	// Schon in einem früheren Durchlauf eingespielt: nur noch prüfen, nie erneut schreiben.
+	verifyOnly := s.wasPosted(wf.ID, role)
 	var lastErr error
 	for attempt := 1; attempt <= retries; attempt++ {
 		if attempt > 1 {
@@ -449,14 +451,21 @@ func (s *Service) restoreOneRoleStateTry(wf Workflow, role string, raw json.RawM
 			state = resolved
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), roleStateTimeout)
-		postErr := postNodeState(ctx, s.httpClient, node.APIBaseURL, state)
-		cancel()
-		if postErr != nil {
-			lastErr = postErr
-			continue
+		if !verifyOnly {
+			ctx, cancel := context.WithTimeout(context.Background(), roleStateTimeout)
+			postErr := postNodeState(ctx, s.httpClient, node.APIBaseURL, state)
+			cancel()
+			if postErr != nil {
+				lastErr = postErr
+				continue
+			}
+			s.markPosted(wf.ID, role)
 		}
-		if len(resolvedIDs) == 0 {
+		if len(resolvedIDs) == 0 || verifyOnly {
+			// verifyOnly: der Stand wurde in einem früheren Durchlauf zugestellt; weicht der Node heute ab, haben
+			// Bediener/Automation ihn inzwischen geändert (oder der Node hält die Quelle als „ausstehend“, bis ihr
+			// Flow existiert). Das ist kein Verlust — als wiederhergestellt gelten lassen, sonst bliebe die Rolle
+			// „unrestored“ und Stop/Sicherung erfassten die Live-Änderungen nie.
 			return nil
 		}
 
@@ -465,9 +474,9 @@ func (s *Service) restoreOneRoleStateTry(wf Workflow, role string, raw json.RawM
 		// verarbeiten, bevor direkt danach zurückgelesen wird.
 		time.Sleep(200 * time.Millisecond)
 
-		ctx, cancel = context.WithTimeout(context.Background(), roleStateTimeout)
-		after, err := getNodeState(ctx, s.httpClient, node.APIBaseURL)
-		cancel()
+		vctx, vcancel := context.WithTimeout(context.Background(), roleStateTimeout)
+		after, err := getNodeState(vctx, s.httpClient, node.APIBaseURL)
+		vcancel()
 		switch {
 		case err != nil:
 			lastErr = err
@@ -767,6 +776,7 @@ func (s *Service) markUnrestored(wfID string, roles ...string) {
 	}
 	for _, r := range roles {
 		s.unrestored[unrestoredKey(wfID, r)] = 0
+		delete(s.posted, unrestoredKey(wfID, r))
 	}
 	s.unrestoredMu.Unlock()
 	// Zusätzlich im gespeicherten Eintrag vermerken: ein Orchestrator-Neustart
@@ -795,6 +805,25 @@ func (s *Service) setPersistedMarker(wfID string, on bool, roles ...string) {
 			slog.Warn("workflows: failed to persist restore marker", "workflow", wfID, "role", r, "error", err)
 		}
 	}
+}
+
+// markPosted / wasPosted: der gespeicherte Zustand wurde in diesem Start schon in den Node eingespielt.
+// Spätere Wiederholungen (retryUnrestored, jede Minute) prüfen dann nur noch und spielen NIE erneut ein:
+// sonst überschrieben sie, was Bediener oder Automation inzwischen live geändert haben (z. B. den Take der
+// Playout-Automation auf Player B durch das alte Programm „Player A“; Nutzerfund 2026-11-10).
+func (s *Service) markPosted(wfID, role string) {
+	s.unrestoredMu.Lock()
+	if s.posted == nil {
+		s.posted = map[string]bool{}
+	}
+	s.posted[unrestoredKey(wfID, role)] = true
+	s.unrestoredMu.Unlock()
+}
+
+func (s *Service) wasPosted(wfID, role string) bool {
+	s.unrestoredMu.Lock()
+	defer s.unrestoredMu.Unlock()
+	return s.posted[unrestoredKey(wfID, role)]
 }
 
 func (s *Service) isUnrestored(wfID, role string) bool {

@@ -288,6 +288,7 @@ type Service struct {
 	volatileFeeds map[string][]string // Workflow\x00Eingang → Sender, die ihn zuletzt gespeist haben (nur Laufzeit)
 	unrestoredMu  sync.Mutex
 	unrestored    map[string]int
+	posted        map[string]bool // s. markPosted, unter unrestoredMu
 	store         workflowStore
 	nodes         NodeLister
 	graph         GraphService
