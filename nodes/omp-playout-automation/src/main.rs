@@ -3360,7 +3360,8 @@ fn retire_children(state: &mut AutomationState, new_item_id: &str) {
         }
     }
     // Abgeschlossene Einträge älterer Primaries fallen weg; laufende bleiben bis zu ihrem Stopp.
-    state.child_runtime.retain(|rt| !rt.state.is_terminal());
+    // (Ein bereits abgeschlossenes Vorlauf-Kind des neuen Events bleibt stehen: der Take erkennt daran, dass es schon lief.)
+    state.child_runtime.retain(|rt| !rt.state.is_terminal() || (!hard && rt.preplanned && rt.item_id == new_item_id));
 }
 
 /// Braucht das Kind nach dem Start noch einen Stopp-Befehl?
@@ -7073,6 +7074,20 @@ mod graphics_children_tests {
         let stop = s.child_schedule.iter().find(|e| e.action == ChildAction::Stop).expect("Stopp neu verankert");
         let d = stop.fire_at.saturating_duration_since(onair).as_millis() as i64;
         assert!((2_900..=3_100).contains(&d), "{d}");
+    }
+
+    #[test]
+    fn a_finished_preroll_child_is_not_lost_at_the_take() {
+        let mut s = two_items(vec![graphic(TimingMode::BeforeStart, 2_000, 0)], 20_000);
+        let onair = Instant::now();
+        preplan_next_children(&mut s, "p", onair);
+        s.child_runtime[0].state = ChildState::Completed; // Vorlauf-Kind lief schon vor dem Take
+        retire_children(&mut s, "n");
+        let notices = plan_children(&mut s, "n", onair, None, false);
+        assert!(notices.is_empty(), "{notices:?}");
+        assert_eq!(s.child_runtime.len(), 1);
+        assert_eq!(s.child_runtime[0].state, ChildState::Completed);
+        assert!(!s.child_runtime[0].preplanned);
     }
 
     #[test]
