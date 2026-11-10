@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1597,7 +1598,16 @@ func (l *Launcher) execEntry(entry CatalogEntry, id, label, launchSecret string,
 	// eventuelle Crash-Meldung, ohne den Log-Passthrough anzufassen.
 	stderrTail := newTailBuffer(crashStderrLines)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = io.MultiWriter(os.Stderr, stderrTail)
+	if path, ok := regularFileOf(os.Stderr); ok {
+		// Läuft der Orchestrator mit stderr in einer Datei (Normalfall: `>> orchestrator.log 2>&1`), bekommt der Node
+		// diese Datei DIREKT als stderr statt einer Pipe. Mit Pipe starb jeder Node, den ein Orchestrator-Neustart
+		// überlebte, beim nächsten Schreiben auf stderr (kein Leser mehr → EPIPE): Player A beim Laden, die
+		// Automation sofort (Nutzerfund 2026-11-10). Die letzten Zeilen für die Crash-Meldung kommen dann aus der Datei.
+		cmd.Stderr = os.Stderr
+		stderrTail.fromFile(path)
+	} else {
+		cmd.Stderr = io.MultiWriter(os.Stderr, stderrTail)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err
@@ -2424,6 +2434,55 @@ type tailBuffer struct {
 	maxLines int
 	lines    []string
 	partial  strings.Builder
+	// Dateimodus (s. execEntry): Zeilen stammen aus dem Ende der gemeinsamen Log-Datei, ab Startoffset.
+	path   string
+	offset int64
+}
+
+// regularFileOf liefert den Pfad, wenn f eine normale Datei ist (kein Terminal, keine Pipe).
+func regularFileOf(f *os.File) (string, bool) {
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		return "", false
+	}
+	path, err := os.Readlink("/proc/self/fd/" + strconv.Itoa(int(f.Fd())))
+	if err != nil || path == "" || strings.HasSuffix(path, " (deleted)") {
+		return "", false
+	}
+	return path, true
+}
+
+// fromFile schaltet in den Dateimodus: String() liest die letzten Zeilen ab dem aktuellen Dateiende.
+func (b *tailBuffer) fromFile(path string) {
+	b.path = path
+	if st, err := os.Stat(path); err == nil {
+		b.offset = st.Size()
+	}
+}
+
+func (b *tailBuffer) fileTail() string {
+	f, err := os.Open(b.path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() <= b.offset {
+		return ""
+	}
+	start := st.Size() - 16*1024
+	if start < b.offset {
+		start = b.offset
+	}
+	buf := make([]byte, st.Size()-start)
+	if _, err := f.ReadAt(buf, start); err != nil && err != io.EOF {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(buf)), "\n")
+	if len(lines) > b.maxLines {
+		lines = lines[len(lines)-b.maxLines:]
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func newTailBuffer(maxLines int) *tailBuffer {
@@ -2454,6 +2513,9 @@ func (b *tailBuffer) appendLine(line string) {
 // String liefert die zuletzt gepufferten Zeilen (inklusive einer noch
 // nicht mit '\n' abgeschlossenen letzten Zeile), Newline-getrennt.
 func (b *tailBuffer) String() string {
+	if b.path != "" {
+		return b.fileTail()
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	lines := b.lines

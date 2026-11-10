@@ -796,6 +796,8 @@ struct AutomationState {
     mixer_auto_setup: bool,
     /// Schlüssel (Mischer|Player A|Player B|Channel) des zuletzt erfolgreich eingerichteten Zustands.
     mixer_setup_done: Option<String>,
+    /// Schlüssel (Mischer|Player A|Player B) des Starts, bei dem die Idle-Quelle schon geprüft/geschaltet wurde.
+    idle_start_done: Option<String>,
     graphics_node_id: Option<String>,
     /// Erhöht sich bei JEDER On-Air-Änderung (alle 8 `take_on_targets`-
     /// Aufrufstellen, auch die drei "immer harter Cut"-Ausnahmen) — ein
@@ -880,6 +882,7 @@ impl AutomationState {
             audio_mixer_node_id: None,
             mixer_auto_setup: std::env::var("OMP_PLAYOUT_MIXER_AUTO_SETUP").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
             mixer_setup_done: None,
+            idle_start_done: None,
             graphics_node_id: None,
             child_epoch: 0,
             child_schedule: Vec::new(),
@@ -5320,6 +5323,7 @@ fn setup_video_mixer(store: &AutomationStore) -> Result<String, String> {
 async fn discovery_loop(store: Arc<AutomationStore>) {
     let mut interval = tokio::time::interval(DISCOVERY_INTERVAL);
     let mut last_audio_setup: Option<Instant> = None;
+    let mut last_idle_start: Option<Instant> = None;
     loop {
         interval.tick().await;
         let audio_label = store.state.lock().expect("lock poisoned").target_audio_mixer_label.clone();
@@ -5394,6 +5398,54 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
                             store.state.lock().expect("lock poisoned").mixer_setup_done = Some(key);
                         }
                         Ok(Err(e)) => eprintln!("omp-playout-automation: Audiomischer einrichten: {e}"),
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+
+        // Idle-Quelle beim Start (Nutzerfund 2026-11-10): nach dem Workflow-Start steht der Mischer auf Schwarz (kein
+        // Programm), obwohl eine Idle-Quelle gesetzt ist — sie wurde bisher nur bei Stop/Playlist-Ende geschaltet.
+        // Nur wenn nichts läuft (kein Item/Cart on air) UND der Mischer kein Programm hat; ein laufendes Programm
+        // wird nie ersetzt. Versuche höchstens alle 5 s, bis es geklappt hat oder ein Programm anliegt.
+        {
+            let pending = {
+                let state = store.state.lock().expect("lock poisoned");
+                match (&state.mixer_node_id, &state.player_a_node_id, &state.player_b_node_id) {
+                    (Some(m), Some(a), Some(b))
+                        if state.onair_since.is_none()
+                            && state.active_cart.is_none()
+                            && idle_media(&state.idle_source, &state.available_sources).is_some() =>
+                    {
+                        let key = format!("{m}|{a}|{b}");
+                        (state.idle_start_done.as_deref() != Some(key.as_str())).then(|| (key, m.clone()))
+                    }
+                    _ => None,
+                }
+            };
+            if let Some((key, mixer_node_id)) = pending {
+                if last_idle_start.map_or(true, |t| t.elapsed() >= Duration::from_secs(5)) {
+                    last_idle_start = Some(Instant::now());
+                    let st = store.clone();
+                    let res = tokio::task::spawn_blocking(move || {
+                        let program = st.proxy_client(mixer_node_id).get_param("crosspoint.programInput").map_err(|e| e.to_string())?;
+                        let blank = program.is_null() || program.as_str().is_some_and(str::is_empty);
+                        if blank {
+                            st.do_stop()?;
+                            Ok::<bool, String>(true)
+                        } else {
+                            Ok(false)
+                        }
+                    })
+                    .await;
+                    match res {
+                        Ok(Ok(switched)) => {
+                            if switched {
+                                eprintln!("omp-playout-automation: Idle-Quelle beim Start geschaltet (Mischer hatte kein Programm)");
+                            }
+                            store.state.lock().expect("lock poisoned").idle_start_done = Some(key);
+                        }
+                        Ok(Err(e)) => eprintln!("omp-playout-automation: Idle-Quelle beim Start: {e}"),
                         Err(_) => {}
                     }
                 }
