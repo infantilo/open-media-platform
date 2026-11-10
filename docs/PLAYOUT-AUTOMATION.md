@@ -144,6 +144,16 @@ Parameter `subtitle` (ausgewählte Spur, läuft, Position, aktueller Text, Spure
 Zeitmodi (`timing`): `ABSOLUTE` (`atUtc`), `RELATIVE_TO_START` (`delayMs`),
 `RELATIVE_TO_END` (`delayMs` vor dem Ende, braucht feste Dauer), `FULL_PRIMARY`
 (Start bis Primary-Ende, auch bei Live; `durationMs=0`).
+Weitere Start-Modi: `BEFORE_START` (`delayMs` **vor** dem Beginn des Primary, Vorlauf) und `AFTER_END`
+(`delayMs` **nach** dem Ende des Primary; braucht feste Dauer des Primary und eine `durationMs` oder ein Ende).
+Ende des Kindes (statt `durationMs`): `endBeforeEndMs` (X vor dem Primary-Ende) oder `endAfterEndMs` (X danach);
+beide brauchen ein Primary mit fester Dauer.
+**Vorlauf:** Beim Take des Vorgängers wird der Take-Zeitpunkt des nächsten Events berechnet (automatischer Übergang
+nach fester Dauer, kein manuelles Ende, kein Hold-Modus; bei Fix-Events die Uhrzeit) und das Kind dafür vorab
+eingeplant. Ist der Take nicht berechenbar (manueller Start/Take, Vorgänger endlos, Reihenfolge nachträglich
+geändert), entfällt das Kind mit einer Meldung. **Nach Ende:** solche Kinder (`AFTER_END`, `endAfterEndMs`)
+werden beim Wechsel zum nächsten Event nicht abgebrochen, sondern laufen bis zu ihrem eigenen Stopp; ein STOP
+(Schwarz/Idle) beendet sie sofort.
 Lebenszyklus: `SCHEDULED → ARMED → FIRED → ACTIVE → COMPLETED | FAILED | CANCELLED`.
 Fehlerrichtlinie (`failurePolicy`): `IGNORE`, `WARN` (Standard), `RETRY` (count/delay),
 `BLOCK` (mit `required`: Take wird im Preflight verweigert), `FALLBACK` (`fallbackTarget`).

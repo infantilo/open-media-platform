@@ -931,9 +931,13 @@ struct ChildRuntime {
     /// Mit bereits aufgelösten Variablen (`{{next:title}}`).
     child: ChildEvent,
     state: ChildState,
-    start_offset_ms: u64,
-    stop_offset_ms: Option<u64>,
+    start_offset_ms: i64,
+    stop_offset_ms: Option<i64>,
     until_primary_end: bool,
+    /// Beginnt/endet bewusst NACH dem Primary: überlebt den Wechsel zum nächsten Event (`retire_children`).
+    survives: bool,
+    /// Vorlauf-Kind („X vor Start“): schon vor dem Take des Events eingeplant (`preplan_next_children`).
+    preplanned: bool,
     attempt: u32,
     error: Option<String>,
     /// Der erfolgreiche Start lief über `fallbackTarget` — der Stopp muss
@@ -1123,7 +1127,7 @@ impl AutomationStore {
     /// Carts/das synthetische Stop-Item haben nie welche, dieser Zweig
     /// ist für sie ein reines No-op nach dem Epochen-Sprung).
     fn schedule_children(&self, state: &mut AutomationState, item_id: &str, onair_since: Instant) {
-        retire_children(state);
+        retire_children(state, item_id);
         state.child_epoch += 1;
         state.onair_utc_ms = chrono::Utc::now().timestamp_millis() - onair_since.elapsed().as_millis() as i64;
         // Kapitel 37: der echte Schnitt liegt `takeAt` (Bildgrenze) — daran hängen Dauer und Marker.
@@ -1143,8 +1147,14 @@ impl AutomationStore {
             state.onair_since = Some(onair_since);
         }
         asrun_primary_changed(state, item_id);
-        for notice in plan_children(state, item_id, onair_since, None) {
+        for notice in plan_children(state, item_id, onair_since, None, false) {
             self.report(notice);
+        }
+        // Vorlauf-Kinder („X vor Start“) des Nachfolgers jetzt einplanen, solange der Take-Zeitpunkt berechenbar ist.
+        if item_id != "stop" {
+            for notice in preplan_next_children(state, item_id, onair_since) {
+                self.report(notice);
+            }
         }
     }
 
@@ -1272,7 +1282,7 @@ impl AutomationStore {
             state.onair_since = None;
             state.asrun.end(chrono::Utc::now().timestamp_millis(), "COMPLETED", "Playlist-Ende");
             // Idle-Quelle statt stehendem letzten Bild, wenn eine konfiguriert ist (Fehler nur melden, Liste ist ohnehin zu Ende).
-            if let (Some(media), Some(mixer_node_id)) = (idle_media(&state.idle_source), state.mixer_node_id.clone()) {
+            if let (Some(media), Some(mixer_node_id)) = (idle_media(&state.idle_source, &state.available_sources), state.mixer_node_id.clone()) {
                 let idle = ItemMeta {
                     label: "IDLE".to_string(),
                     media,
@@ -1523,7 +1533,7 @@ impl AutomationStore {
             .ok_or("Ziel-Mixer nicht aufgelöst (targetMixerLabel unbekannt/noch nicht gestartet)")?;
         let black = ItemMeta {
             label: "STOP".to_string(),
-            media: idle_media(&state.idle_source).unwrap_or(ItemMedia::TestPattern { pattern: "black".to_string(), tone_frequency: 0.0 }),
+            media: idle_media(&state.idle_source, &state.available_sources).unwrap_or(ItemMedia::TestPattern { pattern: "black".to_string(), tone_frequency: 0.0 }),
             duration_ms: 0,
             start_type: StartType::default(),
             fixtime_hms: None,
@@ -2857,14 +2867,25 @@ fn load_onto_channel(store: &AutomationStore, node_id: &str, meta: &ItemMeta, ho
 }
 
 /// Idle-Quelle aus `art:wert` (leer/ungültig = None → Schwarz).
-fn idle_media(spec: &str) -> Option<ItemMedia> {
+/// Live-Quellen werden über den Anzeigenamen gespeichert (Sender-IDs ändern sich bei jedem Start) und hier gegen die
+/// aktuell bekannten Quellen aufgelöst; eine direkte Sender-ID gilt weiter.
+fn idle_media(spec: &str, sources: &[Value]) -> Option<ItemMedia> {
     let (kind, value) = spec.split_once(':')?;
     let value = value.trim();
     if value.is_empty() {
         return None;
     }
     match kind {
-        "live" => Some(ItemMedia::Live { sender_id: value.to_string() }),
+        "live" => {
+            let field = |s: &Value, k: &str| s.get(k).and_then(Value::as_str).map(str::to_string);
+            let id = sources
+                .iter()
+                .find(|s| field(s, "senderId").as_deref() == Some(value))
+                .or_else(|| sources.iter().find(|s| field(s, "label").is_some_and(|l| l.eq_ignore_ascii_case(value))))
+                .and_then(|s| field(s, "senderId"))
+                .unwrap_or_else(|| value.to_string());
+            Some(ItemMedia::Live { sender_id: id })
+        }
         "file" => Some(ItemMedia::File { path: value.to_string() }),
         "image" => Some(ItemMedia::Image { path: value.to_string() }),
         "pattern" => Some(ItemMedia::TestPattern { pattern: value.to_string(), tone_frequency: 0.0 }),
@@ -3295,17 +3316,30 @@ fn item_transition(state: &AutomationState, item_id: &str) -> (Transition, Optio
 /// Kinder bekommen SOFORT einen Stopp (Spec §243: FULL_PRIMARY-Kinder enden
 /// mit dem Primary; auch zeitlich begrenzte dürfen nicht stehenbleiben, weil
 /// ihr geplanter Stopp sonst mit dem Primary verfiele).
-fn retire_children(state: &mut AutomationState) {
+fn retire_children(state: &mut AutomationState, new_item_id: &str) {
     let now = Instant::now();
-    // Starts aller Primaries verwerfen, Stopps vorziehen.
-    state.child_schedule.retain(|e| matches!(e.action, ChildAction::Stop));
+    // Geschützt: Kinder, die den Wechsel überleben („nach Ende“), und für das neue Event vorab eingeplante Vorlauf-Kinder.
+    // „stop“ (Schwarz/Idle) beendet wirklich alles.
+    let hard = new_item_id == "stop";
+    let protected_keys: Vec<(String, String)> = state
+        .child_runtime
+        .iter()
+        .filter(|rt| !hard && !rt.state.is_terminal() && (rt.survives || (rt.preplanned && rt.item_id == new_item_id)))
+        .map(|rt| (rt.item_id.clone(), rt.child.id.clone()))
+        .collect();
+    let is_protected = |item: &str, child: &str| protected_keys.iter().any(|(i, c)| i == item && c == child);
+    // Starts aller Primaries verwerfen (außer geschützte), Stopps vorziehen (außer geschützte).
+    state.child_schedule.retain(|e| matches!(e.action, ChildAction::Stop) || is_protected(&e.item_id, &e.child_id));
     for e in state.child_schedule.iter_mut() {
-        if e.fire_at > now {
+        if e.fire_at > now && !is_protected(&e.item_id, &e.child_id) {
             e.fire_at = now;
         }
     }
     let mut stops = Vec::new();
     for rt in state.child_runtime.iter_mut() {
+        if is_protected(&rt.item_id, &rt.child.id) {
+            continue;
+        }
         match rt.state {
             ChildState::Scheduled | ChildState::Armed => {
                 rt.state = ChildState::Cancelled;
@@ -3361,6 +3395,7 @@ fn plan_children(
     item_id: &str,
     onair_since: Instant,
     saved: Option<&HashMap<String, ChildState>>,
+    preplan: bool,
 ) -> Vec<String> {
     let mut notices = Vec::new();
     // Carts tragen ihre Children selbst (kein Eintrag in `metadata`)
@@ -3368,7 +3403,7 @@ fn plan_children(
     if !state.metadata.contains_key(item_id) && cart_meta.is_none() {
         return notices;
     }
-    let auto = if cart_meta.is_some() { Vec::new() } else { ad_break_children(state, item_id) };
+    let auto = if cart_meta.is_some() || preplan { Vec::new() } else { ad_break_children(state, item_id) };
     let Some(meta) = state.metadata.get(item_id).or(cart_meta.as_ref()) else { return notices };
     if meta.children.is_empty() && auto.is_empty() {
         return notices;
@@ -3378,7 +3413,12 @@ fn plan_children(
     let item_label = meta.label.clone();
     let mut children = meta.children.clone();
     children.extend(auto);
-    let elapsed_ms = onair_since.elapsed().as_millis() as u64;
+    let now = Instant::now();
+    let elapsed_ms = now.saturating_duration_since(onair_since).as_millis() as u64;
+    // Zeitpunkt `off` ms relativ zum On-Air-Beginn (negativ = davor); `None`, wenn nicht darstellbar.
+    let at = |off: i64| -> Option<Instant> {
+        if off >= 0 { Some(onair_since + Duration::from_millis(off as u64)) } else { onair_since.checked_sub(Duration::from_millis(off.unsigned_abs())) }
+    };
     for (n, original) in children.iter().enumerate() {
         let mut child = original.clone();
         if child.id.is_empty() {
@@ -3388,6 +3428,9 @@ fn plan_children(
         let window = match child.resolve_window(item_duration_ms, state.onair_utc_ms) {
             Ok(w) => w,
             Err(e) => {
+                if preplan {
+                    continue; // der echte Take meldet den Fehler
+                }
                 notices.push(format!("Child „{}\u{201c} von „{item_label}\u{201c} übersprungen: {e}", child.id));
                 state.child_runtime.push(ChildRuntime {
                     item_id: item_id.to_string(),
@@ -3396,6 +3439,8 @@ fn plan_children(
                     start_offset_ms: 0,
                     stop_offset_ms: None,
                     until_primary_end: false,
+                    survives: false,
+                    preplanned: false,
                     attempt: 0,
                     error: Some(e),
                     used_fallback: false,
@@ -3403,11 +3448,59 @@ fn plan_children(
                 continue;
             }
         };
+        // Vorplanung: nur Vorlauf-Kinder („vor Start“); alles andere plant der echte Take.
+        if preplan && window.start_offset_ms >= 0 {
+            continue;
+        }
+        let existing = state.child_runtime.iter().position(|r| r.item_id == item_id && r.child.id == child.id);
+        if preplan && let Some(pos) = existing {
+            // Frühere Vorplanung desselben Events (z. B. Schleife) ersetzen.
+            state.child_runtime.remove(pos);
+            state.child_schedule.retain(|e| !(e.item_id == item_id && e.child_id == child.id));
+        }
+        if !preplan && let Some(pos) = existing {
+            if state.child_runtime[pos].preplanned {
+                // Schon vor dem Take gestartet: nur das Ende am echten On-Air-Beginn neu verankern.
+                state.child_runtime[pos].preplanned = false;
+                state.child_schedule.retain(|e| !(e.item_id == item_id && e.child_id == child.id && e.action == ChildAction::Stop));
+                if needs_stop(&child)
+                    && let Some(stop) = window.stop_offset_ms.and_then(at)
+                    && !state.child_runtime[pos].state.is_terminal()
+                {
+                    state.child_schedule.push(ScheduledChild { fire_at: stop, item_id: item_id.to_string(), child_id: child.id.clone(), action: ChildAction::Stop });
+                }
+                continue;
+            }
+            // Ein früherer Lauf desselben Events (z. B. Schleife) ist abgelöst.
+            state.child_runtime.remove(pos);
+            state.child_schedule.retain(|e| !(e.item_id == item_id && e.child_id == child.id));
+        }
+        if !preplan && window.start_offset_ms < 0 {
+            let why = "Vorlauf nicht möglich: der Take-Zeitpunkt stand vorher nicht fest (manueller Take, Reihenfolge geändert oder Vorgänger ohne feste Dauer)";
+            notices.push(format!("Child „{}\u{201c} von „{item_label}\u{201c} übersprungen: {why}", child.id));
+            state.child_runtime.push(ChildRuntime {
+                item_id: item_id.to_string(),
+                child,
+                state: ChildState::Cancelled,
+                start_offset_ms: window.start_offset_ms,
+                stop_offset_ms: window.stop_offset_ms,
+                until_primary_end: window.until_primary_end,
+                survives: false,
+                preplanned: false,
+                attempt: 0,
+                error: Some(why.to_string()),
+                used_fallback: false,
+            });
+            continue;
+        }
         if let Some(w) = child.warn_outside_primary(&window, item_duration_ms) {
             notices.push(format!("Child „{}\u{201c} von „{item_label}\u{201c}: {w}", child.id));
         }
         let prior = saved.and_then(|m| m.get(&child.id)).copied();
-        let start_at = onair_since + Duration::from_millis(window.start_offset_ms);
+        let Some(start_at) = at(window.start_offset_ms).filter(|t| !preplan || *t > now) else {
+            notices.push(format!("Child „{}\u{201c} von „{item_label}\u{201c} übersprungen: der Vorlauf ist schon verstrichen", child.id));
+            continue;
+        };
         let mut runtime = ChildRuntime {
             item_id: item_id.to_string(),
             child: child.clone(),
@@ -3415,13 +3508,15 @@ fn plan_children(
             start_offset_ms: window.start_offset_ms,
             stop_offset_ms: window.stop_offset_ms,
             until_primary_end: window.until_primary_end,
+            survives: window.survives,
+            preplanned: preplan,
             attempt: 0,
             error: None,
             used_fallback: false,
         };
-        let push_stop = |state: &mut AutomationState, at: Instant| {
+        let push_stop = |state: &mut AutomationState, when: Instant| {
             state.child_schedule.push(ScheduledChild {
-                fire_at: at,
+                fire_at: when,
                 item_id: item_id.to_string(),
                 child_id: child.id.clone(),
                 action: ChildAction::Stop,
@@ -3434,13 +3529,13 @@ fn plan_children(
             Some(ChildState::Fired) | Some(ChildState::Active) => {
                 runtime.state = ChildState::Active;
                 if needs_stop(&child)
-                    && let Some(stop) = window.stop_offset_ms
+                    && let Some(stop) = window.stop_offset_ms.and_then(at)
                 {
-                    push_stop(state, onair_since + Duration::from_millis(stop));
+                    push_stop(state, stop);
                 }
             }
             // Restart: noch nicht gestartet, Startzeit aber verstrichen → nicht nachholen.
-            Some(_) if window.start_offset_ms < elapsed_ms => {
+            Some(_) if window.start_offset_ms < elapsed_ms as i64 => {
                 runtime.state = ChildState::Cancelled;
                 notices.push(format!(
                     "Neustart: Child „{}\u{201c} von „{item_label}\u{201c} wurde während des Ausfalls verpasst — nicht nachgeholt",
@@ -3454,10 +3549,10 @@ fn plan_children(
                     child_id: child.id.clone(),
                     action: ChildAction::Start { attempt: 0, use_fallback: false },
                 });
-                if let Some(stop) = window.stop_offset_ms
+                if let Some(stop) = window.stop_offset_ms.and_then(at)
                     && needs_stop(&child)
                 {
-                    push_stop(state, onair_since + Duration::from_millis(stop));
+                    push_stop(state, stop);
                 }
                 // ARMED, sobald das Ziel auflösbar ist (sonst bleibt es SCHEDULED, Auflösung beim Start).
                 if child_target_ok(state, &child) {
@@ -3468,6 +3563,37 @@ fn plan_children(
         state.child_runtime.push(runtime);
     }
     notices
+}
+
+/// Vorlauf-Kinder („X vor Start“) des nächsten Events einplanen, solange sein Take-Zeitpunkt berechenbar ist:
+/// automatischer Übergang nach einem Event mit fester Dauer (Zeitpunkt = On-Air-Beginn + Dauer) oder ein Fix-Event
+/// mit bekannter Uhrzeit. Bei manuellem Start, Hold-Modus, manuellem Ende oder endlosem Vorgänger gibt es keinen
+/// berechenbaren Take — dort wird der Vorlauf nicht eingeplant (der Take meldet es dann).
+fn preplan_next_children(state: &mut AutomationState, current_item_id: &str, onair_since: Instant) -> Vec<String> {
+    if state.playlist.mode() == Mode::Hold {
+        return Vec::new();
+    }
+    let Some(cur) = state.metadata.get(current_item_id) else { return Vec::new() };
+    let Some(next_id) = state.playlist.peek_next().map(str::to_string) else { return Vec::new() };
+    let Some(next) = state.metadata.get(&next_id) else { return Vec::new() };
+    if next.media.is_control() || !next.children.iter().any(|c| c.timing_mode() == children::TimingMode::BeforeStart) {
+        return Vec::new();
+    }
+    let now = Instant::now();
+    let predicted = match next.start_type {
+        StartType::Manual => None,
+        StartType::Fixtime => {
+            let delta_ms = if let Some(ms) = next.start_at_utc_ms {
+                Some(ms - chrono::Utc::now().timestamp_millis())
+            } else {
+                next.fixtime_hms.as_deref().and_then(parse_hms_to_secs).map(|t| (t - seconds_since_midnight_local()) * 1000)
+            };
+            delta_ms.filter(|d| *d > 0).map(|d| now + Duration::from_millis(d as u64))
+        }
+        _ => (cur.duration_ms > 0 && cur.media_ref.end_type != "manual").then(|| onair_since + Duration::from_millis(cur.duration_ms)),
+    };
+    let Some(predicted) = predicted else { return Vec::new() };
+    plan_children(state, &next_id, predicted, None, true)
 }
 
 /// Kapitel 37: erkannte Werbeblöcke der Playlist für die Anzeige (unabhängig davon, ob die Kennzeichnung an ist).
@@ -4644,7 +4770,7 @@ impl ParamStore for AutomationStore {
             }
             "idleSource" => {
                 let v = value.as_str().unwrap_or_default().trim().to_string();
-                if !v.is_empty() && idle_media(&v).is_none() {
+                if !v.is_empty() && idle_media(&v, &[]).is_none() {
                     return Err(SetError::Unknown);
                 }
                 state.idle_source = v;
@@ -5942,6 +6068,26 @@ async fn child_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<E
                     true
                 }
             });
+            // Vorab eingeplante Vorlauf-Kinder gelten nur, solange das Event wirklich als Nächstes (oder schon) dran ist;
+            // wurde die Reihenfolge inzwischen geändert, entfallen sie samt Stopp.
+            let stale: Vec<(String, String)> = due_events
+                .iter()
+                .filter(|ev| matches!(ev.action, ChildAction::Start { .. }))
+                .filter(|ev| {
+                    state.child_runtime.iter().any(|r| r.preplanned && r.item_id == ev.item_id && r.child.id == ev.child_id)
+                        && state.playlist.peek_next() != Some(ev.item_id.as_str())
+                        && state.playlist.current_index().and_then(|i| state.playlist.items().get(i)).map(String::as_str) != Some(ev.item_id.as_str())
+                })
+                .map(|ev| (ev.item_id.clone(), ev.child_id.clone()))
+                .collect();
+            for (i, c) in &stale {
+                due_events.retain(|ev| !(ev.item_id == *i && ev.child_id == *c));
+                state.child_schedule.retain(|e| !(e.item_id == *i && e.child_id == *c));
+                if let Some(rt) = state.child_runtime.iter_mut().find(|r| r.item_id == *i && r.child.id == *c) {
+                    rt.state = ChildState::Cancelled;
+                    rt.error = Some("Vorlauf verworfen: das Event ist nicht mehr als Nächstes dran".to_string());
+                }
+            }
             due_events.sort_by_key(|ev| ev.fire_at);
             let graphics_node = state.graphics_node_id.clone();
             let occurrence_secs = state.onair_utc_ms.div_euclid(1000);
@@ -6141,6 +6287,8 @@ fn child_events_json(state: &AutomationState) -> Value {
                     "startOffsetMs": rt.start_offset_ms,
                     "stopOffsetMs": rt.stop_offset_ms,
                     "untilPrimaryEnd": rt.until_primary_end,
+                    "survives": rt.survives,
+                    "preplanned": rt.preplanned,
                     "attempt": rt.attempt,
                     "error": rt.error,
                 })
@@ -6893,11 +7041,72 @@ mod graphics_children_tests {
         c
     }
 
+    fn two_items(next_children: Vec<ChildEvent>, first_ms: u64) -> AutomationState {
+        let mut s = item_with(vec![], first_ms);
+        let mut next = s.metadata["p"].clone();
+        next.label = "Next".to_string();
+        next.duration_ms = 30_000;
+        next.children = next_children;
+        s.metadata.insert("n".to_string(), next);
+        s.playlist.append("n".to_string());
+        s
+    }
+
+    #[test]
+    fn before_start_children_are_preplanned_from_the_predecessors_end() {
+        let mut s = two_items(vec![graphic(TimingMode::BeforeStart, 2_000, 5_000)], 20_000);
+        let onair = Instant::now();
+        let notices = preplan_next_children(&mut s, "p", onair);
+        assert!(notices.is_empty(), "{notices:?}");
+        let rt = s.child_runtime.iter().find(|r| r.item_id == "n").expect("vorgeplant");
+        assert!(rt.preplanned && rt.start_offset_ms == -2000);
+        let start = s.child_schedule.iter().find(|e| matches!(e.action, ChildAction::Start { .. })).unwrap();
+        // 20 s Vorgänger − 2 s Vorlauf
+        let d = start.fire_at.saturating_duration_since(onair).as_millis() as i64;
+        assert!((17_900..=18_100).contains(&d), "{d}");
+        // Take: das Kind bleibt erhalten, der Stopp wird am echten Beginn neu verankert (−2 s + 5 s = 3 s)
+        s.child_schedule.retain(|e| matches!(e.action, ChildAction::Start { .. }));
+        retire_children(&mut s, "n");
+        assert!(s.child_runtime.iter().any(|r| r.item_id == "n" && r.state != ChildState::Cancelled));
+        plan_children(&mut s, "n", onair, None, false);
+        assert!(!s.child_runtime.iter().find(|r| r.item_id == "n").unwrap().preplanned);
+        let stop = s.child_schedule.iter().find(|e| e.action == ChildAction::Stop).expect("Stopp neu verankert");
+        let d = stop.fire_at.saturating_duration_since(onair).as_millis() as i64;
+        assert!((2_900..=3_100).contains(&d), "{d}");
+    }
+
+    #[test]
+    fn before_start_without_a_computable_take_is_refused_with_a_notice() {
+        // Vorgänger endlos (Dauer 0): kein berechenbarer Take
+        let mut s = two_items(vec![graphic(TimingMode::BeforeStart, 2_000, 5_000)], 0);
+        assert!(preplan_next_children(&mut s, "p", Instant::now()).is_empty());
+        assert!(s.child_runtime.is_empty());
+        // Manueller Take des Events direkt: Vorlauf wird abgelehnt, nichts wird geplant
+        let notices = plan_children(&mut s, "n", Instant::now(), None, false);
+        assert!(notices.iter().any(|n| n.contains("Vorlauf nicht möglich")), "{notices:?}");
+        assert_eq!(s.child_runtime[0].state, ChildState::Cancelled);
+        assert!(s.child_schedule.is_empty());
+    }
+
+    #[test]
+    fn after_end_children_survive_the_primary_change_but_not_stop() {
+        let mut s = item_with(vec![graphic(TimingMode::AfterEnd, 1_000, 4_000)], 10_000);
+        let notices = plan_children(&mut s, "p", Instant::now(), None, false);
+        assert!(notices.is_empty(), "{notices:?}");
+        let rt = &s.child_runtime[0];
+        assert!(rt.survives && rt.start_offset_ms == 11_000 && rt.stop_offset_ms == Some(15_000));
+        retire_children(&mut s, "next");
+        assert_eq!(s.child_runtime[0].state, ChildState::Armed, "überlebt den Wechsel");
+        assert_eq!(s.child_schedule.len(), 2, "Start und Stopp bleiben");
+        retire_children(&mut s, "stop");
+        assert!(s.child_runtime.is_empty(), "STOP beendet alles");
+    }
+
     #[test]
     fn plan_schedules_start_and_timed_stop_and_arms_resolvable_targets() {
         let mut s = item_with(vec![graphic(TimingMode::RelativeToStart, 10_000, 8_000)], 60_000);
         let now = Instant::now();
-        let notices = plan_children(&mut s, "p", now, None);
+        let notices = plan_children(&mut s, "p", now, None, false);
         assert!(notices.is_empty(), "{notices:?}");
         let kinds: Vec<(String, u64)> = s
             .child_schedule
@@ -6914,7 +7123,7 @@ mod graphics_children_tests {
     #[test]
     fn full_primary_has_no_own_stop_it_ends_with_the_primary() {
         let mut s = item_with(vec![graphic(TimingMode::FullPrimary, 0, 0)], 0);
-        plan_children(&mut s, "p", Instant::now(), None);
+        plan_children(&mut s, "p", Instant::now(), None, false);
         assert_eq!(s.child_schedule.len(), 1, "only the start");
         assert!(s.child_runtime[0].until_primary_end);
     }
@@ -6923,7 +7132,7 @@ mod graphics_children_tests {
     fn unresolved_target_leaves_the_child_scheduled_not_armed() {
         let mut s = item_with(vec![graphic(TimingMode::FullPrimary, 0, 0)], 0);
         s.graphics_node_id = None;
-        plan_children(&mut s, "p", Instant::now(), None);
+        plan_children(&mut s, "p", Instant::now(), None, false);
         assert_eq!(s.child_runtime[0].state, ChildState::Scheduled);
     }
 
@@ -6931,7 +7140,7 @@ mod graphics_children_tests {
     fn impossible_window_fails_the_child_with_a_notice_and_schedules_nothing() {
         // RELATIVE_TO_END an einem endlosen Live-Primary.
         let mut s = item_with(vec![graphic(TimingMode::RelativeToEnd, 2000, 0)], 0);
-        let notices = plan_children(&mut s, "p", Instant::now(), None);
+        let notices = plan_children(&mut s, "p", Instant::now(), None, false);
         assert!(notices[0].contains("fester Dauer"), "{notices:?}");
         assert!(s.child_schedule.is_empty());
         assert_eq!(s.child_runtime[0].state, ChildState::Failed);
@@ -6944,12 +7153,12 @@ mod graphics_children_tests {
             120_000,
         );
         s.child_runtime.clear();
-        plan_children(&mut s, "p", Instant::now(), None);
+        plan_children(&mut s, "p", Instant::now(), None, false);
         // Zweites Kind lief bereits.
         s.child_runtime[1].state = ChildState::Active;
         s.child_schedule.retain(|e| e.child_id != "c2");
 
-        retire_children(&mut s);
+        retire_children(&mut s, "x");
 
         assert!(s.child_schedule.iter().all(|e| e.action == ChildAction::Stop), "no start survives a primary change");
         let stop = s.child_schedule.iter().find(|e| e.child_id == "c2").expect("active child gets a stop");
@@ -6974,7 +7183,7 @@ mod graphics_children_tests {
             [("c1".to_string(), ChildState::Active), ("c2".to_string(), ChildState::Scheduled), ("c3".to_string(), ChildState::Scheduled)]
                 .into_iter()
                 .collect();
-        let notices = plan_children(&mut s, "p", onair, Some(&saved));
+        let notices = plan_children(&mut s, "p", onair, Some(&saved), false);
         assert!(notices.iter().any(|n| n.contains("c2") && n.contains("verpasst")), "{notices:?}");
         let by_id = |id: &str| s.child_runtime.iter().find(|r| r.child.id == id).unwrap().state;
         assert_eq!(by_id("c1"), ChildState::Active);
@@ -7423,7 +7632,7 @@ mod adbreak_plan_tests {
         let mut s = playlist(&[("show", "", 60_000), ("s1", "commercial", 10_000), ("s2", "commercial", 20_000), ("show2", "", 60_000)]);
         let now = Instant::now();
         s.onair_utc_ms = 1_000_000;
-        let notices = plan_children(&mut s, "show", now, None);
+        let notices = plan_children(&mut s, "show", now, None, false);
         assert!(notices.is_empty(), "{notices:?}");
         assert_eq!(runtime_ids(&s), vec!["ad-pre-s1"]);
         assert_eq!(s.child_runtime[0].state, ChildState::Armed);
@@ -7436,11 +7645,11 @@ mod adbreak_plan_tests {
     fn nothing_is_planned_when_the_feature_is_off_or_the_item_has_no_role() {
         let mut s = playlist(&[("show", "", 60_000), ("s1", "commercial", 10_000)]);
         s.ad.enabled = false;
-        plan_children(&mut s, "show", Instant::now(), None);
+        plan_children(&mut s, "show", Instant::now(), None, false);
         assert!(s.child_runtime.is_empty());
         s.ad.enabled = true;
         let mut s = playlist(&[("a", "", 1000), ("b", "", 1000)]);
-        plan_children(&mut s, "a", Instant::now(), None);
+        plan_children(&mut s, "a", Instant::now(), None, false);
         assert!(s.child_runtime.is_empty());
     }
 
@@ -7448,7 +7657,7 @@ mod adbreak_plan_tests {
     fn leaving_an_open_block_schedules_an_immediate_close() {
         let mut s = playlist(&[("s1", "commercial", 10_000), ("s2", "commercial", 10_000), ("show", "", 60_000)]);
         s.ad_open.insert("s1".to_string(), AdOpen { event_id: 7, cut_at_utc_ms: 0 });
-        plan_children(&mut s, "show", Instant::now(), None);
+        plan_children(&mut s, "show", Instant::now(), None, false);
         assert_eq!(runtime_ids(&s), vec!["ad-close-s1"]);
     }
 
@@ -7457,7 +7666,7 @@ mod adbreak_plan_tests {
         let mut s = playlist(&[("show", "", 60_000), ("s1", "commercial", 10_000)]);
         let mut saved = HashMap::new();
         saved.insert("ad-pre-s1".to_string(), ChildState::Completed);
-        plan_children(&mut s, "show", Instant::now(), Some(&saved));
+        plan_children(&mut s, "show", Instant::now(), Some(&saved), false);
         assert_eq!(s.child_runtime[0].state, ChildState::Completed);
         assert!(s.child_schedule.is_empty());
     }

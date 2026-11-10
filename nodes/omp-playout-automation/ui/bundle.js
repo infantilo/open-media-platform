@@ -30,6 +30,11 @@ const T = (() => {
       "ct.channelTrigger": "📡 Channel-Trigger",
       "tm.start": "ab Start (Delay)",
       "tm.end": "vor Ende (Delay)",
+      "tm.before": "vor Start (Vorlauf)", "tm.after": "nach Ende (überlebt den Wechsel)",
+      "ed.beforeStart": "Vor Start (HH:MM:SS.FF)", "ed.afterEnd": "Nach Ende (HH:MM:SS.FF)",
+      "ed.endAfter": "nach dem Ende des Primary", "ed.endAfterEnd": "Abstand nach Primary-Ende (HH:MM:SS.FF)",
+      "ed.beforeStartHint": "Braucht einen berechenbaren Take: automatischer Übergang nach einem Event mit fester Dauer oder ein Fix-Event. Bei manuellem Take entfällt das Child mit Meldung.",
+      "ed.afterEndHint": "Läuft über den Wechsel zum nächsten Event hinaus (braucht eine Dauer oder ein Ende); STOP beendet es.",
       "tm.full": "gesamte Primary-Dauer",
       "tm.abs": "absolute Uhrzeit",
       "fp.warn": "Warnung",
@@ -104,7 +109,7 @@ const T = (() => {
       "tgt.mixHint": "Fügt nur hinzu, was fehlt: vorhandene Kanäle und angeheftete Quellen bleiben unverändert, nichts wird gelöscht.",
       "tgt.preflight": "Preflight-Vorlauf (min)",
       "tgt.filler": "Standard-Filler (Datei)",
-      "idle.label": "Idle-Quelle (wenn die Liste nicht läuft)", "idle.black": "Schwarz", "idle.live": "Live-Quelle", "idle.file": "Datei", "idle.image": "Standbild", "idle.pattern": "Testmuster",
+      "idle.label": "Idle-Quelle (wenn die Liste nicht läuft)", "idle.choose": "— wählen —", "idle.black": "Schwarz", "idle.live": "Live-Quelle", "idle.file": "Datei", "idle.image": "Standbild", "idle.pattern": "Testmuster",
       "idle.hint": "Wird bei Stop und am Playlist-Ende geschaltet (statt Schwarz bzw. stehendem letzten Bild).",
       "sec.ads": "Werbeblöcke (SCTE)",
       "ad.enabled": "Werbeblöcke automatisch kennzeichnen",
@@ -310,6 +315,7 @@ const T = (() => {
       "ed.mode": "Modus",
       "ed.clock": "Uhrzeit",
       "ed.beforeEnd": "Vor Ende (HH:MM:SS.FF)",
+      "ed.endMode": "Ende", "ed.endDur": "nach Dauer", "ed.endPrimary": "am Ende des Primary", "ed.endBefore": "vor dem Ende des Primary", "ed.endBeforeEnd": "Abstand vor Primary-Ende (HH:MM:SS.FF)",
       "ed.delay": "Verzögerung (HH:MM:SS.FF)",
       "ed.zeroUntilEnd": "0 = bis zum Ende des Primary",
       "ed.onErrors": "Bei Fehlern",
@@ -387,6 +393,11 @@ const T = (() => {
       "ct.channelTrigger": "📡 Channel trigger",
       "tm.start": "from start (delay)",
       "tm.end": "before end (delay)",
+      "tm.before": "before start (lead-in)", "tm.after": "after end (survives the change)",
+      "ed.beforeStart": "Before start (HH:MM:SS.FF)", "ed.afterEnd": "After end (HH:MM:SS.FF)",
+      "ed.endAfter": "after the end of the primary", "ed.endAfterEnd": "Distance after primary end (HH:MM:SS.FF)",
+      "ed.beforeStartHint": "Needs a predictable take: automatic transition after an event with a fixed duration, or a fixed-time event. With a manual take the child is skipped with a notice.",
+      "ed.afterEndHint": "Runs past the change to the next event (needs a duration or an end); STOP ends it.",
       "tm.full": "entire primary duration",
       "tm.abs": "absolute time",
       "fp.warn": "Warning",
@@ -461,7 +472,7 @@ const T = (() => {
       "tgt.mixHint": "Only adds what is missing: existing channels and pinned sources stay as they are, nothing is deleted.",
       "tgt.preflight": "Preflight lead time (min)",
       "tgt.filler": "Default filler (file)",
-      "idle.label": "Idle source (when the list is not running)", "idle.black": "Black", "idle.live": "Live source", "idle.file": "File", "idle.image": "Still image", "idle.pattern": "Test pattern",
+      "idle.label": "Idle source (when the list is not running)", "idle.choose": "— choose —", "idle.black": "Black", "idle.live": "Live source", "idle.file": "File", "idle.image": "Still image", "idle.pattern": "Test pattern",
       "idle.hint": "Switched on Stop and at the end of the playlist (instead of black / the frozen last picture).",
       "sec.ads": "Ad breaks (SCTE)",
       "ad.enabled": "Mark ad breaks automatically",
@@ -667,6 +678,7 @@ const T = (() => {
       "ed.mode": "Mode",
       "ed.clock": "Time of day",
       "ed.beforeEnd": "Before end (HH:MM:SS.FF)",
+      "ed.endMode": "End", "ed.endDur": "after duration", "ed.endPrimary": "at the end of the primary", "ed.endBefore": "before the end of the primary", "ed.endBeforeEnd": "Distance before primary end (HH:MM:SS.FF)",
       "ed.delay": "Delay (HH:MM:SS.FF)",
       "ed.zeroUntilEnd": "0 = until the end of the primary",
       "ed.onErrors": "On errors",
@@ -961,6 +973,7 @@ const CHILD_TYPES = [
 const CHILD_ICON = Object.fromEntries(CHILD_TYPES.map(([v, t]) => [v, t.split(" ")[0]]));
 const TIMINGS = [
   ["RELATIVE_TO_START", T("tm.start")], ["RELATIVE_TO_END", T("tm.end")],
+  ["BEFORE_START", T("tm.before")], ["AFTER_END", T("tm.after")],
   ["FULL_PRIMARY", T("tm.full")], ["ABSOLUTE", T("tm.abs")],
 ];
 const FAIL_POLICIES = [
@@ -1333,18 +1346,27 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         h("div", { class: "hint", style: "grid-column:1/-1" }, T("ad.hint"))));
     // Idle-Quelle: Art + Wert, als „art:wert“ im Parameter idleSource.
     const idleKind = h("select", { id: "idleKind" }, ...[["", T("idle.black")], ["live", T("idle.live")], ["file", T("idle.file")], ["image", T("idle.image")], ["pattern", T("idle.pattern")]].map(([v, t]) => h("option", { value: v }, t)));
-    const idleVal = h("input", { type: "text", id: "idleVal", list: "idleList", placeholder: "…" });
-    const idleList = h("datalist", { id: "idleList" });
-    const idleSend = () => setParam("idleSource", idleKind.value ? `${idleKind.value}:${idleVal.value.trim()}` : "");
-    const idleFill = () => {
+    const IMG_RE = /\.(png|jpe?g|bmp|gif|tiff?|webp|svg)$/i;
+    const idleVal = h("select", { id: "idleVal", style: "flex:1;min-width:0" });
+    const idleSend = () => setParam("idleSource", idleKind.value && idleVal.value ? `${idleKind.value}:${idleVal.value}` : "");
+    // Auswahlliste je Art: nur passende Medien (Videos bzw. Bilder), bekannte Live-Quellen, Testmuster-Namen.
+    const idleFill = (cur = idleVal.value) => {
       const k = idleKind.value;
       idleVal.style.display = k ? "" : "none";
-      const opts = k === "live" ? availableSources.map((s) => [s.senderId, s.label || s.senderId]) : k === "file" || k === "image" ? mediaLibrary.map((f) => [f, f]) : [];
-      idleList.replaceChildren(...opts.map(([v, t]) => h("option", { value: v }, t)));
+      let opts = [];
+      if (k === "live") opts = availableSources.map((s) => [s.label || s.senderId, s.label || s.senderId]);
+      if (k === "live") { const byId = availableSources.find((s) => s.senderId === cur); if (byId) cur = byId.label || cur; }
+      else if (k === "file") opts = mediaLibrary.filter((f) => !IMG_RE.test(f)).map((f) => [f, f]);
+      else if (k === "image") opts = mediaLibrary.filter((f) => IMG_RE.test(f)).map((f) => [f, f]);
+      else if (k === "pattern") opts = PATTERNS.map((p) => [p, p]);
+      if (cur && !opts.some(([v]) => v === cur)) opts.unshift([cur, cur]);
+      const empty = k && opts.length === 0 ? [["", k === "live" ? T("ed.noSources") : T("ed.noMedia")]] : [["", T("idle.choose")]];
+      idleVal.replaceChildren(...[...empty, ...opts].map(([v, t]) => h("option", { value: v }, t)));
+      idleVal.value = cur || "";
     };
-    idleKind.addEventListener("change", () => { idleVal.value = ""; idleFill(); if (!idleKind.value) idleSend(); });
+    idleKind.addEventListener("change", () => { idleFill(""); if (!idleKind.value) idleSend(); });
     idleVal.addEventListener("change", idleSend);
-    const idleBox = h("label", {}, T("idle.label"), h("div", { style: "display:flex;gap:6px" }, idleKind, idleVal, idleList));
+    const idleBox = h("label", {}, T("idle.label"), h("div", { style: "display:flex;gap:6px" }, idleKind, idleVal));
     const targetsSec = h("details", { class: "sec" },
       h("summary", {}, T("sec.targets")),
       h("div", { class: "body targets" },
@@ -2163,7 +2185,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       let a = 0;
       if (t === "RELATIVE_TO_START") a = c.delayMs || 0;
       else if (t === "RELATIVE_TO_END") a = Math.max(0, (dur > 0 ? dur : end) - (c.delayMs || 0));
-      const b = t === "FULL_PRIMARY" || !c.durationMs ? end : Math.min(end, a + c.durationMs);
+      else if (t === "BEFORE_START") a = -(c.delayMs || 0);
+      else if (t === "AFTER_END") a = (dur > 0 ? dur : end) + (c.delayMs || 0);
+      const b = t === "FULL_PRIMARY" ? end : c.endAfterEndMs != null && dur > 0 ? dur + c.endAfterEndMs : c.endBeforeEndMs != null && dur > 0 ? Math.max(a + 1, dur - c.endBeforeEndMs) : !c.durationMs ? end : t === "AFTER_END" || t === "BEFORE_START" ? a + c.durationMs : Math.min(end, a + c.durationMs);
       return [a, Math.max(b, a + 1)];
     };
     const renderTimeline = () => {
@@ -2224,10 +2248,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     this._fit = fitList;
     const timingText = (c) => {
       const t = c.timing || (c.relativeTo === "END" ? "RELATIVE_TO_END" : "RELATIVE_TO_START");
-      const d = c.durationMs ? tcFormat(c.durationMs, TC_FPS) : T("untilEnd");
+      const d = c.endAfterEndMs != null ? `+${tcFormat(c.endAfterEndMs, TC_FPS)} ${T("ed.endAfter")}` : c.endBeforeEndMs != null ? `−${tcFormat(c.endBeforeEndMs, TC_FPS)} ${T("ed.endBefore")}` : c.durationMs ? tcFormat(c.durationMs, TC_FPS) : T("untilEnd");
       if (t === "ABSOLUTE") return `${c.atUtc ? formatLocalStart(c.atUtc) : "?"} · ${d}`;
       if (t === "FULL_PRIMARY") return T("fullDuration");
-      return `${t === "RELATIVE_TO_END" ? "−" : "+"}${tcFormat(c.delayMs || 0, TC_FPS)} · ${d}`;
+      return `${t === "RELATIVE_TO_END" || t === "BEFORE_START" ? "−" : "+"}${tcFormat(c.delayMs || 0, TC_FPS)}${t === "BEFORE_START" ? " ⟵" : t === "AFTER_END" ? " ⟶" : ""} · ${d}`;
     };
 
     // Delete-Taste (Fokus im Panel, nicht in einem Eingabefeld)
@@ -2756,9 +2780,27 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           const at = h("input", { type: "text", placeholder: T("ed.startPh"), value: k.atUtc ? new Date(k.atUtc).toLocaleString("sv-SE") : "", oninput: (e) => { k._atLocal = e.target.value; } });
           f.append(...field(T("ed.clock"), at));
         } else if (k.timing !== "FULL_PRIMARY") {
-          f.append(...field(k.timing === "RELATIVE_TO_END" ? T("ed.beforeEnd") : T("ed.delay"), bindTc(k, "delayMs")));
+          f.append(...field(k.timing === "RELATIVE_TO_END" ? T("ed.beforeEnd") : k.timing === "BEFORE_START" ? T("ed.beforeStart") : k.timing === "AFTER_END" ? T("ed.afterEnd") : T("ed.delay"), bindTc(k, "delayMs")));
+          if (k.timing === "BEFORE_START") f.append(h("div", { class: "hint" }, T("ed.beforeStartHint")));
+          if (k.timing === "AFTER_END") f.append(h("div", { class: "hint" }, T("ed.afterEndHint")));
         }
-        if (k.timing !== "FULL_PRIMARY") f.append(...field(T("ed.durationMs"), bindTc(k, "durationMs", { title: T("ed.zeroUntilEnd") })));
+        if (k.timing !== "FULL_PRIMARY") {
+          // Ende: feste Dauer | bis Primary-Ende | X vor Primary-Ende
+          const em = k.endAfterEndMs != null ? "after" : k.endBeforeEndMs != null ? "before" : k.durationMs > 0 ? "dur" : "end";
+          const emSel = h("select", { onchange: (e) => {
+            const v = e.target.value;
+            delete k.endBeforeEndMs; delete k.endAfterEndMs;
+            if (v === "before") { k.endBeforeEndMs = 0; k.durationMs = 0; }
+            else if (v === "after") { k.endAfterEndMs = 0; k.durationMs = 0; }
+            else if (v === "end") k.durationMs = 0;
+            ctx.redraw();
+          } }, h("option", { value: "dur" }, T("ed.endDur")), h("option", { value: "end" }, T("ed.endPrimary")), h("option", { value: "before" }, T("ed.endBefore")), h("option", { value: "after" }, T("ed.endAfter")));
+          emSel.value = em;
+          f.append(...field(T("ed.endMode"), emSel));
+          if (em === "dur") f.append(...field(T("ed.durationMs"), bindTc(k, "durationMs")));
+          if (em === "before") f.append(...field(T("ed.endBeforeEnd"), bindTc(k, "endBeforeEndMs")));
+          if (em === "after") f.append(...field(T("ed.endAfterEnd"), bindTc(k, "endAfterEndMs")));
+        }
         f.append(h("div", { class: "hint", style: "border-top:1px solid var(--bd);padding-top:6px" }, T("ed.onErrors")));
         f.append(...field(T("ed.policy"), bindSelect(k, "failurePolicy", FAIL_POLICIES, ctx.redraw)));
         if (k.failurePolicy === "RETRY") {
@@ -3150,8 +3192,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (v.idleSource !== undefined && shadow.activeElement !== idleKind && shadow.activeElement !== idleVal) {
         const [k, ...r] = String(v.idleSource || "").split(":");
         idleKind.value = ["live", "file", "image", "pattern"].includes(k) ? k : "";
-        idleVal.value = idleKind.value ? r.join(":") : "";
-        idleFill();
+        idleFill(idleKind.value ? r.join(":") : "");
       }
       const df = shadow.getElementById("defaultFiller");
       if (df && shadow.activeElement !== df && v.defaultFiller !== undefined) df.value = v.defaultFiller;

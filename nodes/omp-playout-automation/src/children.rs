@@ -75,6 +75,10 @@ pub enum TimingMode {
     RelativeToEnd,
     /// Vom Start bis zum Ende des Primary (auch bei endlosem Live-Primary).
     FullPrimary,
+    /// `delayMs` Millisekunden VOR dem Beginn des Primary (Vorlauf; braucht einen berechenbaren Take).
+    BeforeStart,
+    /// `delayMs` Millisekunden NACH dem Ende des Primary (überlebt den Wechsel; braucht ein Ende mit fester Dauer).
+    AfterEnd,
 }
 
 /// Spec §188.
@@ -154,6 +158,12 @@ pub struct ChildEvent {
     /// 0 = bis zum Ende des Primary.
     #[serde(rename = "durationMs", default)]
     pub duration_ms: u64,
+    /// Ende `X` ms VOR dem Ende des Primary (statt fester Dauer); braucht ein Primary mit fester Dauer.
+    #[serde(rename = "endBeforeEndMs", default, skip_serializing_if = "Option::is_none")]
+    pub end_before_end_ms: Option<u64>,
+    /// Ende `X` ms NACH dem Ende des Primary: das Kind überlebt den Wechsel zum nächsten Event.
+    #[serde(rename = "endAfterEndMs", default, skip_serializing_if = "Option::is_none")]
+    pub end_after_end_ms: Option<u64>,
     #[serde(rename = "atUtc", default, skip_serializing_if = "String::is_empty")]
     pub at_utc: String,
     #[serde(rename = "templateId", default, skip_serializing_if = "String::is_empty")]
@@ -184,14 +194,16 @@ pub struct ChildEvent {
     pub fallback_target: String,
 }
 
-/// Ergebnis der Zeitrechnung (Offsets ab On-Air-Beginn des Primary).
+/// Ergebnis der Zeitrechnung (Offsets ab On-Air-Beginn des Primary; negativ = davor).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Window {
-    pub start_offset_ms: u64,
+    pub start_offset_ms: i64,
     /// `Some`: fester Stopp-Offset. `None`: kein eigener Stopp.
-    pub stop_offset_ms: Option<u64>,
+    pub stop_offset_ms: Option<i64>,
     /// Läuft bis zum Ende des Primary (Stopp beim Primary-Wechsel).
     pub until_primary_end: bool,
+    /// Beginnt oder endet bewusst NACH dem Primary: wird beim Wechsel nicht abgebrochen.
+    pub survives: bool,
 }
 
 impl ChildEvent {
@@ -205,6 +217,8 @@ impl ChildEvent {
             relative_to: None,
             delay_ms,
             duration_ms,
+            end_before_end_ms: None,
+            end_after_end_ms: None,
             at_utc: String::new(),
             template_id: template_id.to_string(),
             data: Value::Null,
@@ -305,28 +319,59 @@ impl ChildEvent {
     /// Zeitfenster relativ zum On-Air-Beginn des Primary.
     /// `onair_start_utc_ms` nur für ABSOLUTE.
     pub fn resolve_window(&self, primary_duration_ms: u64, onair_start_utc_ms: i64) -> Result<Window, String> {
-        let timed_stop = |start: u64| if self.duration_ms > 0 { Some(start + self.duration_ms) } else { None };
-        match self.timing_mode() {
-            TimingMode::RelativeToStart => {
-                Ok(Window { start_offset_ms: self.delay_ms, stop_offset_ms: timed_stop(self.delay_ms), until_primary_end: self.duration_ms == 0 })
-            }
+        let dur = i64::try_from(primary_duration_ms).unwrap_or(i64::MAX);
+        let delay = i64::try_from(self.delay_ms).unwrap_or(i64::MAX);
+        let mode = self.timing_mode();
+        if mode == TimingMode::FullPrimary {
+            return Ok(Window { start_offset_ms: 0, stop_offset_ms: None, until_primary_end: true, survives: false });
+        }
+        let need_fixed = |what: &str| -> Result<(), String> {
+            if primary_duration_ms == 0 { Err(format!("{what} braucht ein Primary mit fester Dauer (Live/endlos hat kein Ende)")) } else { Ok(()) }
+        };
+        // Start
+        let start: i64 = match mode {
+            TimingMode::RelativeToStart => delay,
+            TimingMode::BeforeStart => -delay,
             TimingMode::RelativeToEnd => {
-                if primary_duration_ms == 0 {
-                    return Err("RELATIVE_TO_END braucht ein Primary mit fester Dauer (Live/endlos hat kein Ende)".to_string());
-                }
-                let start = primary_duration_ms
-                    .checked_sub(self.delay_ms)
-                    .ok_or_else(|| format!("RELATIVE_TO_END: {} ms vor dem Ende liegt vor dem Beginn des Primary ({primary_duration_ms} ms)", self.delay_ms))?;
-                Ok(Window { start_offset_ms: start, stop_offset_ms: timed_stop(start), until_primary_end: self.duration_ms == 0 })
+                need_fixed("RELATIVE_TO_END")?;
+                dur.checked_sub(delay).filter(|s| *s >= 0).ok_or_else(|| format!("RELATIVE_TO_END: {} ms vor dem Ende liegt vor dem Beginn des Primary ({primary_duration_ms} ms)", self.delay_ms))?
             }
-            TimingMode::FullPrimary => Ok(Window { start_offset_ms: 0, stop_offset_ms: None, until_primary_end: true }),
+            TimingMode::AfterEnd => {
+                need_fixed("AFTER_END")?;
+                dur + delay
+            }
             TimingMode::Absolute => {
                 let at = self.at_utc_ms().ok_or("ABSOLUTE ohne gültiges atUtc")?;
-                let start = u64::try_from(at - onair_start_utc_ms)
-                    .map_err(|_| "ABSOLUTE: der Zeitpunkt liegt vor dem Beginn des Primary".to_string())?;
-                Ok(Window { start_offset_ms: start, stop_offset_ms: timed_stop(start), until_primary_end: self.duration_ms == 0 })
+                let off = at - onair_start_utc_ms;
+                if off < 0 {
+                    return Err("ABSOLUTE: der Zeitpunkt liegt vor dem Beginn des Primary".to_string());
+                }
+                off
             }
+            TimingMode::FullPrimary => unreachable!(),
+        };
+        // Ende: nach Parent-Ende > vor Parent-Ende > feste Dauer > bis Primary-Ende
+        let (stop, until_primary_end) = if let Some(x) = self.end_after_end_ms {
+            need_fixed("Ende „nach Primary-Ende“")?;
+            (Some(dur + i64::try_from(x).unwrap_or(i64::MAX)), false)
+        } else if let Some(x) = self.end_before_end_ms {
+            need_fixed("Ende „vor Primary-Ende“")?;
+            let stop = dur.checked_sub(i64::try_from(x).unwrap_or(i64::MAX)).filter(|s| *s >= 0).ok_or_else(|| format!("Ende {x} ms vor dem Primary-Ende liegt vor dem Beginn des Primary ({primary_duration_ms} ms)"))?;
+            (Some(stop), false)
+        } else if self.duration_ms > 0 {
+            (Some(start + i64::try_from(self.duration_ms).unwrap_or(i64::MAX)), false)
+        } else if mode == TimingMode::AfterEnd {
+            return Err("AFTER_END braucht eine Dauer oder ein Ende (ein Kind nach dem Primary hat sonst keinen Stopp)".to_string());
+        } else {
+            (None, true)
+        };
+        if let Some(s) = stop
+            && s <= start
+        {
+            return Err(format!("Ende ({s} ms) liegt nicht nach dem Start ({start} ms)"));
         }
+        let survives = mode == TimingMode::AfterEnd || self.end_after_end_ms.is_some();
+        Ok(Window { start_offset_ms: start, stop_offset_ms: stop, until_primary_end, survives })
     }
 
     /// Liegt das Fenster innerhalb des Primary? (Spec §126 „Child Event außerhalb Primary“)
@@ -334,11 +379,15 @@ impl ChildEvent {
         if primary_duration_ms == 0 {
             return None;
         }
-        if w.start_offset_ms >= primary_duration_ms {
+        if w.survives {
+            return None;
+        }
+        let dur = i64::try_from(primary_duration_ms).unwrap_or(i64::MAX);
+        if w.start_offset_ms >= dur {
             return Some(format!("startet bei {} ms, nach dem Ende des Primary ({primary_duration_ms} ms)", w.start_offset_ms));
         }
         if let Some(stop) = w.stop_offset_ms
-            && stop > primary_duration_ms
+            && stop > dur
         {
             return Some(format!("endet bei {stop} ms, nach dem Ende des Primary ({primary_duration_ms} ms) — wird beim Primary-Ende gestoppt"));
         }
@@ -379,6 +428,47 @@ mod tests {
     }
 
     #[test]
+    fn before_start_and_after_end_windows() {
+        let mut b = rel(2_000, 5_000);
+        b.timing = Some(TimingMode::BeforeStart);
+        let w = b.resolve_window(60_000, 0).unwrap();
+        assert_eq!((w.start_offset_ms, w.stop_offset_ms, w.survives), (-2_000, Some(3_000), false));
+        // Vorlauf funktioniert auch bei endlosem Primary (Start braucht kein Ende)
+        assert!(b.resolve_window(0, 0).is_ok());
+        let mut a = rel(1_000, 4_000);
+        a.timing = Some(TimingMode::AfterEnd);
+        let w = a.resolve_window(60_000, 0).unwrap();
+        assert_eq!((w.start_offset_ms, w.stop_offset_ms, w.survives), (61_000, Some(65_000), true));
+        assert!(a.resolve_window(0, 0).unwrap_err().contains("fester Dauer"));
+        a.duration_ms = 0;
+        assert!(a.resolve_window(60_000, 0).unwrap_err().contains("Dauer"));
+        // Ende nach Primary-Ende auch bei normalem Start
+        let mut e = rel(10_000, 0);
+        e.end_after_end_ms = Some(3_000);
+        let w = e.resolve_window(60_000, 0).unwrap();
+        assert_eq!((w.start_offset_ms, w.stop_offset_ms, w.survives, w.until_primary_end), (10_000, Some(63_000), true, false));
+    }
+
+    #[test]
+    fn end_before_primary_end_sets_the_stop_offset() {
+        let mut c = rel(10_000, 0);
+        c.end_before_end_ms = Some(5_000);
+        let w = c.resolve_window(120_000, 0).unwrap();
+        assert_eq!((w.start_offset_ms, w.stop_offset_ms, w.until_primary_end), (10_000, Some(115_000), false));
+        // gilt auch für „vor Ende“-Start
+        let mut e = rel(30_000, 0);
+        e.timing = Some(TimingMode::RelativeToEnd);
+        e.end_before_end_ms = Some(5_000);
+        assert_eq!(e.resolve_window(120_000, 0).unwrap().stop_offset_ms, Some(115_000));
+        // Ende vor Start und live ohne Dauer werden abgelehnt
+        let mut bad = rel(100_000, 0);
+        bad.end_before_end_ms = Some(30_000);
+        assert!(bad.resolve_window(120_000, 0).unwrap_err().contains("nicht nach dem Start"));
+        assert!(c.resolve_window(0, 0).unwrap_err().contains("fester Dauer"));
+    }
+
+
+    #[test]
     fn legacy_graphics_child_json_still_loads() {
         // Altes Format aus Kapitel 6 Teil 5 (Snapshots, UI): kein `type`, kein `timing`.
         let c: ChildEvent = serde_json::from_str(
@@ -412,10 +502,10 @@ mod tests {
     #[test]
     fn relative_to_start_window() {
         let w = rel(10_000, 8_000).resolve_window(120_000, 0).unwrap();
-        assert_eq!(w, Window { start_offset_ms: 10_000, stop_offset_ms: Some(18_000), until_primary_end: false });
+        assert_eq!(w, Window { start_offset_ms: 10_000, stop_offset_ms: Some(18_000), until_primary_end: false, survives: false });
         // Dauer 0 = bis Primary-Ende (auch beim endlosen Live-Primary).
         let w = rel(3000, 0).resolve_window(0, 0).unwrap();
-        assert_eq!(w, Window { start_offset_ms: 3000, stop_offset_ms: None, until_primary_end: true });
+        assert_eq!(w, Window { start_offset_ms: 3000, stop_offset_ms: None, until_primary_end: true, survives: false });
     }
 
     #[test]
@@ -431,7 +521,7 @@ mod tests {
     fn full_primary_runs_from_start_to_primary_end_even_for_live() {
         let c = ChildEvent::graphic("logo", TimingMode::FullPrimary, 999, 999);
         let w = c.resolve_window(0, 0).unwrap();
-        assert_eq!(w, Window { start_offset_ms: 0, stop_offset_ms: None, until_primary_end: true });
+        assert_eq!(w, Window { start_offset_ms: 0, stop_offset_ms: None, until_primary_end: true, survives: false });
     }
 
     #[test]

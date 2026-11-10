@@ -328,7 +328,7 @@ pub fn apply_snapshot(state: &mut AutomationState, snap: Snapshot, now_utc_ms: i
                         .filter(|c| c.item_id == item_id)
                         .map(|c| (c.id.clone(), c.state))
                         .collect();
-                    report.notices.extend(crate::plan_children(state, &item_id, since, Some(&saved)));
+                    report.notices.extend(crate::plan_children(state, &item_id, since, Some(&saved), false));
                 }
                 report.notices.push(format!(
                     "Neustart: „{label}\u{201c} läuft laut Snapshot weiter ({}s von {}s) — Zustand der Player nicht abgeglichen",
@@ -1165,6 +1165,8 @@ mod tests {
                 start_offset_ms: 5000,
                 stop_offset_ms: Some(50_000),
                 until_primary_end: false,
+                survives: false,
+                preplanned: false,
                 attempt: 0,
                 error: None,
                 used_fallback: false,
@@ -1176,6 +1178,8 @@ mod tests {
                 start_offset_ms: 40_000,
                 stop_offset_ms: None,
                 until_primary_end: true,
+                survives: false,
+                preplanned: false,
                 attempt: 0,
                 error: None,
                 used_fallback: false,
