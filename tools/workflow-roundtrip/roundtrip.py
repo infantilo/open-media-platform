@@ -75,7 +75,12 @@ def relabel(v, idx):
     if isinstance(v, str):
         return idx.get(v, v)
     if isinstance(v, list):
-        return [relabel(x, idx) for x in v]
+        items = [relabel(x, idx) for x in v]
+        # Listen aus Objekten mit Kennung (z. B. sends[].auxId) haben keine feste Reihenfolge: nach Kennung ordnen.
+        for key in ("id", "auxId", "name"):
+            if items and all(isinstance(x, dict) and isinstance(x.get(key), str) for x in items):
+                return sorted(items, key=lambda x: x[key])
+        return items
     if isinstance(v, dict):
         return {k: relabel(x, idx) for k, x in v.items() if k not in VOLATILE}
     return v
@@ -148,7 +153,8 @@ def main():
             json.dump(before, open(args.snapshot_only, "w"), indent=1, sort_keys=True)
             print(f"Schnappschuss: {len(before['states'])} Rollen, {len(before['edges'])} Kanten -> {args.snapshot_only}")
             return
-        print(f"Vorher: {len(before['states'])} Rollen, {len(before['edges'])} Kanten. Stoppe …")
+        json.dump(before, open("/tmp/workflow-roundtrip-before.json", "w"), indent=1, sort_keys=True)
+        print(f"Vorher: {len(before['states'])} Rollen, {len(before['edges'])} Kanten (gesichert in /tmp/workflow-roundtrip-before.json). Stoppe …")
         st, r = call("POST", f"/api/v1/workflows/{wf['id']}/stop", timeout=120)
         if st >= 300 or not wait_status(wf["id"], "stopped", 120):
             sys.exit(f"Stop fehlgeschlagen: {st} {r}")
