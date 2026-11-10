@@ -171,6 +171,8 @@ def main():
         print(f"ABWEICHUNG nach {args.settle:.0f}s ({len(diffs)}):")
         for x in diffs[:60]:
             print("  ", x)
+        print("Hinweis: Rollen mit „Im Workflow speichern“ (gepinnter Startzustand) starten bewusst mit dem GESPEICHERTEN Stand, "
+              "nicht mit dem letzten Live-Stand; Abweichungen dort sind gewollt (erneut speichern, dann stimmt der Vergleich).")
         sys.exit(1)
     print("OK: Zustand und Verbindungen identisch.")
 
