@@ -13,7 +13,7 @@ Nur Standardbibliothek.
   python3 tools/workflow-roundtrip/roundtrip.py --workflow ... --snapshot-only out.json   # nur sichern
   python3 tools/workflow-roundtrip/roundtrip.py --workflow ... --compare out.json         # gegen Datei vergleichen
 """
-import argparse, json, sys, time, urllib.error, urllib.request
+import argparse, json, os, re, subprocess, sys, time, urllib.error, urllib.request
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--base", default="http://localhost:8000")
@@ -23,6 +23,7 @@ ap.add_argument("--workflow", required=True, help="Name oder ID")
 ap.add_argument("--snapshot-only", metavar="FILE")
 ap.add_argument("--compare", metavar="FILE", help="gegen gespeicherten Schnappschuss vergleichen (kein Stop/Start)")
 ap.add_argument("--settle", type=float, default=90, help="max. Sekunden Wartezeit nach dem Start")
+ap.add_argument("--no-health", action="store_true", help="PGM-Flow-Gesundheitsprüfung nach dem Start auslassen")
 ap.add_argument("--ignore", default="", help="zusätzliche, kommagetrennte Schlüsselnamen (flüchtige Werte)")
 args = ap.parse_args()
 BASE = args.base.rstrip("/")
@@ -126,6 +127,40 @@ def diff(a, b, path=""):
     return d
 
 
+MXL_INFO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "third_party", "mxl", "build",
+                        "Linux-GCC-Release", "tools", "mxl-info", "mxl-info")
+
+
+def head_index(flow_id):
+    try:
+        out = subprocess.run([MXL_INFO, "-d", os.environ.get("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl"), "-f", flow_id],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:  # noqa: BLE001
+        return None
+    m = re.search(r"Head index:\s*(\d+)", out)
+    return int(m.group(1)) if m else None
+
+
+def health_problems():
+    """Jeder Video-Sender „PGM*“ muss laufen: Head-Index > 0 und wachsend (Hänger vom 2026-11-10: Ausgang blieb bei 0)."""
+    if args.no_health or not os.path.exists(MXL_INFO):
+        return []
+    st, nodes = call("GET", "/api/v1/nodes")
+    flows = {}
+    for n in nodes if st == 200 else []:
+        for sd in n.get("senders", []) or []:
+            if sd["label"].startswith("PGM") and sd.get("format", "").endswith(":video") and sd.get("flow_id"):
+                flows[f"{n['label']}/{sd['label']}"] = sd["flow_id"]
+    first = {k: head_index(v) for k, v in flows.items()}
+    time.sleep(2)
+    problems = []
+    for k, v in flows.items():
+        a, b = first[k], head_index(v)
+        if not a or not b or b <= a:
+            problems.append(f"{k}: Head-Index {a} -> {b} (Ausgang läuft nicht)")
+    return problems
+
+
 def wait_status(wf_id, want, timeout):
     end = time.time() + timeout
     while time.time() < end:
@@ -167,14 +202,22 @@ def main():
     while time.time() < end and diffs:
         time.sleep(3)
         diffs = diff(before, snapshot(find_workflow()))
+    problems = health_problems()
     if diffs:
         print(f"ABWEICHUNG nach {args.settle:.0f}s ({len(diffs)}):")
         for x in diffs[:60]:
             print("  ", x)
         print("Hinweis: Rollen mit „Im Workflow speichern“ (gepinnter Startzustand) starten bewusst mit dem GESPEICHERTEN Stand, "
               "nicht mit dem letzten Live-Stand; Abweichungen dort sind gewollt (erneut speichern, dann stimmt der Vergleich).")
+        for x in problems:
+            print("GESUNDHEIT:", x)
         sys.exit(1)
-    print("OK: Zustand und Verbindungen identisch.")
+    if problems:
+        print("GESUNDHEIT:")
+        for x in problems:
+            print("  ", x)
+        sys.exit(2)
+    print("OK: Zustand und Verbindungen identisch, PGM-Ausgänge laufen.")
 
 
 main()
