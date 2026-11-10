@@ -818,7 +818,7 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
     let dist = Arc::new(Distributor::build(&pipeline, config.audio.clone(), plan_slot)?);
     // Zuordnung: ausdrücklich gewählt, sonst für MXF die frühere Standardwahl.
     let requested_mapping = item.audio_mapping.as_deref().and_then(|id| {
-        let m = dist.mapping_named(id).cloned();
+        let m = dist.mapping_named(id);
         if m.is_none() {
             eprintln!("omp-channel-player: Audio-Zuordnung '{id}' unbekannt — Standard");
         }
@@ -842,7 +842,7 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
                 return Err("MXF-Dateien werden im Tonbetrieb nicht unterstützt (WAV, FLAC, MP3, AAC, Ogg, …)".to_string());
             }
             if path.to_ascii_lowercase().ends_with(".mxf") {
-                let mapping = requested_mapping.clone().or_else(|| dist.mapping_named(audio::DEFAULT_MXF_MAPPING).cloned());
+                let mapping = requested_mapping.clone().or_else(|| dist.mapping_named(audio::DEFAULT_MXF_MAPPING));
                 let (demux, v, a) = build_mxf_file(&pipeline, path, config.width, config.height, dist.clone(), mapping)?;
                 mxf_audio = true;
                 query_el = Some(demux);

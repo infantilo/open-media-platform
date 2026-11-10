@@ -184,11 +184,63 @@ fn resolve_group(group: &TargetGroup, source: &SourceDesc, tracks: &[SourceTrack
     plan(group, ncols, None, None, warnings, false)
 }
 
+/// Ersatz „wie Gruppe X“: eine noch stille Gruppe darf per Regel (`use.select = "group:<id>"`) das Ergebnis einer anderen,
+/// bereits belegten Gruppe mit gleicher Kanalzahl übernehmen (z. B. Audiodescription/Originalton = Programmton, wenn die
+/// Datei keine eigene Spur dafür hat). Bit-exakte Gruppen sind ausgenommen. Reihenfolge = Profil-Reihenfolge.
+fn copy_from_groups(profile: &OutputProfile, groups: &mut [GroupPlan], source: &SourceDesc, tracks: &[SourceTrack], rules: &RuleSet) {
+    for gi in 0..groups.len() {
+        if !groups[gi].silent || groups[gi].failed || groups[gi].rule.is_some() {
+            continue;
+        }
+        let tg = &profile.groups[gi];
+        if tg.bit_exact() {
+            continue;
+        }
+        'rules: for rule in rules.rules.iter().filter(|r| r.group == tg.id || r.group == "*") {
+            if !matches!(when_applies(&rule.when, source, tracks), Ok(true)) {
+                continue;
+            }
+            for action in &rule.then {
+                let Some(from) = action.use_.as_ref().and_then(|u| u.select.as_deref()).and_then(|e| e.trim().strip_prefix("group:")) else { continue };
+                let Some(src) = groups.iter().find(|g| g.group == from && !g.silent) else { continue };
+                let dst = groups[gi].matrix.len();
+                let (matrix, chain) = if src.matrix.len() == dst {
+                    (src.matrix.clone(), src.chain.clone())
+                } else {
+                    // Andere Kanalzahl: Prozessor der Aktion (z. B. upmix51) auf die Zeilen der Quellgruppe anwenden.
+                    let via = action.use_.as_ref().and_then(|u| u.via.as_deref()).unwrap_or("auto");
+                    let Some(coeffs) = processors::matrix_for(via, src.matrix.len(), dst) else { continue };
+                    let ncols = src.matrix.first().map_or(0, Vec::len);
+                    let mut m = vec![vec![0.0f32; ncols]; dst];
+                    for (r, row) in coeffs.iter().enumerate() {
+                        for (j, &c) in row.iter().enumerate() {
+                            for col in 0..ncols {
+                                m[r][col] += c * src.matrix[j][col];
+                            }
+                        }
+                    }
+                    (m, src.chain.clone())
+                };
+                let label = tg.label.clone();
+                let from_label = profile.groups.iter().find(|g| g.id == from).map_or(from.to_string(), |g| g.label.clone());
+                let g = &mut groups[gi];
+                g.matrix = matrix;
+                g.chain = chain;
+                g.silent = false;
+                g.rule = Some(rule.id.clone());
+                g.warnings = vec![format!("{label}: keine Quellvorgabe → Ersatz per Regel '{}' (wie {from_label})", rule.id)];
+                break 'rules;
+            }
+        }
+    }
+}
+
 /// Löst alle Zielgruppen des Profils gegen die Quelle auf.
 pub fn resolve(profile: &OutputProfile, source: &SourceDesc, mapping: Option<&Mapping>, rules: &RuleSet) -> AudioPlan {
     let (tracks, src_channels) = flat_channels(source);
     let ncols = src_channels.len();
-    let groups: Vec<GroupPlan> = profile.groups.iter().map(|g| resolve_group(g, source, &tracks, ncols, mapping, rules)).collect();
+    let mut groups: Vec<GroupPlan> = profile.groups.iter().map(|g| resolve_group(g, source, &tracks, ncols, mapping, rules)).collect();
+    copy_from_groups(profile, &mut groups, source, &tracks, rules);
     let warnings = groups.iter().flat_map(|g| g.warnings.clone()).collect();
     let ok = groups.iter().all(|g| !g.failed);
     AudioPlan { src_channels, groups, warnings, ok }
@@ -337,6 +389,27 @@ mod tests {
             kind: SourceKind::File,
             tracks: (1..=n).map(|i| SourceTrack { n: i, layout: Layout::Mono, channels: vec![], tags: vec![format!("pos:{i}")] }).collect(),
         }
+    }
+
+    /// „wie Gruppe X“: Audiodescription/Originalton/5.1 übernehmen den Programmton, wenn die Datei (8 Mono-Spuren ohne
+    /// Rollen-Tags) keine eigenen Spuren dafür hat; Dolby E (bit-exakt) bleibt still.
+    #[test]
+    fn silent_groups_can_copy_the_program_group() {
+        let settings = default_settings();
+        let stereo = Mapping { id: "stereo".into(), label: "Stereo".into(), groups: [("pt".to_string(), SourceSpec { tracks: Some(vec![1, 2]), ..Default::default() })].into() };
+        let copy = |from: &str, via: Option<&str>| Action { use_: Some(SourceSpec { select: Some(format!("group:{from}")), via: via.map(str::to_string), ..Default::default() }), ..Default::default() };
+        let mut rules = settings.rule_set.clone();
+        for (g, via) in [("ad", None), ("ot", None), ("dolbye", None), ("surround51", Some("upmix51"))] {
+            rules.rules.retain(|r| r.group != g);
+            rules.rules.push(Rule { id: format!("{g}-aus-pt"), group: g.into(), when: Default::default(), then: vec![copy("pt", via)] });
+        }
+        let plan = resolve(&settings.output_profile, &mono_tracks(8), Some(&stereo), &rules);
+        let by = |id: &str| plan.groups.iter().find(|g| g.group == id).unwrap();
+        assert!(!by("pt").silent);
+        assert!(!by("ad").silent && by("ad").matrix == by("pt").matrix);
+        assert!(!by("ot").silent && by("ot").matrix == by("pt").matrix);
+        assert!(!by("surround51").silent && by("surround51").matrix.len() == 6);
+        assert!(by("dolbye").silent, "bit-exakte Gruppe bleibt still");
     }
 
     fn live(tracks: Vec<SourceTrack>) -> SourceDesc {

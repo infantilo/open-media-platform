@@ -30,8 +30,11 @@ pub struct GroupFlow {
 
 /// Alles Audio-Konfigurative, vom Orchestrator beim Start geladen.
 pub struct AudioCtx {
+    /// Stand beim Start (Gruppen/Flows hängen daran, ändern sich nur mit Neustart).
     pub settings: AudioSettings,
     pub groups: Vec<GroupFlow>,
+    /// Aktueller Stand für Regeln/Zuordnungen/Spurschemata: wird im Betrieb nachgeladen (`refresh`).
+    live: std::sync::RwLock<std::sync::Arc<AudioSettings>>,
 }
 
 impl AudioCtx {
@@ -42,7 +45,27 @@ impl AudioCtx {
             .iter()
             .map(|g| GroupFlow { id: g.id.clone(), label: g.label.clone(), channels: g.channel_names().len() as u32, flow_id: new_flow_id() })
             .collect();
-        AudioCtx { settings, groups }
+        let live = std::sync::RwLock::new(std::sync::Arc::new(settings.clone()));
+        AudioCtx { settings, groups, live }
+    }
+
+    pub fn current(&self) -> std::sync::Arc<AudioSettings> {
+        self.live.read().expect("lock poisoned").clone()
+    }
+
+    /// Übernimmt geänderte Regeln/Zuordnungen/Schemata; ein anderes Ausgabeprofil (Gruppen) wirkt nur nach Neustart und
+    /// wird hier bewusst ignoriert. Gibt `true` zurück, wenn sich etwas geändert hat.
+    pub fn refresh(&self, fresh: AudioSettings) -> bool {
+        let same_profile = serde_json::to_value(&fresh.output_profile).ok() == serde_json::to_value(&self.settings.output_profile).ok();
+        if !same_profile {
+            return false;
+        }
+        let cur = self.current();
+        if serde_json::to_value(&*cur).ok() == serde_json::to_value(&fresh).ok() {
+            return false;
+        }
+        *self.live.write().expect("lock poisoned") = std::sync::Arc::new(fresh);
+        true
     }
 }
 
@@ -150,7 +173,7 @@ impl Distributor {
     /// Löst den Plan für `source` auf und setzt die Matrizen. Muss vor dem ersten
     /// Datenfluss laufen (nach `no-more-pads` bzw. vor `Playing`).
     pub fn configure(&self, source: &SourceDesc, mapping: Option<&Mapping>) -> AudioPlan {
-        let settings = &self.ctx.settings;
+        let settings = self.ctx.current();
         let mut plan = omp_audio_rules::resolve(&settings.output_profile, source, mapping, &settings.rule_set);
         let ncols = plan.src_channels.len().max(1) as u32;
         for (dg, gp) in self.groups.iter().zip(&plan.groups) {
@@ -186,11 +209,11 @@ impl Distributor {
 
     /// MXF-Datei mit `track_count` Spuren: Schema per Probe, sonst `pos:N`-Mono-Spuren.
     pub fn mxf_source(&self, track_count: u32, path: &str) -> SourceDesc {
-        self.ctx.settings.mxf_source(track_count, path)
+        self.ctx.current().mxf_source(track_count, path)
     }
 
-    pub fn mapping_named(&self, id: &str) -> Option<&Mapping> {
-        self.ctx.settings.mappings.iter().find(|m| m.id == id)
+    pub fn mapping_named(&self, id: &str) -> Option<Mapping> {
+        self.ctx.current().mappings.iter().find(|m| m.id == id).cloned()
     }
 }
 

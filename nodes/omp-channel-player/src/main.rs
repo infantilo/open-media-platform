@@ -147,7 +147,7 @@ impl ParamStore for PlayerStore {
                 self.audio.groups.iter().map(|g| serde_json::json!({"id": g.id, "label": g.label, "channels": g.channels})).collect::<Vec<_>>()
             )),
             "audioMappings" => Some(serde_json::json!(
-                self.audio.settings.mappings.iter().map(|m| serde_json::json!({"id": m.id, "label": m.label})).collect::<Vec<_>>()
+                self.audio.current().mappings.iter().map(|m| serde_json::json!({"id": m.id, "label": m.label})).collect::<Vec<_>>()
             )),
             "mediaLibrary" => {
                 let mut files: Vec<String> = std::fs::read_dir(&self.media_dir)
@@ -278,6 +278,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let launch_secret = std::env::var("OMP_LAUNCH_SECRET").unwrap_or_default();
     let audio_settings = audio::load_settings(&orchestrator_url, instance_id.as_deref(), &launch_secret);
     let audio_ctx = Arc::new(audio::AudioCtx::new(audio_settings, omp_node_sdk::idgen::new_v4));
+    // Regeln/Zuordnungen im Betrieb nachladen (Änderungen im Editor „Audio-Ausgabe“ wirken beim nächsten Cue, ohne Neustart).
+    {
+        let ctx = audio_ctx.clone();
+        let (url, iid, secret) = (orchestrator_url.clone(), instance_id.clone(), launch_secret.clone());
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            if let Ok(fresh) = omp_audio_rules::client::fetch_settings(&url, iid.as_deref(), &secret)
+                && ctx.refresh(fresh)
+            {
+                eprintln!("omp-channel-player: Audio-Regeln/Zuordnungen neu geladen");
+            }
+        });
+    }
     let own_video_sender_id = omp_node_sdk::idgen::new_v4();
     let natural_group = omp_node_sdk::group::name_or(&video_flow_id);
 
