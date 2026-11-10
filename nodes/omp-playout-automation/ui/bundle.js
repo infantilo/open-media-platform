@@ -192,6 +192,10 @@ const T = (() => {
       "noReorderSearch": "Umsortieren geht nicht mit aktiver Suche — Suchfeld leeren.",
       "dragTitle": "Ziehen zum Umsortieren",
       "cueTake": "Cue + Take: dieses Event sofort senden",
+      "startNow": "Jetzt starten (Cue + Take) — auch Fix-/Manuell-Event, überschreibt den Startzeitpunkt",
+      "startNowNone": "Zuerst ein Event anklicken",
+      "copyEv": "Kopieren (Strg+C)", "cutEv": "Ausschneiden (Strg+X)", "pasteEv": "Einfügen nach der Auswahl (Strg+V)", "delEv": "Löschen (Entf)",
+      "clipCopied": "{n} Event(s) kopiert", "clipCut": "{n} Event(s) ausgeschnitten — mit Einfügen verschieben", "clipEmpty": "Zwischenablage leer", "cutOnAir": "Das laufende Event kann nicht ausgeschnitten werden",
       "editProps": "Eigenschaften bearbeiten",
       "removeEvent": "Event entfernen",
       "plannedAt": "Geplant: {from} – {to}{anchored}",
@@ -543,6 +547,10 @@ const T = (() => {
       "noReorderSearch": "Reordering is not possible while a search is active — clear the search field.",
       "dragTitle": "Drag to reorder",
       "cueTake": "Cue + take: send this event immediately",
+      "startNow": "Start now (cue + take) — also fixed-time/manual events, overrides the start time",
+      "startNowNone": "Click an event first",
+      "copyEv": "Copy (Ctrl+C)", "cutEv": "Cut (Ctrl+X)", "pasteEv": "Paste after the selection (Ctrl+V)", "delEv": "Delete (Del)",
+      "clipCopied": "{n} event(s) copied", "clipCut": "{n} event(s) cut — paste moves them", "clipEmpty": "Clipboard empty", "cutOnAir": "The running event cannot be cut",
       "editProps": "Edit properties",
       "removeEvent": "Remove event",
       "plannedAt": "Planned: {from} – {to}{anchored}",
@@ -1011,6 +1019,10 @@ const STYLE = `
   .hide-dur .c-dur, .hide-time .c-time, .hide-rem .c-rem { display: none; }
   .pl-main { min-width: 0; overflow-x: auto; }
   .pl-hdr, .pl-row { min-width: var(--minw, 0); }
+  .pl-hdr { overflow-y: scroll; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: transparent transparent; }
+  .pl-hdr::-webkit-scrollbar { width: 8px; } .pl-hdr::-webkit-scrollbar-thumb, .pl-hdr::-webkit-scrollbar-track { background: transparent; }
+  .sidebar .sep { height: 1px; background: var(--bd); margin: 2px 4px; }
+  .sidebar button.go { background: #1f5a28; border-color: #2f8a3c; }
   .pl-row .xc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--mut); }
   .pl-row .xc.st-onair { color: #ff6b6b; font-weight: 700; } .pl-row .xc.st-cued { color: #6bd36b; font-weight: 700; }
   .pl-row .xc.st-played { color: #777; } .pl-row .xc.st-bad { color: var(--warn); }
@@ -1029,6 +1041,7 @@ const STYLE = `
   .pl-row.manual { border-left-color: #d4a017; }
   .pl-row.dragging { opacity: .45; }
   .pl-row.skipped { opacity: .55; }
+  .pl-row { touch-action: pan-y; }
   .pl-row .drag { cursor: grab; color: var(--mut); text-align: center; touch-action: none; }
   .pl-row .num { color: var(--mut); text-align: right; font-variant-numeric: tabular-nums; }
   .pl-row .ico { text-align: center; }
@@ -1043,7 +1056,7 @@ const STYLE = `
   .pl-row .rem .rbar span { display: block; height: 100%; background: var(--ok); width: 0; }
   .pl-row .av { text-align: center; color: var(--ok); }
   .pl-row .av.bad { color: var(--err); font-weight: bold; }
-  .pl-row .acts { display: flex; gap: 3px; justify-content: flex-end; opacity: 0; }
+  .pl-row .acts { display: flex; gap: 3px; justify-content: flex-end; opacity: .85; }
   .pl-row:hover .acts, .pl-row.sel .acts { opacity: 1; }
   .pl-row .acts button { padding: 1px 6px; font-size: 11px; }
   .kids { margin: 0 0 2px 54px; border-left: 2px solid var(--bd); }
@@ -1135,7 +1148,8 @@ const STYLE = `
   .tl-ev.miss, .tl-ev.bad { background: repeating-linear-gradient(135deg, #c42b2b 0 6px, #7a1414 6px 12px); color: #fff; box-shadow: 0 0 0 2px #ff4040; z-index: 1; }
   .tl-ev.bad { background: repeating-linear-gradient(135deg, #d98a14 0 6px, #7a4a08 6px 12px); box-shadow: 0 0 0 2px #ff9f1c; }
   .tl-kid.Failed { box-shadow: 0 0 0 2px #ff4040; font-weight: 800; }
-  .pl-list { overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+  .pl-list { overflow-y: scroll; overflow-x: hidden; scrollbar-width: thin; }
+  .pl-list::-webkit-scrollbar { width: 8px; }
   .cnt-row { position: relative; display: grid; gap: 6px; height: 24px; margin-bottom: 6px; align-items: stretch; }
   .cnt-row .chip { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; padding: 2px 8px; min-width: 0; }
   .cnt-gear { padding: 0; height: 24px; }
@@ -1493,7 +1507,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const sidebar = h("div", { class: "sidebar" },
       h("button", { class: "primary", title: T("newEvent"), onclick: () => openEditor(null) }, "＋"),
       h("button", { title: T("addMedia"), onclick: () => openMediaPicker() }, "📂"),
-      h("button", { title: T("checkReady"), onclick: () => checkReadiness() }, "✓"));
+      h("button", { title: T("checkReady"), onclick: () => checkReadiness() }, "✓"),
+      h("div", { class: "sep" }),
+      h("button", { class: "go", title: T("startNow"), onclick: () => startNow() }, "▶"),
+      h("button", { title: T("copyEv"), onclick: () => copySel(false) }, "⎘"),
+      h("button", { title: T("cutEv"), onclick: () => copySel(true) }, "✂"),
+      h("button", { title: T("pasteEv"), onclick: () => pasteSel() }, "📋"),
+      h("button", { class: "danger", title: T("delEv"), onclick: () => removeItems(orderedSel()) }, "🗑"));
     // Optionale Timeline (je Browser gemerkt): Events als Blöcke auf einer Zeitachse, darunter ihre Child Events.
     let tlOn = false, tlWinMin = 15;
     try { tlOn = localStorage.getItem("omp-pa-timeline") === "1"; tlWinMin = Number(localStorage.getItem("omp-pa-timeline-win")) || 15; } catch { /* Standard */ }
@@ -1819,6 +1839,46 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // ---- Liste rendern ---------------------------------------------------
     const rowEls = new Map(); // itemId -> { wrap, row, refs… }
     let dropLine = null;
+    let suppressClickUntil = 0;
+
+    // Zwischenablage (Kopieren = Kopien auf dem Server, Ausschneiden = beim Einfügen verschieben).
+    let clip = { ids: [], cut: false };
+    const orderedSel = () => items.filter((i) => selected.has(i.id)).map((i) => i.id);
+    const startNow = async () => {
+      const id = orderedSel()[0];
+      if (!id) return showBanner(T("startNowNone"), true);
+      try { await call("cue", { itemId: id }); await call("take", {}); } catch { /* Banner */ }
+      poll();
+    };
+    const copySel = (cut) => {
+      const ids = orderedSel();
+      if (!ids.length) return;
+      if (cut && ids.includes(currentItemId)) return showBanner(T("cutOnAir"), true);
+      clip = { ids, cut: !!cut };
+      showBanner(T(cut ? "clipCut" : "clipCopied", { n: ids.length }), true);
+    };
+    const pasteSel = async () => {
+      if (!clip.ids.length) return showBanner(T("clipEmpty"), true);
+      const sel = orderedSel();
+      let at = sel.length ? items.findIndex((i) => i.id === sel[sel.length - 1]) + 1 : items.length;
+      try {
+        if (clip.cut) {
+          const ids = clip.ids.filter((id) => items.some((i) => i.id === id));
+          for (const id of ids) {
+            const from = items.findIndex((i) => i.id === id);
+            if (from < 0) continue;
+            const to = at > from ? at - 1 : at;
+            await call("moveItem", { itemId: id, toIndex: to });
+            const [m] = items.splice(from, 1); items.splice(to, 0, m);
+            if (from >= at) at++;
+          }
+          clip = { ids: [], cut: false };
+        } else {
+          await call("duplicateItems", { itemIdsJson: JSON.stringify(clip.ids), toIndex: at });
+        }
+      } catch { /* Banner */ }
+      poll();
+    };
 
     const removeItems = async (ids) => {
       const del = ids.filter((id) => id !== currentItemId);
@@ -1845,16 +1905,16 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         selected.add(id);
       }
       lastClickedId = id;
+      try { if (!this.hasAttribute("tabindex")) this.tabIndex = 0; this.focus({ preventScroll: true }); } catch { /* egal */ }
       renderList();
     };
 
     // Drag&Drop-Reorder (Pointer-Events, funktioniert mit Maus und Finger): echte serverseitige
     // `moveItem`-Umsortierung — der Cursor (on-air/gecued) folgt dem Event, kein Schwarzbild.
-    const startDrag = (itemId, ev, rowEl) => {
+    const startDrag = (itemId, ev, rowEl, handle = ev.currentTarget) => {
       if (search) return showBanner(T("noReorderSearch"), true);
       ev.preventDefault();
       dragging = true;
-      const handle = ev.currentTarget;
       handle.setPointerCapture(ev.pointerId);
       rowEl.classList.add("dragging");
       let insertAt = null;
@@ -1928,7 +1988,22 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       refs.xc = {};
       for (const c of EXTRA_COLS) refs.xc[c.k] = h("span", { class: `xc c-${c.k}` });
       row.append(refs.drag, refs.num, refs.ico, refs.title, refs.dur, refs.time, refs.rem, ...EXTRA_COLS.map((c) => refs.xc[c.k]), refs.av, refs.acts);
-      row.addEventListener("click", (e) => select(refs.it.id, e));
+      row.addEventListener("click", (e) => { if (Date.now() < suppressClickUntil) return; select(refs.it.id, e); });
+      // Ziehen an der ganzen Zeile (nach 5 px Bewegung); Klick/Doppelklick/Schaltflächen bleiben unberührt.
+      row.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0 || e.target.closest("button,input,select,.chip,.drag")) return;
+        const x0 = e.clientX, y0 = e.clientY, pid = e.pointerId;
+        const probe = (m) => {
+          if (Math.abs(m.clientX - x0) + Math.abs(m.clientY - y0) < 5) return;
+          row.removeEventListener("pointermove", probe);
+          suppressClickUntil = Date.now() + 400;
+          startDrag(refs.it.id, { preventDefault() {}, pointerId: pid }, row, row);
+        };
+        const stop = () => { row.removeEventListener("pointermove", probe); row.removeEventListener("pointerup", stop); row.removeEventListener("pointercancel", stop); };
+        row.addEventListener("pointermove", probe);
+        row.addEventListener("pointerup", stop);
+        row.addEventListener("pointercancel", stop);
+      });
       row.addEventListener("dblclick", () => openEditor(refs.it));
       refs.kids = h("div", { class: "kids" });
       wrap.append(row, refs.kids);
@@ -2140,6 +2215,12 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (modalOpen) return;
       const tag = (shadow.activeElement && shadow.activeElement.tagName) || "";
       if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
+      if ((e.ctrlKey || e.metaKey) && ["c", "x", "v"].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+        const k = e.key.toLowerCase();
+        if (k === "v") pasteSel(); else copySel(k === "x");
+        return;
+      }
       if ((e.key === "Delete" || e.key === "Backspace") && selected.size > 0) {
         e.preventDefault();
         removeItems([...selected]);
@@ -3016,8 +3097,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const owText = !ow ? "" : ow.kind === "hold" ? T("waitHold") : ow.kind === "manualStart" ? T("waitMan", { label: owLabel }) : ow.kind === "endHold" ? T("waitEnd", { label: owLabel }) : T("waitCued", { label: owLabel });
       const owRem = ow && Number.isFinite(ow.remainingMs) ? ` · ${fmtRemain(Math.ceil(ow.remainingMs / 1000))}` : "";
       nextBtn.title = ow ? `${T("nextTitle")}\n${owText}${owRem}` : T("nextTitle");
-      cntEls.man.textContent = owText ? owText + owRem : `${T("cntMan")}: —`;
-      cntEls.man.classList.toggle("empty", !owText);
+      // Wartet gerade nichts: Abstand bis zum nächsten manuell startenden Event (bzw. HOLD) der Playlist.
+      const manIn = owText ? "" : remainTo((it) => it.startType === "manual" || it.eventType === "HOLD");
+      cntEls.man.textContent = owText ? owText + owRem : manIn ? `✋ ${manIn}` : `${T("cntMan")}: —`;
+      cntEls.man.classList.toggle("empty", !owText && !manIn);
       cntEls.man.style.display = cntOn.man ? "" : "none";
       const refIdx = items.findIndex((i) => i.id === (currentItemId || cuedItemId));
       const hasLive = items.some((i) => i.senderId);

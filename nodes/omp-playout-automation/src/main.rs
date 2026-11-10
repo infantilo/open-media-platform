@@ -1774,6 +1774,37 @@ impl AutomationStore {
         Ok(())
     }
 
+    /// Kopieren/Einfügen im Panel: legt Kopien der Events (neue IDs, Reihenfolge wie in der Liste) ab `to_index`
+    /// an (None = ans Ende). Laufzeitzustand (On-Air/Cue) wird nicht kopiert, nur die Eigenschaften.
+    fn do_duplicate_items(&self, ids: &[String], to_index: Option<usize>) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        let mut src: Vec<(usize, ItemMeta)> = Vec::new();
+        for id in ids {
+            let idx = state.playlist.index_of(id).ok_or_else(|| format!("unbekannte itemId {id}"))?;
+            let meta = state.metadata.get(id).ok_or_else(|| format!("keine Eigenschaften für {id}"))?.clone();
+            src.push((idx, meta));
+        }
+        src.sort_by_key(|(i, _)| *i);
+        let first_new = state.playlist.items().len();
+        for (_, meta) in &src {
+            state.next_item_seq += 1;
+            let id = format!("item{}", state.next_item_seq);
+            state.playlist.append(id.clone());
+            state.metadata.insert(id, meta.clone());
+        }
+        if let Some(to) = to_index {
+            let mut target = to.min(first_new);
+            for k in 0..src.len() {
+                if first_new + k != target {
+                    state.playlist.move_item(first_new + k, target).map_err(|_| "Zielposition ungültig".to_string())?;
+                }
+                target += 1;
+            }
+            state.timeline.invalidate_from(to.min(first_new));
+        }
+        Ok(())
+    }
+
     /// Verschiebt ein Event an eine neue Position (Drag & Drop im Panel). Cue/On-Air-Zustand bleiben,
     /// der Cursor folgt dem Event (`Playlist::move_item`).
     fn do_move_item(&self, item_id: &str, to_index: usize) -> Result<(), String> {
@@ -4159,6 +4190,13 @@ impl ParamStore for AutomationStore {
             },
             // Panel: Drag & Drop (Position in der neuen Liste), Property-Editor (JSON-Patch), Cart ändern.
             MethodSpec {
+                name: "duplicateItems".to_string(),
+                args: vec![
+                    MethodArg { name: "itemIdsJson".to_string(), kind: ParamType::String },
+                    MethodArg { name: "toIndex".to_string(), kind: ParamType::Number },
+                ],
+            },
+            MethodSpec {
                 name: "moveItem".to_string(),
                 args: vec![
                     MethodArg { name: "itemId".to_string(), kind: ParamType::String },
@@ -4652,6 +4690,12 @@ impl ParamStore for AutomationStore {
                     (_, None) => Err("startType fehlt oder ungültig (sequence|manual|fixtime)".to_string()),
                 }
             }
+            "duplicateItems" => (|| {
+                let ids: Vec<String> = serde_json::from_str(args.get("itemIdsJson").and_then(Value::as_str).unwrap_or("[]"))
+                    .map_err(|e| format!("itemIdsJson ungültig: {e}"))?;
+                let to = args.get("toIndex").and_then(Value::as_f64).filter(|n| *n >= 0.0).map(|n| n as usize);
+                self.do_duplicate_items(&ids, to)
+            })(),
             "moveItem" => (|| {
                 let item_id = args.get("itemId").and_then(Value::as_str).ok_or("itemId fehlt".to_string())?;
                 let to = args.get("toIndex").and_then(Value::as_f64).filter(|n| *n >= 0.0).ok_or("toIndex fehlt".to_string())? as usize;
@@ -4837,7 +4881,7 @@ impl ParamStore for AutomationStore {
         if result.is_ok()
             && matches!(
                 name,
-                "append" | "appendAsset" | "load" | "remove" | "moveItem" | "updateItem" | "setStartType" | "setTransition" | "setAudio" | "setChildren" | "setMediaRef"
+                "append" | "appendAsset" | "load" | "remove" | "moveItem" | "duplicateItems" | "updateItem" | "setStartType" | "setTransition" | "setAudio" | "setChildren" | "setMediaRef"
             )
         {
             hooks::fire("playlistEvent", serde_json::json!({ "method": name, "channelId": structlog::current_channel(), "args": Value::Object(args.clone()) }));
