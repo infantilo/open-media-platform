@@ -60,6 +60,8 @@ export const de = {
   "op.home.problemCount": "{n} mit Problem",
   "op.home.taskSummary": "{total} offen · {mine} bei mir · {problems} mit Problem",
   "op.home.taskError": "Aufgaben aus {module} nicht ladbar: {message}",
+  "op.home.hello": "Willkommen, {name}",
+  "op.home.open": "Öffnen",
   "op.home.back": "Arbeitsplatz",
   "op.task.col.kind": "Art",
   "op.task.col.title": "Aufgabe",

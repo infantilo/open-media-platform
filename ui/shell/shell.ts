@@ -31,7 +31,7 @@ import "./console-board.ts";
 import "./streamdeck/sim.ts";
 import type { ConsoleBoard } from "./console-board.ts";
 import { whoami, showLoginOverlay, buildUserWidget, redeemSupportLink } from "./auth.ts";
-import { attachTaskBadge, loadWorkTiles, renderTileView } from "./operator-home.ts";
+import { attachTaskBadge, landingButton, landingCard, landingGrid, loadWorkTiles, renderLanding, renderTileView } from "./operator-home.ts";
 import type { OperatorHome } from "./operator-home.ts";
 import type { WorkTile } from "./modules-logic.ts";
 import { installListenService } from "./listen.ts";
@@ -362,41 +362,28 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
 // ein weiterer Workflow startet; ein manueller Neu-laden-Knopf reicht,
 // symmetrisch zum Nachbar-Screen statt eines Alleingangs nur hier).
 function renderTilesUnavailable(root: HTMLElement) {
-  const container = document.createElement("div");
-  container.style.cssText =
-    "display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;" +
-    "background:#181818;color:#eee;font-family:sans-serif;gap:16px;box-sizing:border-box;padding:24px;text-align:center;";
-  const msg = document.createElement("p");
-  msg.textContent = t("op.tiles.unavailable");
-  msg.dataset.role = "tiles-unavailable";
   const retry = document.createElement("a");
   retry.href = location.href;
   retry.textContent = t("op.tiles.retry");
-  retry.style.cssText = "color:#eee;border:1px solid #666;border-radius:4px;padding:4px 14px;text-decoration:none;";
-  container.append(msg, retry);
-  root.replaceChildren(container);
+  retry.className = "oh-btn";
+  const center = renderLanding(root, { title: t("op.home.title"), icon: "⚠", body: [retry] });
+  const msg = document.createElement("p");
+  msg.textContent = t("op.tiles.unavailable");
+  msg.className = "oh-text";
+  msg.dataset.role = "tiles-unavailable";
+  center.insertBefore(msg, retry);
 }
 
 function renderNoActiveConsole(root: HTMLElement) {
-  const container = document.createElement("div");
-  container.style.cssText =
-    "display:flex;flex-direction:column;align-items:center;justify-content:center;" +
-    "width:100%;height:100%;background:#181818;color:#eee;font-family:sans-serif;gap:16px;box-sizing:border-box;padding:24px;text-align:center;";
-
-  const heading = document.createElement("h1");
-  heading.textContent = t("op.noWorkflow.title");
-  heading.style.cssText = "font-size:20px;font-weight:600;margin:0;";
-  container.appendChild(heading);
-
-  const message = document.createElement("p");
-  message.textContent = t("op.noWorkflow.text");
-  message.style.cssText = "max-width:420px;color:#aaa;font-size:13px;margin:0;";
-  container.appendChild(message);
-
   // Countdown bis zum nächsten geplanten Start eines bedienbaren Workflows (blendet sich ohne Plan aus).
   const upcoming = document.createElement("omp-upcoming-start");
-  upcoming.style.color = "#eee";
-  container.appendChild(upcoming);
+  upcoming.style.color = "var(--omp-text)";
+  renderLanding(root, {
+    title: t("op.noWorkflow.title"),
+    text: t("op.noWorkflow.text"),
+    icon: "⏳",
+    body: [upcoming, landingButton(t("op.reload"), () => location.reload())],
+  });
   // Sobald ein zugewiesener Workflow läuft, die Seite selbst neu laden statt auf „Neu laden“ zu warten.
   window.setInterval(async () => {
     try {
@@ -406,15 +393,6 @@ function renderNoActiveConsole(root: HTMLElement) {
       // nächster Versuch in 10 s
     }
   }, 10_000);
-
-  const reloadBtn = document.createElement("button");
-  reloadBtn.textContent = t("op.reload");
-  reloadBtn.style.cssText =
-    "padding:8px 20px;border:1px solid #444;border-radius:4px;background:#232323;color:#eee;cursor:pointer;";
-  reloadBtn.addEventListener("click", () => location.reload());
-  container.appendChild(reloadBtn);
-
-  root.replaceChildren(container);
 }
 
 // Kapitel 12 Teil 5: "Workflow-Auswahl (nur gebundene Workflows, als
@@ -423,42 +401,15 @@ function renderNoActiveConsole(root: HTMLElement) {
 // liefert index.html für jede /console/*-Route bereits per SPA-Fallback
 // (httpapi.spaFallback), ein normaler Seitenwechsel reicht.
 function renderWorkflowPicker(root: HTMLElement, consoles: ConsoleEntry[], workflowIds: string[]) {
-  const container = document.createElement("div");
-  container.style.cssText =
-    "display:flex;flex-direction:column;align-items:center;justify-content:center;" +
-    "width:100%;height:100%;background:#181818;color:#eee;font-family:sans-serif;gap:20px;box-sizing:border-box;padding:24px;";
-
-  const heading = document.createElement("h1");
-  heading.textContent = t("op.pickWorkflow");
-  heading.style.cssText = "font-size:20px;font-weight:600;margin:0;";
-  container.appendChild(heading);
-
-  const grid = document.createElement("div");
-  grid.style.cssText = "display:flex;gap:12px;flex-wrap:wrap;justify-content:center;max-width:900px;";
-
+  const grid = landingGrid();
   for (const workflowId of workflowIds) {
     const entriesForWorkflow = consoles.filter((c) => c.workflowId === workflowId);
     const label = entriesForWorkflow[0]?.workflowLabel ?? workflowId;
-
-    const tile = document.createElement("a");
-    tile.href = `/console/${encodeURIComponent(workflowId)}`;
-    tile.style.cssText =
-      "display:block;padding:20px 28px;border:1px solid #444;border-radius:8px;background:#232323;" +
-      "color:#eee;text-decoration:none;min-width:180px;text-align:center;cursor:pointer;";
-
-    const title = document.createElement("div");
-    title.style.cssText = "font-size:16px;font-weight:600;margin-bottom:4px;";
-    title.textContent = label;
-
-    const sub = document.createElement("div");
-    sub.style.cssText = "font-size:12px;color:#999;";
-    sub.textContent = entriesForWorkflow.length === 1 ? t("op.roles.one") : t("op.roles.many", { n: entriesForWorkflow.length });
-
-    tile.append(title, sub);
-    grid.appendChild(tile);
+    grid.append(
+      landingCard(`/console/${encodeURIComponent(workflowId)}`, "▣", label, entriesForWorkflow.length === 1 ? t("op.roles.one") : t("op.roles.many", { n: entriesForWorkflow.length }), true),
+    );
   }
-  container.appendChild(grid);
-  root.replaceChildren(container);
+  renderLanding(root, { title: t("op.pickWorkflow"), body: [grid] });
 }
 
 // Einlösen eines Support-Links fehlgeschlagen (abgelaufen, widerrufen, falsch): kurze Meldung über der Anmeldung.

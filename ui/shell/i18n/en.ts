@@ -61,6 +61,8 @@ export const en: Record<keyof typeof de, string> = {
   "op.home.problemCount": "{n} with a problem",
   "op.home.taskSummary": "{total} open · {mine} mine · {problems} with a problem",
   "op.home.taskError": "Tasks from {module} could not be loaded: {message}",
+  "op.home.hello": "Welcome, {name}",
+  "op.home.open": "Open",
   "op.home.back": "Workstation",
   "op.task.col.kind": "Type",
   "op.task.col.title": "Task",
