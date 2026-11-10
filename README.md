@@ -206,6 +206,14 @@ counters, next to what the writer actually declares about the flow._
 </tr>
 </table>
 
+<table>
+<tr>
+<td width="33%"><img src="docs/screenshots/pip-ograf-folgt-wand.png" width="260"><br><sub><b>Graphics follow the PIPs:</b> the video mixer's PGM monitor with the "PIP wall" OGraf template — frames and captions sit exactly on the three PIP windows (key above the PIPs)</sub></td>
+<td width="33%"><img src="docs/screenshots/pip-ograf-folgt-fokus.png" width="260"><br><sub>One click on a PIP in the monitor enlarges it; the graphic's frame and caption travel with it frame-accurately, the other windows fade out, a second click returns</sub></td>
+<td width="33%"><img src="docs/screenshots/radio-sendebetrieb.png" width="260"><br><sub><b>Radio automation:</b> log with intro/outro marks, countdown to the next item, two deck cards with waveform, hotkeys — plays through the segue player with cross-fades at the segue point</sub></td>
+</tr>
+</table>
+
 ### Support and diagnostics
 
 Built so that a non-specialist can tell what is wrong and an expert gets
