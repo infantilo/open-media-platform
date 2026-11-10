@@ -770,6 +770,9 @@ struct AutomationState {
     preflight_window_min: u32,
     /// Standard-Filler des Channels (Dateiname im Medienverzeichnis), Richtlinie DEFAULT_FILLER.
     default_filler: String,
+    /// Idle-Quelle, wenn die Liste nicht läuft (Stop, Playlist-Ende): `live:<senderId>`, `file:<name>`, `image:<name>`,
+    /// `pattern:<name>`; leer = Schwarz.
+    idle_source: String,
     /// Kapitel 74.3: Channel-Standard „Sendefreigabe verlangen“ (Event-Angabe `requireRelease` hat Vorrang).
     require_release_default: bool,
     /// Kapitel 74.3: zuletzt erfragte Freigabe je Item (Release-Schleife).
@@ -868,6 +871,7 @@ impl AutomationState {
             readiness: HashMap::new(),
             preflight_window_min: 15,
             default_filler: String::new(),
+            idle_source: String::new(),
             require_release_default: std::env::var("OMP_REQUIRE_RELEASE").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
             release: HashMap::new(),
             cue_hold: !std::env::var("OMP_PLAYOUT_CUE_HOLD").is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("false")),
@@ -1267,6 +1271,29 @@ impl AutomationStore {
         let Some(item_id) = state.playlist.advance() else {
             state.onair_since = None;
             state.asrun.end(chrono::Utc::now().timestamp_millis(), "COMPLETED", "Playlist-Ende");
+            // Idle-Quelle statt stehendem letzten Bild, wenn eine konfiguriert ist (Fehler nur melden, Liste ist ohnehin zu Ende).
+            if let (Some(media), Some(mixer_node_id)) = (idle_media(&state.idle_source), state.mixer_node_id.clone()) {
+                let idle = ItemMeta {
+                    label: "IDLE".to_string(),
+                    media,
+                    duration_ms: 0,
+                    start_type: StartType::default(),
+                    fixtime_hms: None,
+                    start_at_utc_ms: None,
+                    transition: Transition::default(),
+                    transition_rate_frames: None,
+                    children: Vec::new(),
+                    audio: None,
+                    media_ref: Default::default(),
+                };
+                match take_on_targets(self, &state, &mixer_node_id, &idle, Transition::Cut, None) {
+                    Ok(ch) => {
+                        state.live_channel = ch;
+                        state.last_live_item_id = None;
+                    }
+                    Err(e) => eprintln!("omp-playout-automation: Idle-Quelle nicht geschaltet: {e}"),
+                }
+            }
             // last_live_item_id bleibt bewusst unangetastet: der Player
             // zeigt das letzte Item remote unverändert weiter (kein
             // EOS-Konzept) — nur die lokale Sequenzierung endet hier, s.
@@ -1496,7 +1523,7 @@ impl AutomationStore {
             .ok_or("Ziel-Mixer nicht aufgelöst (targetMixerLabel unbekannt/noch nicht gestartet)")?;
         let black = ItemMeta {
             label: "STOP".to_string(),
-            media: ItemMedia::TestPattern { pattern: "black".to_string(), tone_frequency: 0.0 },
+            media: idle_media(&state.idle_source).unwrap_or(ItemMedia::TestPattern { pattern: "black".to_string(), tone_frequency: 0.0 }),
             duration_ms: 0,
             start_type: StartType::default(),
             fixtime_hms: None,
@@ -2829,6 +2856,22 @@ fn load_onto_channel(store: &AutomationStore, node_id: &str, meta: &ItemMeta, ho
         .map_err(|e| format!("Kanal-load fehlgeschlagen: {e}"))
 }
 
+/// Idle-Quelle aus `art:wert` (leer/ungültig = None → Schwarz).
+fn idle_media(spec: &str) -> Option<ItemMedia> {
+    let (kind, value) = spec.split_once(':')?;
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    match kind {
+        "live" => Some(ItemMedia::Live { sender_id: value.to_string() }),
+        "file" => Some(ItemMedia::File { path: value.to_string() }),
+        "image" => Some(ItemMedia::Image { path: value.to_string() }),
+        "pattern" => Some(ItemMedia::TestPattern { pattern: value.to_string(), tone_frequency: 0.0 }),
+        _ => None,
+    }
+}
+
 /// Lädt ein Item auf den aktuellen Standby-Kanal und schneidet den
 /// Ziel-Mixer per Crosspoint darauf — gemeinsamer Kern von `do_take`/
 /// `do_advance`/`do_stop`/Cart-Fire/-Return. Kapitel 6 Teil 7 (`docs/
@@ -3936,6 +3979,7 @@ impl ParamStore for AutomationStore {
                 readonly: false,
             },
             ParamSpec { name: "defaultFiller".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
+            ParamSpec { name: "idleSource".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
             ParamSpec { name: "mixerAutoSetup".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
             ParamSpec { name: "requireRelease".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
             ParamSpec { name: "cueHold".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
@@ -4464,6 +4508,7 @@ impl ParamStore for AutomationStore {
             "adBlocks" => Some(ad_blocks_json(&state)),
             "preflightWindowMin" => Some(serde_json::json!(state.preflight_window_min)),
             "defaultFiller" => Some(serde_json::json!(state.default_filler)),
+            "idleSource" => Some(serde_json::json!(state.idle_source)),
             "mixerAutoSetup" => Some(serde_json::json!(state.mixer_auto_setup)),
             "requireRelease" => Some(serde_json::json!(state.require_release_default)),
             "cueHold" => Some(serde_json::json!(state.cue_hold)),
@@ -4595,6 +4640,14 @@ impl ParamStore for AutomationStore {
                     return Err(SetError::Unknown);
                 }
                 state.preflight_window_min = v as u32;
+                Ok(())
+            }
+            "idleSource" => {
+                let v = value.as_str().unwrap_or_default().trim().to_string();
+                if !v.is_empty() && idle_media(&v).is_none() {
+                    return Err(SetError::Unknown);
+                }
+                state.idle_source = v;
                 Ok(())
             }
             "defaultFiller" => {

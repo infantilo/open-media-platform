@@ -104,6 +104,8 @@ const T = (() => {
       "tgt.mixHint": "Fügt nur hinzu, was fehlt: vorhandene Kanäle und angeheftete Quellen bleiben unverändert, nichts wird gelöscht.",
       "tgt.preflight": "Preflight-Vorlauf (min)",
       "tgt.filler": "Standard-Filler (Datei)",
+      "idle.label": "Idle-Quelle (wenn die Liste nicht läuft)", "idle.black": "Schwarz", "idle.live": "Live-Quelle", "idle.file": "Datei", "idle.image": "Standbild", "idle.pattern": "Testmuster",
+      "idle.hint": "Wird bei Stop und am Playlist-Ende geschaltet (statt Schwarz bzw. stehendem letzten Bild).",
       "sec.ads": "Werbeblöcke (SCTE)",
       "ad.enabled": "Werbeblöcke automatisch kennzeichnen",
       "ad.target": "SCTE-Node",
@@ -459,6 +461,8 @@ const T = (() => {
       "tgt.mixHint": "Only adds what is missing: existing channels and pinned sources stay as they are, nothing is deleted.",
       "tgt.preflight": "Preflight lead time (min)",
       "tgt.filler": "Default filler (file)",
+      "idle.label": "Idle source (when the list is not running)", "idle.black": "Black", "idle.live": "Live source", "idle.file": "File", "idle.image": "Still image", "idle.pattern": "Test pattern",
+      "idle.hint": "Switched on Stop and at the end of the playlist (instead of black / the frozen last picture).",
       "sec.ads": "Ad breaks (SCTE)",
       "ad.enabled": "Mark ad breaks automatically",
       "ad.target": "SCTE node",
@@ -1327,6 +1331,20 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         h("label", {}, T("ad.target"), selAd),
         h("label", {}, T("ad.preroll"), h("input", { type: "number", min: "1000", max: "60000", step: "100", id: "adPreRoll", onchange: (e) => setParam("adBreakPreRollMs", Math.max(1000, Number(e.target.value) || 1000)) })),
         h("div", { class: "hint", style: "grid-column:1/-1" }, T("ad.hint"))));
+    // Idle-Quelle: Art + Wert, als „art:wert“ im Parameter idleSource.
+    const idleKind = h("select", { id: "idleKind" }, ...[["", T("idle.black")], ["live", T("idle.live")], ["file", T("idle.file")], ["image", T("idle.image")], ["pattern", T("idle.pattern")]].map(([v, t]) => h("option", { value: v }, t)));
+    const idleVal = h("input", { type: "text", id: "idleVal", list: "idleList", placeholder: "…" });
+    const idleList = h("datalist", { id: "idleList" });
+    const idleSend = () => setParam("idleSource", idleKind.value ? `${idleKind.value}:${idleVal.value.trim()}` : "");
+    const idleFill = () => {
+      const k = idleKind.value;
+      idleVal.style.display = k ? "" : "none";
+      const opts = k === "live" ? availableSources.map((s) => [s.senderId, s.label || s.senderId]) : k === "file" || k === "image" ? mediaLibrary.map((f) => [f, f]) : [];
+      idleList.replaceChildren(...opts.map(([v, t]) => h("option", { value: v }, t)));
+    };
+    idleKind.addEventListener("change", () => { idleVal.value = ""; idleFill(); if (!idleKind.value) idleSend(); });
+    idleVal.addEventListener("change", idleSend);
+    const idleBox = h("label", {}, T("idle.label"), h("div", { style: "display:flex;gap:6px" }, idleKind, idleVal, idleList));
     const targetsSec = h("details", { class: "sec" },
       h("summary", {}, T("sec.targets")),
       h("div", { class: "body targets" },
@@ -1334,6 +1352,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         h("label", {}, T("tgt.gfx"), selGfx), h("label", {}, T("tgt.audio"), selAud),
         h("label", {}, T("tgt.preflight"), h("input", { type: "number", min: "0", id: "preflightWin", onchange: (e) => setParam("preflightWindowMin", Number(e.target.value) || 0) })),
         h("label", {}, T("tgt.filler"), h("input", { type: "text", id: "defaultFiller", onchange: (e) => setParam("defaultFiller", e.target.value.trim()) })),
+        idleBox,
+        h("div", { class: "hint", style: "grid-column:1/-1" }, T("idle.hint")),
         h("label", { style: "flex-direction:row;align-items:center;gap:6px;grid-column:1/-1" }, h("input", { type: "checkbox", id: "requireRelease", onchange: (e) => setParam("requireRelease", e.target.checked) }), T("tgt.release")),
         h("div", { style: "display:flex;align-items:center;gap:8px;flex-wrap:wrap;grid-column:1/-1" },
           h("label", { style: "flex-direction:row;align-items:center;gap:6px" }, h("input", { type: "checkbox", id: "mixerAutoSetup", onchange: (e) => setParam("mixerAutoSetup", e.target.checked) }), T("tgt.mixAuto")),
@@ -2993,7 +3013,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (dragging) return;
       const names = ["items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "assets", "activeCartId", "activeCartRemaining",
         "availableNodes", "targetPlayerALabel", "targetPlayerBLabel", "targetMixerLabel", "targetGraphicsLabel", "targetAudioMixerLabel", "liveChannel", "mediaLibrary", "audioPlans", "audioGroups", "audioMappings",
-        "availableSources", "channelName", "instanceId", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "requireRelease", "mixerAutoSetup", "foreignStatus", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks", "operatorWait"];
+        "availableSources", "channelName", "instanceId", "persistence", "schedule", "childEvents", "triggerLog", "channelId", "preflightWindowMin", "defaultFiller", "idleSource", "requireRelease", "mixerAutoSetup", "foreignStatus", "adBreakEnabled", "adBreakTarget", "adBreakPreRollMs", "adBlocks", "operatorWait"];
       const v = Object.fromEntries(await Promise.all(names.map(async (n) => [n, await getParam(n)])));
       if (dragging) return;
       items = v.items || [];
@@ -3127,6 +3147,12 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const rr = shadow.getElementById("requireRelease");
       if (rr && shadow.activeElement !== rr && v.requireRelease !== undefined) rr.checked = !!v.requireRelease;
       renderForeign(v.foreignStatus);
+      if (v.idleSource !== undefined && shadow.activeElement !== idleKind && shadow.activeElement !== idleVal) {
+        const [k, ...r] = String(v.idleSource || "").split(":");
+        idleKind.value = ["live", "file", "image", "pattern"].includes(k) ? k : "";
+        idleVal.value = idleKind.value ? r.join(":") : "";
+        idleFill();
+      }
       const df = shadow.getElementById("defaultFiller");
       if (df && shadow.activeElement !== df && v.defaultFiller !== undefined) df.value = v.defaultFiller;
 

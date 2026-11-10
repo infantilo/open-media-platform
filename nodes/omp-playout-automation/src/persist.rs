@@ -114,6 +114,9 @@ pub struct SnapConfig {
     pub require_release_default: bool,
     #[serde(default)]
     pub mixer_auto_setup: bool,
+    /// Idle-Quelle („art:wert“, leer = Schwarz), wenn die Liste nicht läuft.
+    #[serde(default)]
+    pub idle_source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -214,6 +217,7 @@ pub fn build_snapshot(state: &AutomationState, since_cache: &mut SinceCache, now
             cue_hold: state.cue_hold,
             require_release_default: state.require_release_default,
             mixer_auto_setup: state.mixer_auto_setup,
+            idle_source: state.idle_source.clone(),
         }),
         ad_open: {
             let mut v: Vec<SnapAdOpen> = state
@@ -286,6 +290,7 @@ pub fn apply_snapshot(state: &mut AutomationState, snap: Snapshot, now_utc_ms: i
         state.cue_hold = c.cue_hold;
         state.require_release_default = c.require_release_default;
         state.mixer_auto_setup = c.mixer_auto_setup;
+        state.idle_source = c.idle_source;
     }
 
     state.ad_open = snap
