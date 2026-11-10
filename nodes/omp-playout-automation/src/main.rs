@@ -5324,6 +5324,7 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
     let mut interval = tokio::time::interval(DISCOVERY_INTERVAL);
     let mut last_audio_setup: Option<Instant> = None;
     let mut last_idle_start: Option<Instant> = None;
+    let mut idle_start_began: Option<Instant> = None;
     loop {
         interval.tick().await;
         let audio_label = store.state.lock().expect("lock poisoned").target_audio_mixer_label.clone();
@@ -5426,24 +5427,28 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
             if let Some((key, mixer_node_id)) = pending {
                 if last_idle_start.map_or(true, |t| t.elapsed() >= Duration::from_secs(5)) {
                     last_idle_start = Some(Instant::now());
+                    let began = *idle_start_began.get_or_insert_with(Instant::now);
                     let st = store.clone();
                     let res = tokio::task::spawn_blocking(move || {
                         let program = st.proxy_client(mixer_node_id).get_param("crosspoint.programInput").map_err(|e| e.to_string())?;
                         let blank = program.is_null() || program.as_str().is_some_and(str::is_empty);
                         if blank {
                             st.do_stop()?;
-                            Ok::<bool, String>(true)
-                        } else {
-                            Ok(false)
                         }
+                        Ok::<bool, String>(blank)
                     })
                     .await;
                     match res {
-                        Ok(Ok(switched)) => {
-                            if switched {
-                                eprintln!("omp-playout-automation: Idle-Quelle beim Start geschaltet (Mischer hatte kein Programm)");
+                        // Programm liegt an: fertig (nichts ersetzt).
+                        Ok(Ok(false)) => store.state.lock().expect("lock poisoned").idle_start_done = Some(key),
+                        // Schwarz → Idle geschaltet. Nicht sofort „fertig“: die Wiederherstellung des Mischer-Zustands durch den
+                        // Orchestrator kann kurz danach eintreffen und das Programm wieder leeren (Quelle ohne Flow); darum
+                        // weiter prüfen, höchstens 90 s ab dem ersten Versuch.
+                        Ok(Ok(true)) => {
+                            eprintln!("omp-playout-automation: Idle-Quelle beim Start geschaltet (Mischer hatte kein Programm)");
+                            if began.elapsed() >= Duration::from_secs(90) {
+                                store.state.lock().expect("lock poisoned").idle_start_done = Some(key);
                             }
-                            store.state.lock().expect("lock poisoned").idle_start_done = Some(key);
                         }
                         Ok(Err(e)) => eprintln!("omp-playout-automation: Idle-Quelle beim Start: {e}"),
                         Err(_) => {}
