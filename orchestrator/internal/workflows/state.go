@@ -6,12 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"reflect"
+	"sort"
 	"sync"
 	"time"
 
@@ -133,8 +135,17 @@ func withRoleStateKey(env map[string]string, workflowID, roleName string) map[st
 // wird nur geloggt, bricht den eigentlichen Stop-Vorgang nie ab.
 func (s *Service) captureRoleState(wf Workflow) {
 	senderToAlias := s.buildSenderAliasIndex(wf)
+	var failed []string
 	for role := range wf.Runtime {
-		s.captureRoleStateMode(wf, role, senderToAlias, captureAuto)
+		if err := s.captureRoleStateMode(wf, role, senderToAlias, captureAuto); err != nil {
+			failed = append(failed, role+" ("+err.Error()+")")
+		}
+	}
+	if len(failed) > 0 {
+		sort.Strings(failed)
+		// Laut statt still: der zuletzt gespeicherte Stand bleibt unverändert erhalten, wird aber NICHT aktualisiert.
+		slog.Warn("workflows: Zustand beim Stop/Sichern nicht für alle Rollen gesichert (alter Stand bleibt)",
+			"workflow", wf.ID, "roles", failed)
 	}
 }
 
@@ -221,7 +232,10 @@ func (s *Service) pinRoleState(wf Workflow) {
 	}
 }
 
-func (s *Service) captureRoleStateMode(wf Workflow, role string, senderToAlias map[string]string, mode captureMode) {
+// captureRoleStateMode liefert nil, wenn die Rolle gesichert wurde ODER bewusst nichts zu sichern war (gepinnt, noch nicht
+// wiederhergestellt, Node ohne Zustand/nicht registriert); einen Fehler nur, wenn ein erreichbarer Node seinen Zustand
+// trotz Wiederholungen nicht lieferte oder die Speicherung nicht nachweisbar ankam.
+func (s *Service) captureRoleStateMode(wf Workflow, role string, senderToAlias map[string]string, mode captureMode) error {
 	if mode == capturePin {
 		s.clearUnrestored(wf.ID, role)
 	} else {
@@ -233,24 +247,25 @@ func (s *Service) captureRoleStateMode(wf Workflow, role string, senderToAlias m
 		// Start ihre Einstellungen). Der Merker steht auch im gespeicherten
 		// Eintrag und überlebt so einen Orchestrator-Neustart.
 		if s.isUnrestored(wf.ID, role) || hasUnrestoredMarker(saved[role]) {
-			return
+			return nil
 		}
 		if mode == captureAuto {
 			var cur roleStateEnvelope
 			if raw, ok := saved[role]; ok && json.Unmarshal(raw, &cur) == nil && cur.Pinned {
-				return
+				return nil
 			}
 		}
 	}
 	node, ok := s.nodeForRole(wf, role)
 	if !ok || node.APIBaseURL == "" {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), roleStateTimeout)
 	defer cancel()
 
 	var env roleStateEnvelope
-	if blob, err := getNodeState(ctx, s.httpClient, node.APIBaseURL); err == nil {
+	blob, stateErr := s.getNodeStateRetry(ctx, node.APIBaseURL)
+	if stateErr == nil {
 		env = roleStateEnvelope{Kind: roleStateKindNode, Blob: blob}
 	} else {
 		// Kein /state (häufigster Fall, die meisten Node-Typen) oder
@@ -260,7 +275,11 @@ func (s *Service) captureRoleStateMode(wf Workflow, role string, senderToAlias m
 		// implementiert hat).
 		params, perr := captureGenericParams(ctx, s.httpClient, node.APIBaseURL)
 		if perr != nil || len(params) == 0 {
-			return
+			if !isNoStateRoute(stateErr) {
+				// /state ist da, antwortete aber nach Wiederholungen nicht: Sicherung gescheitert (nicht „kein Zustand“).
+				return fmt.Errorf("GET /state: %v", stateErr)
+			}
+			return nil
 		}
 		env = roleStateEnvelope{Kind: roleStateKindParams, Params: params}
 	}
@@ -269,20 +288,55 @@ func (s *Service) captureRoleStateMode(wf Workflow, role string, senderToAlias m
 	raw, err := json.Marshal(env)
 	if err != nil {
 		slog.Warn("workflows: failed to marshal role state envelope", "workflow", wf.ID, "role", role, "error", err)
-		return
+		return err
 	}
 	state, err := aliasSenderIDs(raw, senderToAlias)
 	if err != nil {
 		slog.Warn("workflows: failed to alias role state", "workflow", wf.ID, "role", role, "error", err)
-		return
+		return err
 	}
 	if old, ok := s.savedRoleState(wf.ID, role); ok && len(state) < len(old)/2 {
 		slog.Warn("workflows: gesicherter Rollen-Zustand schrumpft stark (alter Stand bleibt in role_state_backup)",
 			"workflow", wf.ID, "role", role, "oldBytes", len(old), "newBytes", len(state), "mode", int(mode))
 	}
-	if err := s.store.SetRoleState(wf.ID, role, state); err != nil {
-		slog.Warn("workflows: failed to persist role state", "workflow", wf.ID, "role", role, "error", err)
+	// Schreiben und zurücklesen: der gespeicherte Eintrag muss nachweislich dem erfassten Stand entsprechen.
+	var writeErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		if writeErr = s.store.SetRoleState(wf.ID, role, state); writeErr != nil {
+			slog.Warn("workflows: failed to persist role state", "workflow", wf.ID, "role", role, "error", writeErr, "attempt", attempt)
+			continue
+		}
+		back, ok := s.savedRoleState(wf.ID, role)
+		if ok && stateMatches(back, state) {
+			return nil
+		}
+		writeErr = fmt.Errorf("gespeicherter Stand weicht nach dem Schreiben ab")
 	}
+	return writeErr
+}
+
+// getNodeStateRetry liest GET /state mit bis zu 3 Versuchen (300 ms Abstand) bei vorübergehenden Fehlern; ein 404 (Node
+// hat keine /state-Route) wird nicht wiederholt.
+func (s *Service) getNodeStateRetry(ctx context.Context, apiBaseURL string) (json.RawMessage, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, lastErr
+			case <-time.After(300 * time.Millisecond):
+			}
+		}
+		blob, err := getNodeState(ctx, s.httpClient, apiBaseURL)
+		if err == nil {
+			return blob, nil
+		}
+		lastErr = err
+		if isNoStateRoute(err) {
+			return nil, err
+		}
+	}
+	return nil, lastErr
 }
 
 // captureGenericParams fragt den Descriptor eines Nodes nach seinen
@@ -629,6 +683,20 @@ func stateMatches(after, want json.RawMessage) bool {
 	return reflect.DeepEqual(a, w)
 }
 
+// stateStatusError: unerwarteter HTTP-Status von GET /state. 404 heißt „dieser Node-Typ hat keine /state-Route“
+// (kein Fehler, dann greift die generische Parametererfassung); alles andere ist ein vorübergehender Ausfall.
+type stateStatusError struct {
+	Code int
+	Msg  string
+}
+
+func (e *stateStatusError) Error() string { return e.Msg }
+
+func isNoStateRoute(err error) bool {
+	var se *stateStatusError
+	return errors.As(err, &se) && se.Code == http.StatusNotFound
+}
+
 func getNodeState(ctx context.Context, client *http.Client, apiBaseURL string) (json.RawMessage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBaseURL+"/state", nil)
 	if err != nil {
@@ -640,7 +708,7 @@ func getNodeState(ctx context.Context, client *http.Client, apiBaseURL string) (
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("workflows: unexpected status %d from GET %s/state", resp.StatusCode, apiBaseURL)
+		return nil, &stateStatusError{Code: resp.StatusCode, Msg: fmt.Sprintf("workflows: unexpected status %d from GET %s/state", resp.StatusCode, apiBaseURL)}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRoleStateBytes))
 	if err != nil {
