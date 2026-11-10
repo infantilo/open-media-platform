@@ -111,6 +111,12 @@ var stopGracePeriod = 3 * time.Second
 // `POST /api/v1/instances` nicht unbegrenzt hängen lässt.
 const remoteCommandTimeout = 5 * time.Second
 
+// remoteStopTimeout: Wartezeit auf die Antwort eines Remote-Stops. Der Host-Agent führt Befehle nacheinander aus und jeder
+// Node fährt graceful herunter (1–3 s); liegen mehrere Rollen eines Workflows auf einem Host, überschritten die hinteren
+// die 5 s von remoteCommandTimeout, obwohl der Agent sie danach ausführte („stop finished with errors: … nats: timeout“,
+// Nutzerfund 2026-11-10) — der Workflow stand dann auf „failed“, obwohl alles gestoppt war.
+const remoteStopTimeout = 45 * time.Second
+
 // NATSRequester schickt eine Request/Reply-Anfrage über NATS
 // (implementiert von einem schmalen Adapter um *nats.Conn in main.go —
 // launcher.go bleibt dadurch frei von einer direkten nats.go-
@@ -2294,7 +2300,7 @@ func (l *Launcher) stopRemote(inst Instance) error {
 	if l.nc == nil {
 		return ErrRemoteUnavailable
 	}
-	resp, err := l.sendCommand(inst.HostID, remoteCommand{Action: "stop", InstanceID: inst.ID})
+	resp, err := l.sendCommandT(inst.HostID, remoteCommand{Action: "stop", InstanceID: inst.ID}, remoteStopTimeout)
 	if err != nil {
 		return fmt.Errorf("launcher: remote stop on host %s: %w", inst.HostID, err)
 	}
