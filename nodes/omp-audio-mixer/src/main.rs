@@ -3342,11 +3342,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     eprintln!("omp-audio-mixer: pipeline error: {message}");
                     handle.publish_alert(message).await;
                 }
-                pipeline::Event::Level { channel_id, rms, peak } => {
+                pipeline::Event::Level { channel_id, rms, peak, chs } => {
+                    let chs: Vec<[f64; 2]> = chs.iter().map(|(r, p)| [(r * 1000.0).round() / 1000.0, (p * 1000.0).round() / 1000.0]).collect();
                     let json = serde_json::json!({
                         "channelId": channel_id,
                         "rms": rms,
                         "peak": peak,
+                        "chs": chs,
                     })
                     .to_string();
                     levels_broadcaster.publish(&json);

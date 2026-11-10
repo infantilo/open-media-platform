@@ -142,6 +142,18 @@ pub fn db_to_meter_level(db: f64) -> f64 {
     10f64.powf(db / 20.0).clamp(0.0, 1.0)
 }
 
+/// Pegel je Kanal (linear 0..1): `(rms, peak)` pro Kanal des `level`-Elements, in Kanalreihenfolge.
+pub fn parse_level_channels(structure: &gst::StructureRef) -> Option<Vec<(f64, f64)>> {
+    let rms = structure.get::<gst::glib::ValueArray>("rms").ok()?;
+    let peak = structure.get::<gst::glib::ValueArray>("peak").ok()?;
+    let vals = |arr: &gst::glib::ValueArray| -> Vec<f64> { arr.iter().filter_map(|v| v.get::<f64>().ok()).collect() };
+    let (r, p) = (vals(&rms), vals(&peak));
+    if r.is_empty() || r.len() != p.len() {
+        return None;
+    }
+    Some(r.iter().zip(p.iter()).map(|(a, b)| (db_to_meter_level(*a), db_to_meter_level(*b))).collect())
+}
+
 /// Liest die `rms`/`peak`-Arrays aus einem `level`-Element-Bus-Message
 /// und mittelt sie zu einem einzelnen Wert — das Kit-Meter zeigt einen
 /// Balken pro Kanalzug, keine getrennte L/R-Anzeige. **Typ ist

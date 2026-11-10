@@ -93,6 +93,8 @@ pub enum Event {
         channel_id: Option<String>,
         rms: f64,
         peak: f64,
+        /// Pegel je Kanal `(rms, peak)` für Stereo-/Mehrkanal-Anzeige.
+        chs: Vec<(f64, f64)>,
     },
     /// DSP-Zustand je Kanal (≈10 Hz): Gain-Reduction von Kompressor/Gate,
     /// Anteil von AutoMix/Ducking am Pegel und Detektor-Pegel. `None` =
@@ -2115,10 +2117,12 @@ pub fn run(
                     None => continue,
                 }
             };
+            let chs = omp_mediaio::levels::parse_level_channels(structure).unwrap_or_default();
             let _ = tx.send(Event::Level {
                 channel_id,
                 rms,
                 peak,
+                chs,
             });
         }
     }

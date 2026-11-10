@@ -137,6 +137,8 @@ const CSS2 = `
 .st-meter{position:relative;margin:calc(var(--th)/2) 0;background:#050505;border:1px solid #2a2a2a}
 .st-meter .meter{position:absolute;inset:0;width:auto;height:auto;background:transparent;border:0}
 .st-meter .mfill{position:absolute;left:0;right:0;bottom:0;height:100%;background:linear-gradient(to top,#18b84a 0,#2fe06a 60%,#e8d41e 78%,#ff9a1a 90%,#ff3b3b 100%);clip-path:inset(calc((1 - var(--v,0))*100%) 0 0 0)}
+.st-meter .meter.multi{display:flex}
+.st-meter .meter.multi .ml{position:relative;flex:1;min-width:0}
 .st-meter .mpeak{position:absolute;left:0;right:0;height:2px;bottom:calc(var(--p,0)*100%);background:#fff;opacity:.9}
 .st-meter .meter[data-hot="1"]{box-shadow:0 0 0 1px #ff3b3b}
 .st-range{position:relative;margin:0;padding:0;width:100%;height:100%;writing-mode:vertical-lr;direction:rtl;appearance:none;-webkit-appearance:none;background:transparent;cursor:pointer;touch-action:none}
@@ -339,8 +341,8 @@ class StripV2 {
     this.gBox.textContent = fmtDb(db);
     this.range.setAttribute("aria-valuetext", fmtDb(db) + " dB");
   }
-  setLevel(rms, peak, now) {
-    this.meter.set(rms, peak, now);
+  setLevel(rms, peak, now, chs) {
+    this.meter.set(rms, peak, now, chs);
     const txt = this.meter.hold <= 0.005 ? "−∞" : fmtSigned(this.meter.hold * 60 - 60);
     if (this.last.pk !== txt) { this.last.pk = txt; this.pk.textContent = txt; }
   }
@@ -912,7 +914,7 @@ class ConsoleApp extends MixerApp {
     for (const [id, v] of this.views) {
       const l = this.live.get(id);
       if (!l) continue;
-      v.setLevel(l.rms || 0, l.peak || 0, now);
+      v.setLevel(l.rms || 0, l.peak || 0, now, l.chs);
       const sig = (l.onAir ? 1 : 0) + "|" + (l.afv === false ? 0 : 1) + "|" + Math.round((l.autoDb || 0)) + "|" + Math.round((l.duckDb || 0) * 10);
       if (v.liveSig !== sig) {
         if (v.liveSig !== undefined && String(v.liveSig).charAt(0) !== sig.charAt(0)) this.pollSoon(); // Stummzustand sofort nachladen (s. 30-panel.js)
@@ -924,9 +926,9 @@ class ConsoleApp extends MixerApp {
     for (const [k, v] of this.stripViews) {
       if (!k.startsWith("b")) continue;
       const l = this.live.get("aux-" + k.slice(1));
-      if (l) v.setLevel(l.rms || 0, l.peak || 0, now);
+      if (l) v.setLevel(l.rms || 0, l.peak || 0, now, l.chs);
     }
-    this.master.setLevel(this.masterLive.rms || 0, this.masterLive.peak || 0, now);
+    this.master.setLevel(this.masterLive.rms || 0, this.masterLive.peak || 0, now, this.masterLive.chs);
     const gr = "GR " + fmtSigned(this.masterLive.gr || 0);
     if (this.limGr.textContent !== gr) this.limGr.textContent = gr;
     for (const fn of this.liveBinds) fn(now);

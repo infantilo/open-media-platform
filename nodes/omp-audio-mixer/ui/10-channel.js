@@ -213,8 +213,8 @@ class ChannelView {
   }
 
   /** Meter + Signalaktivität (aus rAF, nur Transform/Variable). */
-  setLevel(rms, peak, now) {
-    this.meter.set(rms, peak, now);
+  setLevel(rms, peak, now, chs) {
+    this.meter.set(rms, peak, now, chs);
     const active = rms > 0.003 ? "1" : "0";
     if (this.last.sigv !== active) {
       this.last.sigv = active;

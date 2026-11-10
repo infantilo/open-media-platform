@@ -354,7 +354,34 @@ class Meter {
   static pos(lin) {
     return clamp((linToDb(lin) + 60) / 60, 0, 1);
   }
-  set(rms, peak, now) {
+  /** Stereo/Mehrkanal: je Kanal ein eigener Balken (.ml mit eigenem Füll-/Peak-Element); Mono bleibt ein Balken. */
+  #setMulti(chs, now) {
+    const n = chs.length;
+    if (!this.lanes || this.lanes.length !== n) {
+      this.lanes = chs.map(() => ({ el: h("div", { class: "ml" }), fill: h("i", { class: "mfill" }), peak: h("i", { class: "mpeak" }), v: -1, p: -1, hold: 0, holdAt: 0 }));
+      this.lanes.forEach((l) => l.el.append(l.fill, l.peak));
+      this.root.replaceChildren(...this.lanes.map((l) => l.el));
+      this.root.classList.add("multi");
+    }
+    let hot = false;
+    chs.forEach(([r, pk], i) => {
+      const l = this.lanes[i];
+      const v = Meter.pos(r);
+      let p = Meter.pos(pk);
+      if (p >= l.hold || now - l.holdAt > 1500) { l.hold = p; l.holdAt = now; } else p = l.hold;
+      if (p > 0.97) hot = true;
+      if (Math.abs(v - l.v) < 0.004 && Math.abs(p - l.p) < 0.004) return;
+      l.v = v; l.p = p;
+      l.fill.style.setProperty("--v", v.toFixed(3));
+      l.peak.style.setProperty("--p", p.toFixed(3));
+      l.el.style.setProperty("--v", v.toFixed(3));
+      l.el.style.setProperty("--p", p.toFixed(3));
+    });
+    this.root.dataset.hot = hot ? "1" : "0";
+    this.hold = Math.max(...this.lanes.map((l) => l.hold));
+  }
+  set(rms, peak, now, chs) {
+    if (Array.isArray(chs) && chs.length > 1) return this.#setMulti(chs, now);
     const v = Meter.pos(rms);
     let p = Meter.pos(peak);
     if (p >= this.hold || now - this.holdAt > 1500) {

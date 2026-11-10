@@ -148,6 +148,9 @@ button{cursor:pointer}
 .meter{position:relative;background:#0b0d0f;border-radius:3px;overflow:hidden;--v:0;--p:0}
 .mfill{position:absolute;inset:0;clip-path:inset(calc((1 - var(--v,0))*100%) 0 0 0);background:linear-gradient(to top,#2fbf71 0 70%,#e6c229 70% 90%,#e5484d 90%)}
 .mpeak{position:absolute;background:#fff;opacity:.85}
+.meter.multi{display:flex;gap:1px;background:transparent;overflow:visible}
+.meter.multi .ml{position:relative;flex:1;min-width:0;min-height:0;background:#0b0d0f;overflow:hidden;--v:0;--p:0}
+.channels[data-variant=grid] .meter.multi,.channels[data-variant=touch] .meter.multi,.channels[data-variant=dense] .meter.multi,.channels[data-variant=touchf] .meter.multi,.channels[data-variant=gridf][data-faders="0"] .meter.multi{flex-direction:column}
 .meter[data-hot="1"]{box-shadow:0 0 0 1px var(--c-mute)}
 .fader{position:relative;user-select:none;-webkit-user-select:none}
 /* Scroll und Fader dürfen sich nicht ins Gehege kommen: der Fader nimmt nur Gesten in SEINER Achse, die andere Achse scrollt weiter die Kanalliste. */
@@ -1003,9 +1006,9 @@ class MixerApp {
         this.live.set(m.channelId, l);
         return;
       }
-      if (m.channelId == null) { this.masterLive.rms = m.rms; this.masterLive.peak = m.peak; return; }
+      if (m.channelId == null) { this.masterLive.rms = m.rms; this.masterLive.peak = m.peak; this.masterLive.chs = m.chs; return; }
       const l = this.live.get(m.channelId) || { autoDb: 0, duckDb: 0, onAir: false, compGr: 0, gateGr: 0 };
-      l.rms = m.rms; l.peak = m.peak;
+      l.rms = m.rms; l.peak = m.peak; l.chs = m.chs;
       this.live.set(m.channelId, l);
     };
   }
@@ -1016,7 +1019,7 @@ class MixerApp {
     for (const [id, v] of this.views) {
       const l = this.live.get(id);
       if (!l) continue;
-      v.setLevel(l.rms || 0, l.peak || 0, now);
+      v.setLevel(l.rms || 0, l.peak || 0, now, l.chs);
       const sig = (l.onAir ? 1 : 0) + "|" + (l.afv === false ? 0 : 1) + "|" + Math.round((l.autoDb || 0) * 10) + "|" + Math.round((l.duckDb || 0) * 10);
       if (v.liveSig !== sig) {
         // On-Air kommt sofort per Live-Strom, der Stummzustand aber per Abfrage: bei jedem On-Air-Wechsel sofort nachladen, sonst zeigt der Kanal
@@ -1027,9 +1030,9 @@ class MixerApp {
         if (ch) v.update(ch, l, this.ctxFor(ch));
       }
     }
-    this.masterMeter.set(this.masterLive.rms || 0, this.masterLive.peak || 0, now);
-    if (this.progMeter) this.progMeter.set(this.masterLive.rms || 0, this.masterLive.peak || 0, now);
-    for (const [id, v] of this.outStrips) { const l = this.live.get("aux-" + id); if (l) v.meter.set(l.rms || 0, l.peak || 0, now); }
+    this.masterMeter.set(this.masterLive.rms || 0, this.masterLive.peak || 0, now, this.masterLive.chs);
+    if (this.progMeter) this.progMeter.set(this.masterLive.rms || 0, this.masterLive.peak || 0, now, this.masterLive.chs);
+    for (const [id, v] of this.outStrips) { const l = this.live.get("aux-" + id); if (l) v.meter.set(l.rms || 0, l.peak || 0, now, l.chs); }
     const gr = "GR " + fmtSigned(this.masterLive.gr || 0) + " dB";
     if (this.limGr.textContent !== gr) this.limGr.textContent = gr;
     this.center.tickLive(now);
