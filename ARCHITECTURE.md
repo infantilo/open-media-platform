@@ -1582,9 +1582,9 @@ Source: [sony/nmos-cpp](https://github.com/sony/nmos-cpp)
 **Status (2026-07-28):** Umgesetzt (`UMSETZUNG.md` D3 Teil 2,
 2026-07-14) — lokale Nutzerkonten, Workflow-gescopte Rollenbindungen
 (Tripel Rolle/Wirkungsbereich/Verb), zentrale Durchsetzung im
-Orchestrator-Proxy, Audit-Log, Administration-UI. **Weiterhin offen:**
-AD/LDAP-Anbindung (Punkt 1 unten) — bewusst zurückgestellt, Identität
-hinter einem Interface gekapselt, additiv nachrüstbar.
+Orchestrator-Proxy, Audit-Log, Administration-UI. **AD/LDAP-Anbindung:** umgesetzt 2026-11-11 (`UMSETZUNG.md` Kap. 92,
+`internal/directory`) — direkter LDAP(S)-Bind im Orchestrator, Verzeichnisgruppen →
+OMP-Gruppen; **nicht gegen ein echtes AD getestet** (nur gegen einen Test-LDAP-Server).
 
 **Anforderung:** Lokale Benutzerkonten **und** Active-Directory-Anbindung;
 ein Rollenmodell, das Bedienrechte auf Workflows/Regieplätze begrenzt:
@@ -3022,8 +3022,7 @@ sind inzwischen erledigt:
 Design-/Scope-Aufwand — für #8/#9 explizit per Nutzer-Entscheidung
 2026-08-10 auf eine eigene Sitzung verschoben, analog zu D3 Teil 1, das
 ebenfalls eine eigene Sitzung bekam):
-- AD/LDAP-Anbindung — explizit zurückgestellt, `auth.Service` hinter
-  einem schmalen Interface, additiv nachrüstbar.
+- AD/LDAP-Anbindung — inzwischen umgesetzt (Kap. 92), s. §12.
 - Token-Refresh (kurzlebiges Access-Token + rotierendes Refresh-Token,
   zusätzlich zur jetzt vorhandenen Revocation) — eigenständiges
   Vorhaben, würde den Blast-Radius eines Leaks weiter verkleinern, löst

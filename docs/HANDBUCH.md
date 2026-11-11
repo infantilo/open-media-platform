@@ -194,6 +194,39 @@ einem Zeichen bestehen, den Nutzernamen enthalten oder zu den häufigsten
 Passwörtern gehören; die Meldung nennt den Grund. Bestehende Passwörter bleiben
 gültig (auch das Dev-Passwort oben — für den Produktivbetrieb ändern).
 
+**Windows Active Directory / LDAP (Kapitel 92).** Mit `OMP_LDAP_URL` am Orchestrator melden sich
+Verzeichnisnutzer mit ihrem Windows-Namen und -Passwort an; OMP speichert kein Passwort. Ablauf: Suche des
+Nutzers (Dienstkonto) → Bind mit dessen DN und Passwort → Gruppen lesen (bei AD verschachtelt, OID
+1.2.840.113556.1.4.1941). Der Nutzer wird beim ersten Login angelegt (Kennzeichen „AD“ in der Nutzerliste),
+seine **Verzeichnisgruppen** werden bei **jeder** Anmeldung auf **OMP-Gruppen** abgebildet (Administration →
+Gruppen → „Active Directory / LDAP“: Verzeichnisgruppe, Name oder DN, → OMP-Gruppe). Rechte hängen wie
+bisher an den OMP-Gruppen; nur abgebildete Gruppen werden vom Verzeichnis geführt, von Hand gepflegte
+Mitgliedschaften in anderen Gruppen bleiben. Einstellungen (Umgebung des Orchestrators):
+
+| Variable | Bedeutung |
+|---|---|
+| `OMP_LDAP_URL` | `ldaps://dc1.firma.de:636` (mehrere durch Komma = Ausfallreihenfolge); leer = aus |
+| `OMP_LDAP_BASE_DN` | Suchbasis, z. B. `DC=firma,DC=de` (Pflicht) |
+| `OMP_LDAP_BIND_DN`, `OMP_LDAP_BIND_PASSWORD` | Dienstkonto (nur lesen) für die Suche |
+| `OMP_LDAP_USER_FILTER` | Vorgabe: `(&(objectCategory=person)(objectClass=user)(\|(sAMAccountName={user})(userPrincipalName={user})))` — Anmeldung mit `hans` oder `hans@firma.de` |
+| `OMP_LDAP_USER_ATTR` | Attribut des OMP-Namens, Vorgabe `sAMAccountName` |
+| `OMP_LDAP_GROUP_BASE_DN`, `OMP_LDAP_GROUP_FILTER` | Gruppensuche; Vorgabe `(&(objectClass=group)(member:1.2.840.113556.1.4.1941:={dn}))` (verschachtelte Gruppen) |
+| `OMP_LDAP_REQUIRED_GROUP` | optional: nur Mitglieder dieser Gruppe (Name oder DN) dürfen sich anmelden |
+| `OMP_LDAP_CA_FILE` | PEM der Firmen-CA (leer = Systemzertifikate) |
+| `OMP_LDAP_STARTTLS=1` | bei `ldap://` auf TLS umschalten |
+| `OMP_LDAP_ALLOW_PLAIN=1` | Klartext erlauben — **nur Labor**, Passwörter laufen offen |
+| `OMP_LDAP_TIMEOUT_S` | Zeitlimit je Anfrage, Vorgabe 8 |
+
+Regeln: **lokale Konten haben Vorrang** und bleiben als Notzugang nutzbar (fällt das Verzeichnis aus, kommt
+man mit dem lokalen Administrator hinein). Ein Verzeichnisname, der einem lokalen Konto gleicht, wird
+abgewiesen. Solange es noch **keinen** Nutzer gibt (Erst-Einrichtung), ist die Verzeichnis-Anmeldung aus —
+zuerst den lokalen Administrator anlegen. Das Passwort eines Verzeichnisnutzers lässt sich in OMP nicht
+setzen. Ein im Verzeichnis gesperrter/gelöschter Nutzer kommt nicht mehr hinein; bereits ausgestellte
+Sitzungen laufen bis zu ihrem Ablauf weiter (dann in der Nutzerliste löschen oder „Sitzungen widerrufen“).
+Gruppenänderungen im Verzeichnis wirken ab der **nächsten Anmeldung**. Die Login-Sperre schützt auch vor dem
+Durchprobieren gegen das AD (sonst würde das AD-Konto gesperrt). Der Test „Verbindung testen“ bindet nur das
+Dienstkonto.
+
 **Login-Sperre.** Fehlversuche werden dreifach gezählt: je **Name und
 Adresse** (5 in 15 Minuten, dann 15 Minuten gesperrt), je **Adresse** (30,
 gegen das Durchprobieren vieler Namen) und je **Name über alle Adressen**

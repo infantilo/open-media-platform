@@ -45,6 +45,8 @@ interface UserEntry {
   // orgId (Kapitel 21 B14 UI-Anbindung, Nachtrag 284) — Wire-Format
   // identisch zu httpapi.userResponse.
   orgId: string;
+  // "local" oder "ldap" (Active Directory; Passwort im Verzeichnis).
+  source?: string;
 }
 
 interface RoleBinding {
@@ -399,6 +401,12 @@ class AdminView extends HTMLElement {
 
   // Gruppen (Nutzerauftrag 2026-09-24: gruppenbasierte Rechteverwaltung).
   #groups: Group[] = [];
+  // Active-Directory-Anbindung (Nutzerauftrag 2026-11-11).
+  #dirEnabled = false;
+  #dirMaps: { ldapGroup: string; groupId: string }[] = [];
+  #dirTest = "";
+  #newDirLdapGroup = "";
+  #newDirGroupId = "";
   #showGroupForm = false;
   #newGroupName = "";
   #newGroupDescription = "";
@@ -517,6 +525,7 @@ class AdminView extends HTMLElement {
     this.#loadUsers();
     this.#loadOrganizations();
     this.#loadGroups();
+    void this.#loadDirectory();
     this.#loadStorageBackends();
     this.#loadBindings();
     this.#loadAudit();
@@ -634,6 +643,153 @@ class AdminView extends HTMLElement {
     this.#error = "";
     this.#orgChangeTarget = null;
     await this.#loadUsers();
+  }
+
+  // ---- Active Directory / LDAP (Nutzerauftrag 2026-11-11) ----------------------------------------
+
+  async #loadDirectory() {
+    try {
+      const st = await apiFetch("/api/v1/auth/directory");
+      if (st.ok) this.#dirEnabled = !!(await st.json()).enabled;
+      const res = await apiFetch("/api/v1/auth/directory/mappings");
+      if (res.ok) this.#dirMaps = await res.json();
+      this.#render();
+    } catch {
+      // Orchestrator kurzzeitig nicht erreichbar.
+    }
+  }
+
+  async #testDirectory() {
+    this.#dirTest = tt("adm.dir.testing");
+    this.#render();
+    try {
+      const res = await apiFetch("/api/v1/auth/directory/test", { method: "POST" });
+      if (!res.ok) {
+        this.#dirTest = tt("adm.dir.notConfigured");
+      } else {
+        const r = await res.json();
+        this.#dirTest = r.ok ? tt("adm.dir.testOk") : tt("adm.dir.testFailed", { p0: String(r.error ?? "") });
+      }
+    } catch (e) {
+      this.#dirTest = tt("adm.dir.testFailed", { p0: String(e) });
+    }
+    this.#render();
+  }
+
+  async #addDirMapping() {
+    const ldapGroup = this.#newDirLdapGroup.trim();
+    if (!ldapGroup || !this.#newDirGroupId) return;
+    const res = await apiFetch("/api/v1/auth/directory/mappings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ldapGroup, groupId: this.#newDirGroupId }),
+    });
+    if (!res.ok) {
+      this.#error = tt("adm.dir.addFailed", { p0: await res.text() });
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    this.#newDirLdapGroup = "";
+    await this.#loadDirectory();
+  }
+
+  async #removeDirMapping(m: { ldapGroup: string; groupId: string }) {
+    const res = await apiFetch("/api/v1/auth/directory/mappings", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(m),
+    });
+    if (!res.ok) {
+      this.#error = tt("adm.05f6da", { p0: await res.text() });
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    await this.#loadDirectory();
+  }
+
+  #renderDirectoryPanel(): HTMLElement {
+    const box = document.createElement("div");
+    box.setAttribute("data-role", "directory-panel");
+    box.style.cssText = "margin-top:var(--omp-space-4);padding-top:var(--omp-space-3);border-top:1px solid var(--omp-border);";
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:var(--omp-space-2);";
+    const title = document.createElement("span");
+    title.className = "omp-h1";
+    title.textContent = tt("adm.dir.title");
+    const state = document.createElement("span");
+    state.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);";
+    state.textContent = this.#dirEnabled ? tt("adm.dir.enabled") : tt("adm.dir.disabled");
+    head.append(title, state);
+    if (this.#dirEnabled) {
+      const testBtn = document.createElement("button");
+      testBtn.textContent = tt("adm.dir.test");
+      testBtn.style.cssText = "font-size:11px;cursor:pointer;";
+      testBtn.addEventListener("click", () => void this.#testDirectory());
+      const res = document.createElement("span");
+      res.style.cssText = "font-size:var(--omp-font-size-xs);";
+      res.textContent = this.#dirTest;
+      head.append(testBtn, res);
+    }
+    box.appendChild(head);
+
+    const hint = document.createElement("div");
+    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
+    hint.textContent = this.#dirEnabled ? tt("adm.dir.hint") : tt("adm.dir.hintOff");
+    box.appendChild(hint);
+
+    for (const m of this.#dirMaps) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;align-items:center;padding:3px 0;border-bottom:1px solid var(--omp-border);";
+      const txt = document.createElement("span");
+      txt.style.cssText = "flex:1;";
+      const g = this.#groups.find((x) => x.id === m.groupId);
+      txt.textContent = `${m.ldapGroup}  →  ${g?.name ?? m.groupId}`;
+      const del = document.createElement("button");
+      del.textContent = "×";
+      del.title = tt("adm.1010b0");
+      del.style.cssText = "cursor:pointer;";
+      del.addEventListener("click", () => void this.#removeDirMapping(m));
+      row.append(txt, del);
+      box.appendChild(row);
+    }
+
+    const form = document.createElement("div");
+    form.style.cssText = "display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px;";
+    const ldapIn = document.createElement("input");
+    ldapIn.placeholder = tt("adm.dir.ldapGroup");
+    ldapIn.autocomplete = "off";
+    ldapIn.value = this.#newDirLdapGroup;
+    ldapIn.style.cssText = "flex:2;min-width:220px;";
+    ldapIn.addEventListener("input", () => {
+      this.#newDirLdapGroup = ldapIn.value;
+    });
+    const sel = document.createElement("select");
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = tt("adm.dir.pickGroup");
+    sel.appendChild(none);
+    for (const g of this.#groups) {
+      const o = document.createElement("option");
+      o.value = g.id;
+      o.textContent = g.name;
+      sel.appendChild(o);
+    }
+    sel.value = this.#newDirGroupId;
+    sel.addEventListener("change", () => {
+      this.#newDirGroupId = sel.value;
+    });
+    const add = document.createElement("button");
+    add.textContent = tt("adm.dir.add");
+    add.style.cssText = "cursor:pointer;";
+    add.addEventListener("click", () => void this.#addDirMapping());
+    ldapIn.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") void this.#addDirMapping();
+    });
+    form.append(ldapIn, sel, add);
+    box.appendChild(form);
+    return box;
   }
 
   // ---- Gruppen (Nutzerauftrag 2026-09-24) --------------------------------------------------------
@@ -2769,6 +2925,13 @@ class AdminView extends HTMLElement {
     const nameTd = document.createElement("td");
     nameTd.style.cssText = "padding:2px 8px;";
     nameTd.textContent = u.username;
+    if (u.source === "ldap") {
+      const tag = document.createElement("span");
+      tag.textContent = "AD";
+      tag.title = tt("adm.dir.userTag");
+      tag.style.cssText = "margin-left:6px;font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);border:1px solid var(--omp-border);border-radius:3px;padding:0 4px;";
+      nameTd.appendChild(tag);
+    }
     tr.appendChild(nameTd);
 
     const createdTd = document.createElement("td");
@@ -2874,7 +3037,8 @@ class AdminView extends HTMLElement {
     delBtn.style.cssText = "font-size:11px;";
     delBtn.addEventListener("click", () => this.#deleteUser(u.username));
 
-    actionsTd.append(resetBtn, delBtn);
+    if (u.source === "ldap") actionsTd.append(delBtn);
+    else actionsTd.append(resetBtn, delBtn);
     tr.appendChild(actionsTd);
     return tr;
   }
@@ -3289,12 +3453,14 @@ class AdminView extends HTMLElement {
       empty.style.cssText = "color:var(--omp-text-dim);";
       empty.textContent = tt("adm.657888");
       section.appendChild(empty);
+      section.appendChild(this.#renderDirectoryPanel());
       return section;
     }
 
     for (const g of this.#groups) {
       section.appendChild(this.#renderGroupRow(g));
     }
+    section.appendChild(this.#renderDirectoryPanel());
 
     return section;
   }

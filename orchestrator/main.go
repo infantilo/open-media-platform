@@ -43,8 +43,10 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/db"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/directory"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/domainaudit"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/eventbus"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/events"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/ffmpegtools"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/freeze"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
@@ -65,12 +67,11 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/maintenance"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/materialize"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
+	audiorulesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/audiorules"
 	extsvcmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/extsvc"
 	filesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/files"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/events"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
 	jobsmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/jobs"
-	audiorulesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/audiorules"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
@@ -722,6 +723,30 @@ func main() {
 	}
 	authSvc := auth.NewService(auth.NewStore(database), jwtSecret)
 	authzStore := authz.NewStore(database)
+	// Active-Directory-/LDAP-Anmeldung (internal/directory) — nur mit OMP_LDAP_URL; Fehlkonfiguration beendet den Start nicht,
+	// lokale Konten bleiben als Notzugang nutzbar.
+	dirMap := directory.NewMapStore(database)
+	dirMap.OnChange = authzStore.Invalidate
+	var dirClient *directory.Client
+	if cfg.LDAPURL != "" {
+		var urls []string
+		for _, u := range strings.Split(cfg.LDAPURL, ",") {
+			if u = strings.TrimSpace(u); u != "" {
+				urls = append(urls, u)
+			}
+		}
+		c, err := directory.New(directory.Config{URLs: urls, StartTLS: cfg.LDAPStartTLS, AllowPlain: cfg.LDAPAllowPlain, CAFile: cfg.LDAPCAFile,
+			BaseDN: cfg.LDAPBaseDN, BindDN: cfg.LDAPBindDN, BindPassword: cfg.LDAPBindPassword, UserFilter: cfg.LDAPUserFilter,
+			UserAttr: cfg.LDAPUserAttr, GroupBaseDN: cfg.LDAPGroupBaseDN, GroupFilter: cfg.LDAPGroupFilter,
+			RequiredGroup: cfg.LDAPRequiredGroup, Timeout: time.Duration(cfg.LDAPTimeoutS) * time.Second})
+		if err != nil {
+			slog.Error("LDAP/Active Directory: Konfiguration unbrauchbar, Verzeichnis-Anmeldung bleibt aus", "err", err)
+		} else {
+			dirClient = c
+			authSvc.SetDirectory(c, dirMap)
+			slog.Info("LDAP/Active Directory: Anmeldung aktiv", "urls", urls, "baseDN", cfg.LDAPBaseDN)
+		}
+	}
 	// Kapitel 21 B14 (Nachtrag 283) — s. internal/organizations-Paketdoku.
 	orgStore := organizations.NewStore(database)
 	// Nutzerauftrag 2026-09-24: gruppenbasierte Rechteverwaltung — s.
@@ -928,7 +953,7 @@ func main() {
 	// Video folgt Audio (Kapitel 46) steuert Bild- und Tonmischer fern und braucht wie die Automation ein Service-Token.
 	workflowSvc.RegisterControlPlaneType("omp-vfa")
 	workflowSvc.RegisterControlPlaneType("omp-radio-automation") // Radio-Automation (Kapitel 89/RB4): steuert den Segue-Player über den Proxy
-	workflowSvc.RegisterControlPlaneType("omp-studio-logic") // Studio-Logik (Kapitel 89/RC2): liest Mischer + GPIO und schaltet Rotlicht/Stummschaltung über den Proxy
+	workflowSvc.RegisterControlPlaneType("omp-studio-logic")     // Studio-Logik (Kapitel 89/RC2): liest Mischer + GPIO und schaltet Rotlicht/Stummschaltung über den Proxy
 	// Lauf-Historie (Scheduler: geplant vs. real) samt täglicher Bereinigung.
 	workflowRunStore := workflows.NewRunStore(database)
 	workflowSvc.SetRunRecorder(workflowRunStore)
@@ -1698,7 +1723,7 @@ func main() {
 	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
 	go timelineRec.Run(ctx, hub, timelineSink)
 	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithHostSoftware(hostSoftwareSvc), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithAlertStatus(alertStatusFn), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithDirectory(dirClient, dirMap), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithHostSoftware(hostSoftwareSvc), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithAlertStatus(alertStatusFn), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
 		h, err := housekeeping.CheckHealth(ctx, database)
 		housekeeping.AddVolume(&h, os.Getenv("OMP_DB_VOLUME_PATH"))
 		return h, err

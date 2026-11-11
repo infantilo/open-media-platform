@@ -226,6 +226,14 @@ type Config struct {
 	// entfernte nur mit BootstrapOpen (OMP_BOOTSTRAP_OPEN=1) oder Kopfzeile X-Bootstrap-Token = BootstrapToken.
 	BootstrapOpen  bool
 	BootstrapToken string
+	// Active-Directory-/LDAP-Anmeldung (Nutzerauftrag 2026-11-11, internal/directory). LDAPURL leer = aus.
+	// OMP_LDAP_URL ("ldaps://dc1:636,ldaps://dc2:636"), OMP_LDAP_BASE_DN, OMP_LDAP_BIND_DN/_BIND_PASSWORD (Dienstkonto),
+	// OMP_LDAP_USER_FILTER ({user}), OMP_LDAP_USER_ATTR, OMP_LDAP_GROUP_BASE_DN, OMP_LDAP_GROUP_FILTER ({dn}),
+	// OMP_LDAP_REQUIRED_GROUP, OMP_LDAP_CA_FILE, OMP_LDAP_STARTTLS=1, OMP_LDAP_ALLOW_PLAIN=1 (nur Labor), OMP_LDAP_TIMEOUT_S.
+	LDAPURL, LDAPBaseDN, LDAPBindDN, LDAPBindPassword, LDAPUserFilter, LDAPUserAttr string
+	LDAPGroupBaseDN, LDAPGroupFilter, LDAPRequiredGroup, LDAPCAFile                 string
+	LDAPStartTLS, LDAPAllowPlain                                                    bool
+	LDAPTimeoutS                                                                    int
 	// MetricsToken (Audit 2026-10-23, niedrig): gesetzt = /metrics verlangt „Authorization: Bearer <Token>“ (Prometheus
 	// `authorization: credentials`). Leer = offen wie bisher (Netzwerk-Isolation).
 	MetricsToken string
@@ -362,8 +370,21 @@ func Load() Config {
 			v, _ := strconv.ParseBool(getEnv("OMP_BOOTSTRAP_OPEN", "false"))
 			return v
 		}(),
-		BootstrapToken: getEnv("OMP_BOOTSTRAP_TOKEN", ""),
-		MetricsToken:   getEnv("OMP_METRICS_TOKEN", ""),
+		BootstrapToken:    getEnv("OMP_BOOTSTRAP_TOKEN", ""),
+		MetricsToken:      getEnv("OMP_METRICS_TOKEN", ""),
+		LDAPURL:           getEnv("OMP_LDAP_URL", ""),
+		LDAPBaseDN:        getEnv("OMP_LDAP_BASE_DN", ""),
+		LDAPBindDN:        getEnv("OMP_LDAP_BIND_DN", ""),
+		LDAPBindPassword:  getEnv("OMP_LDAP_BIND_PASSWORD", ""),
+		LDAPUserFilter:    getEnv("OMP_LDAP_USER_FILTER", ""),
+		LDAPUserAttr:      getEnv("OMP_LDAP_USER_ATTR", ""),
+		LDAPGroupBaseDN:   getEnv("OMP_LDAP_GROUP_BASE_DN", ""),
+		LDAPGroupFilter:   getEnv("OMP_LDAP_GROUP_FILTER", ""),
+		LDAPRequiredGroup: getEnv("OMP_LDAP_REQUIRED_GROUP", ""),
+		LDAPCAFile:        getEnv("OMP_LDAP_CA_FILE", ""),
+		LDAPStartTLS:      getEnv("OMP_LDAP_STARTTLS", "") == "1",
+		LDAPAllowPlain:    getEnv("OMP_LDAP_ALLOW_PLAIN", "") == "1",
+		LDAPTimeoutS:      getEnvInt("OMP_LDAP_TIMEOUT_S", 8),
 		UpdateAllowUnsigned: func() bool {
 			v, _ := strconv.ParseBool(getEnv("OMP_UPDATE_ALLOW_UNSIGNED", "false"))
 			return v

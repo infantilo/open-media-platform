@@ -30649,3 +30649,27 @@ Dateien, Browser-Upload über die UI.
 **Installer/Preflight:** `deploy/dev/preflight.sh`, `preflight_test.sh`,
 `install.sh` und `deploy/offline/install-offline.sh` sind vollständig englisch
 (Ausgaben und Kommentare); Rückfragen heißen jetzt `[y/N]`/`[Y/n]`.
+
+## 2026-11-11 — AD/LDAP-Anbindung: direkter LDAP-Bind im Orchestrator (Kap. 92)
+
+**Entscheidung (Nutzerauftrag „auch Windows Active Directory Benutzerverwaltung implementieren, noch nicht
+testbar am Laptop“):** Die in D3 zurückgestellte Anbindung wird umgesetzt, als zweite Identitätsquelle neben den
+lokalen Konten, ohne externen Identity Provider (Option „minimales eigenes User-Management + direkter
+LDAP-Bind“ aus 2026-07-10).
+- **Abhängigkeit:** `github.com/go-ldap/ldap/v3` (BER/LDAP-Protokoll, Bind, Suche mit Paging, StartTLS,
+  Filter-Maskierung). Die Standardbibliothek hat keinen LDAP-Client; ein selbstgebauter ASN.1-BER-Client wäre
+  genau die Art Eigenbau an einem Sicherheitsprotokoll, die UMSETZUNG §0 Regel 5/6 ausschließt.
+- **Abweichung von §0 Regel 7** (nichts, was nur mit fehlender Infrastruktur testbar ist): ausdrücklicher
+  Nutzerwunsch. Ausgleich: Logik gegen einen Minimal-LDAP-Server im Test (Bind/Suche/Gruppen/Ausfall/Injektion),
+  Datenbankteile gegen Postgres; **AD-spezifische Annahmen sind nicht an einer Installation geprüft** und im
+  Handbuch benannt.
+- **Modell:** Verzeichnisnutzer = `users`-Zeile mit `source='ldap'` (Platzhalter-Hash `!`, passt auf keinen bcrypt-Hash),
+  Anlage beim ersten Login. Gruppen: Tabelle `ldap_group_map` (Verzeichnisgruppe → OMP-Gruppe), Abgleich bei
+  jeder Anmeldung nur für abgebildete Gruppen. Rechte unverändert über OMP-Gruppen/Rollenbindungen.
+- **Sicherheit:** leeres Passwort wird nie gebunden (anonymer Bind „gelingt“, RFC 4513 §5.1.2); Filterwerte
+  maskiert (RFC 4515 §3); Klartext-`ldap://` nur mit ausdrücklicher Freigabe; Namenskollision mit lokalem Konto →
+  abgewiesen (keine Übernahme); lokale Konten haben Vorrang (Notzugang); im Bootstrap-Modus (kein Nutzer) ist
+  Verzeichnis-Login aus.
+- **Offen:** Sitzungen gelöschter AD-Konten laufen bis Token-Ablauf; kein Gruppenabgleich zwischen Anmeldungen
+  (kein periodischer Sync); kein Pre-Provisioning von Verzeichnisnutzern; kein Kerberos/SSO (nur Bind mit Passwort);
+  OIDC/SAML nicht gebaut.

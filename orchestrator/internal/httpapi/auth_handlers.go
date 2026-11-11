@@ -250,6 +250,8 @@ type userResponse struct {
 	// zurückgegeben; ohne dieses Feld konnte die Administration-Ansicht
 	// nicht zeigen/bedienen, welcher Organisation ein Nutzer angehört.
 	OrgID string `json:"orgId"`
+	// Source: "local" oder "ldap" (Active Directory/LDAP; Passwort wird dort verwaltet).
+	Source string `json:"source"`
 }
 
 // globalAdminSubjects liefert die Menge der Subjects mit einer
@@ -304,7 +306,7 @@ func handleListUsers(authSvc AuthService, authzStore AuthzChecker, groupSvc Grou
 		admins := globalAdminSubjects(bindings, groupSvc)
 		out := make([]userResponse, len(users))
 		for i, u := range users {
-			out[i] = userResponse{ID: u.ID, Username: u.Username, CreatedAt: u.CreatedAt, IsAdmin: admins[u.Username], OrgID: u.OrgID}
+			out[i] = userResponse{ID: u.ID, Username: u.Username, CreatedAt: u.CreatedAt, IsAdmin: admins[u.Username], OrgID: u.OrgID, Source: u.Source}
 		}
 		writeJSON(w, http.StatusOK, out)
 	}
@@ -376,6 +378,10 @@ func handleResetPassword(authSvc AuthService) http.HandlerFunc {
 		if err := authSvc.SetPassword(r.Context(), r.PathValue("name"), req.Password); err != nil {
 			if errors.Is(err, auth.ErrWeakPassword) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if errors.Is(err, auth.ErrExternalUser) {
+				http.Error(w, err.Error(), http.StatusConflict)
 				return
 			}
 			if errors.Is(err, auth.ErrUserNotFound) {

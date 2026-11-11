@@ -3,8 +3,11 @@ package auth
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/directory"
 )
 
 // ErrInvalidCredentials wird von Login bei falschem Nutzernamen/Passwort
@@ -12,11 +15,18 @@ import (
 // "Passwort falsch" (kein Nutzernamen-Enumeration-Orakel).
 var ErrInvalidCredentials = errors.New("auth: invalid credentials")
 
+// ErrExternalUser: das Passwort eines Verzeichnisnutzers wird im Verzeichnis geändert, nicht in OMP.
+var ErrExternalUser = errors.New("auth: password of a directory user is managed in the directory")
+
 // Service bündelt Nutzerverwaltung, Passwort-Prüfung und Token-
 // Ausstellung — die von httpapi genutzte Fassade dieses Pakets.
 type Service struct {
 	store  *Store
 	signer *Signer
+
+	// Verzeichnis (Active Directory/LDAP), optional — s. SetDirectory.
+	dir    Directory
+	dirMap GroupSyncer
 
 	cacheMu   sync.Mutex
 	countAt   time.Time
@@ -43,6 +53,22 @@ func (s *Service) invalidateCache() {
 	s.userCache = nil
 	s.cacheMu.Unlock()
 }
+
+// Directory prüft Anmeldungen gegen ein Verzeichnis (implementiert von *directory.Client).
+type Directory interface {
+	Authenticate(ctx context.Context, username, password string) (directory.Identity, error)
+}
+
+// GroupSyncer führt die Gruppenmitgliedschaften eines Verzeichnisnutzers nach (implementiert von *directory.MapStore).
+type GroupSyncer interface {
+	Sync(ctx context.Context, username string, id directory.Identity) (bool, error)
+}
+
+// SetDirectory schaltet die Verzeichnis-Anmeldung ein. sync darf nil sein (dann keine Gruppenabbildung).
+func (s *Service) SetDirectory(d Directory, sync GroupSyncer) { s.dir, s.dirMap = d, sync }
+
+// DirectoryEnabled: ist eine Verzeichnis-Anbindung aktiv?
+func (s *Service) DirectoryEnabled() bool { return s.dir != nil }
 
 // NewService erstellt einen Service gegen store, Tokens signiert mit
 // jwtSecret.
@@ -141,6 +167,9 @@ func (s *Service) DeleteUser(ctx context.Context, username string) error {
 // bestehen (der Nutzer ist trotzdem nicht schlechter dran als vorher),
 // wird aber an den Aufrufer durchgereicht, damit er sichtbar bleibt.
 func (s *Service) SetPassword(ctx context.Context, username, password string) error {
+	if u, ok, err := s.store.ByUsername(ctx, username); err == nil && ok && u.Source == SourceLDAP {
+		return ErrExternalUser
+	}
 	if err := ValidatePassword(username, password); err != nil {
 		return err
 	}
@@ -177,10 +206,67 @@ func (s *Service) Login(ctx context.Context, username, password string) (token s
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	if !ok || !VerifyPassword(u.PasswordHash, password) {
+	if !ok || u.Source == SourceLDAP {
+		// Unbekannt oder Verzeichnisnutzer: gegen das Verzeichnis prüfen (lokale Konten haben Vorrang, s. u.).
+		if s.dir == nil {
+			return "", time.Time{}, ErrInvalidCredentials
+		}
+		u, err = s.loginDirectory(ctx, username, password)
+		if err != nil {
+			return "", time.Time{}, err
+		}
+	} else if !VerifyPassword(u.PasswordHash, password) {
 		return "", time.Time{}, ErrInvalidCredentials
 	}
 	return s.signer.issue(Principal{UserID: u.ID, Username: u.Username, Epoch: u.SessionsEpoch, OrgID: u.OrgID}, time.Now())
+}
+
+// loginDirectory prüft Name/Passwort im Verzeichnis, legt den Nutzer beim ersten Login an und führt seine
+// Gruppen nach. Ein Verzeichniskonto, dessen Name einem lokalen Konto gleicht, wird abgewiesen (sonst könnte
+// jemand im Verzeichnis ein Konto gleichen Namens anlegen und das lokale übernehmen). Solange es noch keinen
+// Nutzer gibt (Bootstrap-Modus, API offen), ist die Verzeichnis-Anmeldung aus: ein erster Verzeichnisnutzer
+// würde den Bootstrap beenden, ohne dass jemand Administrator wäre.
+func (s *Service) loginDirectory(ctx context.Context, typed, password string) (User, error) {
+	id, err := s.dir.Authenticate(ctx, typed, password)
+	if err != nil {
+		if !errors.Is(err, directory.ErrInvalidCredentials) {
+			slog.Error("Verzeichnis-Anmeldung fehlgeschlagen (Verzeichnis nicht erreichbar/falsch konfiguriert)", "err", err)
+		}
+		return User{}, ErrInvalidCredentials
+	}
+	if n, err := s.store.Count(ctx); err != nil {
+		return User{}, err
+	} else if n == 0 {
+		return User{}, ErrInvalidCredentials
+	}
+	u, ok, err := s.store.ByUsername(ctx, id.Username)
+	if err != nil {
+		return User{}, err
+	}
+	if ok && u.Source != SourceLDAP {
+		return User{}, ErrInvalidCredentials
+	}
+	if !ok {
+		u, err = s.store.CreateExternal(ctx, id.Username, DefaultOrgID)
+		if errors.Is(err, ErrUserExists) { // gleichzeitiger Erstlogin
+			u, ok, err = s.store.ByUsername(ctx, id.Username)
+			if err == nil && (!ok || u.Source != SourceLDAP) {
+				return User{}, ErrInvalidCredentials
+			}
+		}
+		if err != nil {
+			return User{}, err
+		}
+		s.invalidateCache()
+	}
+	if s.dirMap != nil {
+		if _, err := s.dirMap.Sync(ctx, u.Username, id); err != nil {
+			// Ohne korrekte Gruppen darf niemand mit veralteten Rechten hineinkommen.
+			slog.Error("Gruppenabgleich mit dem Verzeichnis fehlgeschlagen", "user", u.Username, "err", err)
+			return User{}, err
+		}
+	}
+	return u, nil
 }
 
 // Authenticate verifiziert ein Bearer-Token und liefert den Principal.

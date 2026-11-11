@@ -588,6 +588,39 @@
     "domain": "audio-rules"
   },
   {
+    "method": "GET",
+    "path": "/api/v1/auth/directory",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/auth/directory/mappings",
+    "auth": "verb:Admin",
+    "when": "options.dirMaps != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/auth/directory/mappings",
+    "auth": "verb:Admin",
+    "when": "options.dirMaps != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/directory/mappings",
+    "auth": "verb:Admin",
+    "when": "options.dirMaps != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/auth/directory/test",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "POST",
     "path": "/api/v1/auth/login",
     "auth": "custom:handleLogin",

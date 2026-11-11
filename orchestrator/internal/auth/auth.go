@@ -4,16 +4,9 @@
 // was auf welchem Node) liegt bewusst getrennt in internal/authz — dieses
 // Paket kennt nur "wer ist der Nutzer", nicht "was darf er".
 //
-// AD/LDAP-Anbindung (§12 Punkt 1: "AD/LDAP(S)-Anbindung für Enterprise-
-// Umgebungen") ist in dieser Runde bewusst **nicht** umgesetzt: es gibt
-// auf der Single-Host-Dev-Maschine keinen echten Verzeichnisdienst, gegen
-// den sich ein LDAP-Bind sinnvoll verifizieren ließe (UMSETZUNG.md §0
-// Punkt 7 verbietet Schritte, die nur mit Hardware/Infrastruktur testbar
-// wären, die hier nicht existiert) — kein Raten an einer ungetesteten
-// LDAP-Integration. Store ist deshalb hinter einem schmalen Interface in
-// httpapi verwendet, damit eine LDAP-Variante später additiv (zweite
-// Store-Implementierung) ergänzt werden kann, ohne den Rest anzufassen.
-// Siehe docs/decisions.md D3 Teil 2.
+// AD/LDAP-Anbindung (Nutzerauftrag 2026-11-11): Service.SetDirectory hängt ein Verzeichnis (internal/directory)
+// an Login; Verzeichnisnutzer werden beim ersten Login angelegt (source='ldap'), ihre Gruppen auf OMP-Gruppen
+// abgebildet. Lokale Konten haben immer Vorrang und bleiben als Notzugang nutzbar.
 package auth
 
 import "time"
@@ -39,7 +32,17 @@ type User struct {
 	// viele-zu-viele-Modell). Default "default" für jeden vor B14
 	// bestehenden Nutzer (s. db/migrations/0025_organizations.sql).
 	OrgID string
+	// Source: "local" (Passwort in OMP) oder "ldap" (Anmeldung gegen Active Directory/LDAP, internal/directory).
+	Source string
 }
+
+// Quellen eines Nutzerkontos.
+const (
+	SourceLocal = "local"
+	SourceLDAP  = "ldap"
+	// ExternalPasswordHash ist der Platzhalter-Hash von Verzeichnisnutzern; kein bcrypt-Hash, passt auf kein Passwort.
+	ExternalPasswordHash = "!"
+)
 
 // Principal ist die aus einem verifizierten Token gewonnene Identität —
 // bewusst schmaler als User (kein PasswordHash), das ist alles, was
