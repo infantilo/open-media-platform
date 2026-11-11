@@ -43,6 +43,7 @@ export default class PipWall extends HTMLElement {
     for (let i = 0; i < N; i++) { const r = document.createElementNS(NS, "rect"); this._holes.append(r); }
     root.append(style, this._bg);
     this._moveMs = 500;
+    this._cover = true; // Option focusCover
     this._rad = 0;
     this._boxes = [];
     for (let i = 0; i < N; i++) {
@@ -66,6 +67,7 @@ export default class PipWall extends HTMLElement {
     if (d.captionColor) this.style.setProperty("--cap", d.captionColor);
     if (typeof d.borderWidth === "number") this.style.setProperty("--bw", `${d.borderWidth / 1920 * 100}vw`);
     if (typeof d.cornerRadius === "number") { this._rad = Math.max(0, d.cornerRadius) / 1920; this.style.setProperty("--rad", `${this._rad * 100}vw`); }
+    if (typeof d.focusCover === "boolean") this._cover = d.focusCover;
     if (typeof d.leadMs === "number") this._leadMs = d.leadMs;
     if (typeof d.moveMs === "number") this._moveMs = Math.max(0, d.moveMs);
     const now0 = performance.now();
@@ -132,7 +134,15 @@ export default class PipWall extends HTMLElement {
         const [x, y, w, h] = b.cur, [fx, fy, fw, fh] = focused.cur, e = 1e-3;
         dim = x >= fx - e && y >= fy - e && x + w <= fx + fw + e && y + h <= fy + fh + e;
         const ox = Math.max(x, fx), oy = Math.max(y, fy), ox2 = Math.min(x + w, fx + fw), oy2 = Math.min(y + h, fy + fh);
-        if (!dim && ox2 > ox && oy2 > oy && w > 0 && h > 0) {
+        if (this._cover) {
+          // Das vergrößerte Video liegt im Mischer über allem: Rahmen UND Beschriftung (steht über dem Rahmen) der anderen
+          // Fenster werden dort ausgespart, wo das vergrößerte Fenster liegt (Z-Reihenfolge nachgebildet).
+          const px = (v, o, s) => `${((v - o) / s) * 100}%`;
+          if (w > 0 && h > 0) {
+            clip = `polygon(evenodd, -10000% -10000%, 10000% -10000%, 10000% 10000%, -10000% 10000%, -10000% -10000%, ` +
+              `${px(fx, x, w)} ${px(fy, y, h)}, ${px(fx + fw, x, w)} ${px(fy, y, h)}, ${px(fx + fw, x, w)} ${px(fy + fh, y, h)}, ${px(fx, x, w)} ${px(fy + fh, y, h)}, ${px(fx, x, w)} ${px(fy, y, h)})`;
+          }
+        } else if (!dim && ox2 > ox && oy2 > oy && w > 0 && h > 0) {
           const px = (v, o, s) => `${((v - o) / s) * 100}%`;
           clip = `polygon(evenodd, -100% -100%, 200% -100%, 200% 200%, -100% 200%, -100% -100%, ` +
             `${px(ox, x, w)} ${px(oy, y, h)}, ${px(ox2, x, w)} ${px(oy, y, h)}, ${px(ox2, x, w)} ${px(oy2, y, h)}, ${px(ox, x, w)} ${px(oy2, y, h)}, ${px(ox, x, w)} ${px(oy, y, h)})`;

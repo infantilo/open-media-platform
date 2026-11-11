@@ -1,16 +1,28 @@
 {
   "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
   "id": "pip-wall",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "PIP-Wand (Hintergrund, Rahmen, Beschriftung)",
   "description": "Nachrichten-Look für drei Bild-in-Bild-Fenster: Hintergrundbild mit drei durchsichtigen Fenstern, Rahmen und Beschriftung je Fenster. Die Fenster sind Zonen pip1..pip3 (data-ograf-zone). Mit einer Bindung vom Typ „follow“ folgen Fenster, Rahmen und Schrift der Pose des jeweiligen PIP-Slots im Bildmischer (auch beim Vergrößern per Klick im Monitor). Ohne Bindung stehen die Fenster auf den Standardpositionen (Szene „PIP 1“, 1280×720). Boxen als Bruchteile „x,y,b,h“ (0..1, links oben). Kein OGraf-Standard, nur die Zonen sind eine Erweiterung.",
   "author": {
     "name": "OpenMediaPlatform"
   },
   "v_omp_zones": [
-    {"id": "pip1", "name": "Fenster 1", "slot": 1},
-    {"id": "pip2", "name": "Fenster 2", "slot": 2},
-    {"id": "pip3", "name": "Fenster 3", "slot": 3}
+    {
+      "id": "pip1",
+      "name": "Fenster 1",
+      "slot": 1
+    },
+    {
+      "id": "pip2",
+      "name": "Fenster 2",
+      "slot": 2
+    },
+    {
+      "id": "pip3",
+      "name": "Fenster 3",
+      "slot": 3
+    }
   ],
   "main": "pip-wall.js",
   "supportsRealTime": true,
@@ -59,6 +71,11 @@
         "default": 0,
         "minimum": 0,
         "maximum": 200
+      },
+      "focusCover": {
+        "type": "boolean",
+        "title": "Vergrößertes Fenster verdeckt die anderen (Rahmen und Beschriftung)",
+        "default": true
       },
       "text1": {
         "type": "string",

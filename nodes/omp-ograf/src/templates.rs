@@ -186,7 +186,7 @@ fn content_type_for(path: &Path) -> &'static str {
 pub fn ensure_builtin_paternoster_frame(templates_root: &Path) {
     let dir = templates_root.join("paternoster-frame");
     if dir.join("paternoster-frame.ograf.json").exists() {
-        upgrade_old_builtin_manifest(&dir.join("paternoster-frame.ograf.json"), include_str!("../builtin/paternoster-frame/paternoster-frame.ograf.json"));
+        upgrade_builtin(&dir, "paternoster-frame", include_str!("../builtin/paternoster-frame/paternoster-frame.ograf.json"), include_str!("../builtin/paternoster-frame/paternoster-frame.js"));
         return;
     }
     if std::fs::create_dir_all(&dir).is_ok() {
@@ -195,13 +195,23 @@ pub fn ensure_builtin_paternoster_frame(templates_root: &Path) {
     }
 }
 
-/// Ältere Installationen tragen das früher mitgelieferte Manifest (Feld `designWidth` ohne `v_`, keine `v_omp_zones`): nur dieses
-/// Manifest wird durch das heutige, normtreue ersetzt. Ein Manifest ohne diese Kennzeichen (vom Nutzer geändert) bleibt unberührt.
-fn upgrade_old_builtin_manifest(path: &Path, current: &str) {
-    let Ok(raw) = std::fs::read_to_string(path) else { return };
+/// Versionsnummer `x.y.z` als Tupel; `None`, wenn nicht lesbar.
+fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
+    let mut it = v.trim().split('.').map(|p| p.parse::<u32>().ok());
+    Some((it.next()??, it.next()??, it.next()??))
+}
+
+/// Ältere Installationen tragen eine ältere Fassung der mitgelieferten Vorlage (das Datenverzeichnis wird nur einmal befüllt):
+/// ist die installierte `version` kleiner als die des Programms, werden Manifest und Modul ersetzt. Ohne lesbare Version
+/// (vom Nutzer umgebaut) bleibt die Vorlage unberührt.
+fn upgrade_builtin(dir: &Path, name: &str, manifest: &str, module: &str) {
+    let path = dir.join(format!("{name}.ograf.json"));
+    let Ok(raw) = std::fs::read_to_string(&path) else { return };
     let Ok(json) = serde_json::from_str::<Value>(&raw) else { return };
-    if json.get("designWidth").is_some() && json.get("v_omp_zones").is_none() {
-        let _ = std::fs::write(path, current);
+    let (Some(old), Ok(new)) = (json["version"].as_str().and_then(parse_version), serde_json::from_str::<Value>(manifest)) else { return };
+    if new["version"].as_str().and_then(parse_version).is_some_and(|n| old < n) {
+        let _ = std::fs::write(&path, manifest);
+        let _ = std::fs::write(dir.join(format!("{name}.js")), module);
     }
 }
 
@@ -209,7 +219,7 @@ fn upgrade_old_builtin_manifest(path: &Path, current: &str) {
 pub fn ensure_builtin_pip_wall(templates_root: &Path) {
     let dir = templates_root.join("pip-wall");
     if dir.join("pip-wall.ograf.json").exists() {
-        upgrade_old_builtin_manifest(&dir.join("pip-wall.ograf.json"), include_str!("../builtin/pip-wall/pip-wall.ograf.json"));
+        upgrade_builtin(&dir, "pip-wall", include_str!("../builtin/pip-wall/pip-wall.ograf.json"), include_str!("../builtin/pip-wall/pip-wall.js"));
         return;
     }
     if std::fs::create_dir_all(&dir).is_ok() {
@@ -307,10 +317,12 @@ mod upgrade_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("pip-wall")).unwrap();
         let p = dir.join("pip-wall").join("pip-wall.ograf.json");
-        std::fs::write(&p, r#"{"id":"pip-wall","designWidth":1920}"#).unwrap();
+        std::fs::write(&p, r#"{"id":"pip-wall","version":"1.0.0","designWidth":1920}"#).unwrap();
+        std::fs::write(dir.join("pip-wall").join("pip-wall.js"), "alt").unwrap();
         ensure_builtin_pip_wall(&dir);
         let now: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
         assert!(now.get("designWidth").is_none() && now["v_omp_zones"].is_array());
+        assert_ne!(std::fs::read_to_string(dir.join("pip-wall").join("pip-wall.js")).unwrap(), "alt"); // Modul mit ersetzt
         std::fs::write(&p, r#"{"id":"pip-wall","name":"meins"}"#).unwrap(); // vom Nutzer geändert: bleibt
         ensure_builtin_pip_wall(&dir);
         assert!(std::fs::read_to_string(&p).unwrap().contains("meins"));
