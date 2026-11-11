@@ -1,5 +1,6 @@
 // Fader-Kennlinie (Kap. 93): Stellung 0…1 ↔ Verstärkung in dB. OMP-Eigenlösung (es gibt keine Norm für die Kennlinie eines
-// Mischpult-Faders): stückweise linear in dB, 0 dB bei 75 % Weg wie bei den üblichen Fahrfadern, +12 dB oben, −60 dB unten.
+// Mischpult-Faders): stückweise linear in dB, 0 dB bei 75 % Weg, +12 dB oben, −60 dB unten. **Dieselben Stützstellen wie der Bildschirm-Fader
+// des Audiomischers** (`nodes/omp-audio-mixer/ui/00-core.js`, `FADER_POINTS`) — Fahrfader und Bildschirm-Fader stehen so an derselben Stelle.
 // Der Audiomischer begrenzt `gain` auf −60…+12 dB (channel.<id>.setGain).
 
 export const GAIN_MIN_DB = -60;
@@ -8,9 +9,9 @@ export const GAIN_MAX_DB = 12;
 /** Stützstellen (Stellung, dB), streng steigend. */
 const POINTS: readonly (readonly [number, number])[] = [
   [0, GAIN_MIN_DB],
-  [0.2, -40],
-  [0.45, -20],
-  [0.6, -10],
+  [0.15, -40],
+  [0.35, -20],
+  [0.55, -10],
   [0.75, 0],
   [1, GAIN_MAX_DB],
 ];

@@ -77,6 +77,7 @@ impl ParamStore for Store {
                 m("simulateFader", &[("unit", ParamType::Number), ("strip", ParamType::Number), ("value", ParamType::Number)]),
                 m("simulatePress", &[("unit", ParamType::Number), ("name", ParamType::String)]),
                 m("simulateTurn", &[("unit", ParamType::Number), ("strip", ParamType::Number), ("steps", ParamType::Number)]),
+                m("simulateMove", &[("unit", ParamType::Number), ("strip", ParamType::Number), ("value", ParamType::Number)]),
                 m("simulateJog", &[("unit", ParamType::Number), ("steps", ParamType::Number)]),
                 m("simulateLink", &[("unit", ParamType::Number), ("up", ParamType::Boolean)]),
             ],
@@ -144,6 +145,13 @@ impl ParamStore for Store {
                 let (p, strip) = (self.sim(args)?, arg_u(args, "strip", 7)?);
                 let steps = args.get("steps").and_then(Value::as_i64).ok_or_else(|| InvokeError::Message("steps fehlt".to_string()))?;
                 p.state.lock().expect("lock poisoned").turn(strip, steps as i32);
+                Ok(())
+            }
+            "simulateMove" => {
+                // Fader mit dem Finger ziehen und halten (berührt bleibt er bis `simulateTouch` mit down=false)
+                let (p, strip) = (self.sim(args)?, arg_u(args, "strip", 8)?);
+                let v = arg_u(args, "value", 16383)?;
+                p.state.lock().expect("lock poisoned").drag(strip, v as i32);
                 Ok(())
             }
             "simulateJog" => {

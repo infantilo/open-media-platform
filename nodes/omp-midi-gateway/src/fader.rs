@@ -1,9 +1,10 @@
 //! Fader-Kennlinie (Kapitel 93) — wie `ui/shell/midi/fader-law.ts`: stückweise linear in dB, 0 dB bei 75 % Weg, +12 dB oben,
-//! −60 dB unten. OMP-Eigenlösung (keine Norm für die Kennlinie eines Mischpult-Faders).
+//! −60 dB unten. OMP-Eigenlösung (keine Norm); dieselben Stützstellen wie der Bildschirm-Fader des Audiomischers
+//! (`nodes/omp-audio-mixer/ui/00-core.js`, `FADER_POINTS`).
 
 pub const GAIN_MIN_DB: f64 = -60.0;
 pub const GAIN_MAX_DB: f64 = 12.0;
-const POINTS: [(f64, f64); 6] = [(0.0, GAIN_MIN_DB), (0.2, -40.0), (0.45, -20.0), (0.6, -10.0), (0.75, 0.0), (1.0, GAIN_MAX_DB)];
+const POINTS: [(f64, f64); 6] = [(0.0, GAIN_MIN_DB), (0.15, -40.0), (0.35, -20.0), (0.55, -10.0), (0.75, 0.0), (1.0, GAIN_MAX_DB)];
 
 pub fn position_to_db(p: f64) -> f64 {
     let x = p.clamp(0.0, 1.0);

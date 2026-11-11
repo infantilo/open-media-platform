@@ -74,7 +74,7 @@ Anmeldung und rechnet auch ohne sie weiter (viele USB-Pulte brauchen sie nicht).
 
 ## 3. Verhalten (Pult-Logik)
 
-* **Fader** → `channel.<id>.setGain` (`db`), dB nach der **Fader-Kennlinie** (OMP-Eigenlösung, keine Norm: stückweise linear in dB, −60 dB unten, 0 dB bei 75 %, +12 dB oben).
+* **Fader** → `channel.<id>.setGain` (`db`), dB nach der **Fader-Kennlinie** (OMP-Eigenlösung, keine Norm: stückweise linear in dB, −60 dB unten, 0 dB bei 75 %, +12 dB oben; **dieselben Stützstellen wie der Bildschirm-Fader des Audiomischers** `FADER_POINTS` — Fahrfader und Bildschirm-Fader stehen an derselben Stelle).
   Gedrosselt (50 ms je Kanal), der letzte Wert geht immer hinaus; Loslassen sendet sofort. Der gesetzte Wert wird bis zur Bestätigung des Mischers (höchstens 2 s) festgehalten, damit der Fader nicht zurückspringt.
 * **Fahrfader** folgen Änderungen am Mischer (Operator, Szene, Automation); **unter dem Finger** wird nie gefahren (Berührungsmeldung). Meldungen eines Faders ohne Berührung gelten innerhalb 300 ms nach einer Fahrt als Echo.
 * **Mute** → `setMute`, **Solo** → `setPfl` (Vorhören), **Select** wählt, **Rec-LED = On-Air** des Kanals (die Taste selbst tut nichts), **Drehgeber** → `setPan` (±5 % je Schritt, Druck = Mitte, Kranz zeigt die Stellung), **Name/Value** schaltet die untere Anzeigezeile zwischen Pegel und Pan.

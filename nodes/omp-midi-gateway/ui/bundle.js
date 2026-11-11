@@ -8,7 +8,7 @@ const T = (() => {
       bank: "Bank {n} · {c} Kanäle", units: "Einheiten", colUnit: "Nr.", colType: "Art", colName: "Name", colUp: "Anschluss", colOnline: "Pult meldet sich",
       up: "ja", down: "nein", add: "Einheit hinzufügen", remove: "Entfernen", raw: "USB (Rohgerät)", rtpListen: "Netzwerk: Gerät lädt uns ein (Port)", rtpConnect: "Netzwerk: wir laden ein (Host:Port)", sim: "Simulator",
       detected: "Erkannte USB-MIDI-Geräte", noneDetected: "Keine Rohgeräte unter /dev/snd gefunden (Gerät eingesteckt? Gruppe „audio“?).", save: "Speichern und neu starten", saved: "Gespeichert.",
-      profile: "Profil (JSON)", events: "Letzte Ereignisse", noEvents: "Noch keine Ereignisse.", sim_title: "Simulator-Pult {n}", strip: "Kanalzug", fader: "Fader setzen", touch: "Berühren", release: "Loslassen",
+      profile: "Profil (JSON)", events: "Letzte Ereignisse", noEvents: "Noch keine Ereignisse.", sim_title: "Simulator-Pult {n}", strip: "Kanalzug", touch: "Berühren", release: "Loslassen",
       press: "Taste", turn: "Drehgeber +1", turnBack: "Drehgeber −1", linkDrop: "Verbindung trennen/herstellen", fail: "{m} fehlgeschlagen: {d}", lastMidi: "Zuletzt erkannt",
       keys: "Tasten, Funktionsfeld und Jog (JSON, leer = Standardbelegung)", keysHint: "Standard: F1–F8 wirken auf den gewählten Kanal (Mute, PFL, Phase, EQ-Bypass, Comp, Gate, Main, Alle Mute aus), Pfeile wählen Kanal / ±1 dB, „Solo“ löscht das Vorhören, Scrub schaltet das Jog-Rad, die acht Ansichtstasten wählen Seiten. Nicht belegte Tasten (Play, Stop …) kommen als Ereignis „button.<Name>“.", fkeys: "Funktionstasten, Seiten, Jog", example: "Beispiel einfügen",
       hint: "USB-Pulte erscheinen als Rohgerät; Netzwerk-Pulte sprechen RTP-MIDI (AppleMIDI). Ohne Gerät lässt sich alles mit dem Simulator prüfen.",
@@ -19,7 +19,7 @@ const T = (() => {
       bank: "Bank {n} · {c} channels", units: "Units", colUnit: "No.", colType: "Type", colName: "Name", colUp: "Port", colOnline: "Surface responding",
       up: "yes", down: "no", add: "Add unit", remove: "Remove", raw: "USB (raw device)", rtpListen: "Network: device invites us (port)", rtpConnect: "Network: we invite (host:port)", sim: "Simulator",
       detected: "Detected USB MIDI devices", noneDetected: "No raw devices under /dev/snd (device plugged in? group “audio”?).", save: "Save and restart", saved: "Saved.",
-      profile: "Profile (JSON)", events: "Recent events", noEvents: "No events yet.", sim_title: "Simulated surface {n}", strip: "Channel strip", fader: "Set fader", touch: "Touch", release: "Release",
+      profile: "Profile (JSON)", events: "Recent events", noEvents: "No events yet.", sim_title: "Simulated surface {n}", strip: "Channel strip", touch: "Touch", release: "Release",
       press: "Key", turn: "Knob +1", turnBack: "Knob −1", linkDrop: "Drop/restore link", fail: "{m} failed: {d}", lastMidi: "Last seen",
       keys: "Keys, function field and jog (JSON, empty = default mapping)", keysHint: "Default: F1–F8 act on the selected channel (mute, PFL, phase, EQ bypass, comp, gate, main, clear mutes), arrows select channel / ±1 dB, “Solo” clears listening, Scrub switches the jog wheel, the eight view keys choose pages. Unmapped keys (play, stop …) arrive as event “button.<name>”.", fkeys: "Function keys, pages, jog", example: "Insert example",
       hint: "USB surfaces appear as raw devices; network surfaces speak RTP-MIDI (AppleMIDI). Everything can be checked with the simulator when no device is at hand.",
@@ -71,8 +71,84 @@ const STYLE = `
   textarea { width: 100%; min-height: 140px; font-family: monospace; font-size: 11px; }
   .hint, .muted { color: var(--mut); } .ev { font-variant-numeric: tabular-nums; padding: 1px 0; font-family: monospace; }
   .lcd { font-family: monospace; background: #1b2a1b; color: #9f9; padding: 2px 5px; border-radius: 3px; white-space: pre; margin: 2px 0; }
+  .strips { display: flex; gap: 6px; margin: 6px 0; align-items: flex-end; }
+  .sfd { display: flex; flex-direction: column; align-items: center; width: 46px; }
+  .fader { position: relative; width: 34px; height: 128px; user-select: none; -webkit-user-select: none; touch-action: none; outline: none; }
+  .fader:focus-visible { outline: 1px solid var(--acc); }
+  .ftrack { position: absolute; left: 50%; top: 6px; bottom: 6px; width: 4px; margin-left: -2px; background: #020202; border: 1px solid #333; border-radius: 3px; }
+  .fzero { position: absolute; left: 3px; right: 3px; height: 1px; background: #777; }
+  .fthumb { position: absolute; left: 50%; width: 26px; height: 14px; margin-left: -13px; border-radius: 3px; border: 1px solid #000;
+    background: repeating-linear-gradient(#bdbdbd 0 2px, #7c7c7c 2px 3px), linear-gradient(90deg, #6a6a6a, #d8d8d8 40%, #9c9c9c 60%, #5a5a5a); box-shadow: 0 2px 4px #000c, 0 1px 0 #fff6 inset; }
+  .fader.drag .fthumb { filter: brightness(1.15); } .fader.fine .fthumb { outline: 2px dashed #e8a33a; }
+  .fread { font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--acc); white-space: nowrap; margin-top: 2px; }
   .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
 `;
+
+// Fader im Stil der Audiomischer-Fader (nodes/omp-audio-mixer/ui/00-core.js): gleiche Kennlinie, Griff, Nullmarke, dB-Anzeige,
+// Ziehen (seitlich weg oder Shift = fein), Doppelklick = 0 dB. Berühren/Ziehen/Loslassen gehen als simulateTouch/simulateMove an das Pult.
+const FADER_POINTS = [[0, -60], [0.15, -40], [0.35, -20], [0.55, -10], [0.75, 0], [1, 12]];
+const clampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const posToDb = (p) => { p = clampN(p, 0, 1); for (let i = 1; i < FADER_POINTS.length; i++) { const [p0, d0] = FADER_POINTS[i - 1], [p1, d1] = FADER_POINTS[i]; if (p <= p1) return d0 + ((p - p0) / (p1 - p0)) * (d1 - d0); } return 12; };
+const dbToPos = (db) => { db = clampN(db, -60, 12); for (let i = 1; i < FADER_POINTS.length; i++) { const [p0, d0] = FADER_POINTS[i - 1], [p1, d1] = FADER_POINTS[i]; if (db <= d1) return p0 + ((db - d0) / (d1 - d0)) * (p1 - p0); } return 1; };
+const fmtDbSigned = (v) => (v > 0.0001 ? "+" : v < -0.0001 ? "−" : "") + Math.abs(v).toFixed(1);
+
+class SimFader {
+  constructor({ onTouch, onMove }) {
+    this.onTouch = onTouch; this.onMove = onMove; this.v = 0; this.dragging = false; this.fine = false; this.lastTap = 0; this.lastSend = 0;
+    this.root = h("div", { class: "fader", tabindex: "0", role: "slider", "aria-valuemin": "-60", "aria-valuemax": "12" });
+    this.track = h("div", { class: "ftrack" }); this.zero = h("i", { class: "fzero" }); this.thumb = h("div", { class: "fthumb" });
+    this.track.append(this.zero, this.thumb); this.root.append(this.track);
+    this.read = h("span", { class: "fread" }); this.wrap = h("div", { class: "sfd" }, this.root, this.read);
+    this.root.addEventListener("pointerdown", (e) => this.down(e)); this.root.addEventListener("pointermove", (e) => this.move(e));
+    this.root.addEventListener("pointerup", (e) => this.up(e)); this.root.addEventListener("pointercancel", (e) => this.up(e));
+    this.root.addEventListener("keydown", (e) => this.key(e));
+    this.render();
+  }
+  setValue(v14) { if (this.dragging) return; this.v = clampN(v14, 0, 16383); this.render(); }
+  db() { return Math.round(posToDb(this.v / 16383) * 10) / 10; }
+  render() {
+    this.thumb.style.bottom = `calc(${(this.v / 16383) * 100}% - 7px)`;
+    this.zero.style.bottom = `${dbToPos(0) * 100}%`;
+    const db = this.db(); this.read.textContent = db <= -59.5 ? "−∞" : fmtDbSigned(db) + " dB";
+  }
+  pos(e) { const r = this.track.getBoundingClientRect(); return clampN(1 - (e.clientY - r.top) / r.height, 0, 1); }
+  emit(pos, force) {
+    let db = posToDb(pos); if (Math.abs(db) < 0.4) db = 0;
+    this.v = Math.round(dbToPos(db) * 16383); this.render();
+    const now = performance.now(); if (force || now - this.lastSend > 60) { this.lastSend = now; this.onMove(this.v); } else this.pendingSend = true;
+  }
+  down(e) {
+    if (e.button !== 0) return;
+    const now = performance.now();
+    if (now - this.lastTap < 320) { this.lastTap = 0; this.onTouch(true); this.emit(dbToPos(0), true); this.onTouch(false); e.preventDefault(); return; }
+    this.lastTap = now;
+    try { this.root.setPointerCapture(e.pointerId); } catch { /* künstliches Ereignis */ }
+    this.dragging = true; this.fine = false; this.root.classList.add("drag"); this.onTouch(true);
+    const start = this.pos(e), tr = this.thumb.getBoundingClientRect();
+    const onThumb = e.clientX >= tr.left - 8 && e.clientX <= tr.right + 8 && e.clientY >= tr.top - 8 && e.clientY <= tr.bottom + 8;
+    this.anchorPos = onThumb ? this.v / 16383 : start; this.anchorPtr = start;
+    if (!onThumb) this.emit(start, true);
+    e.preventDefault();
+  }
+  move(e) {
+    if (!this.dragging) return;
+    const r = this.root.getBoundingClientRect(), off = Math.abs(e.clientX - (r.left + r.width / 2)), fine = e.shiftKey || off > 70;
+    if (fine !== this.fine) { this.fine = fine; this.anchorPos = this.v / 16383; this.anchorPtr = this.pos(e); this.root.classList.toggle("fine", fine); }
+    this.emit(clampN(this.anchorPos + (this.pos(e) - this.anchorPtr) * (fine ? 0.2 : 1), 0, 1), false);
+  }
+  up(e) {
+    if (!this.dragging) return;
+    this.dragging = false; this.root.classList.remove("drag", "fine");
+    try { this.root.releasePointerCapture(e.pointerId); } catch { /* schon frei */ }
+    this.onMove(this.v); this.onTouch(false);
+  }
+  key(e) {
+    const step = e.shiftKey ? 0.1 : 0.5, db = this.db(); let n = null;
+    if (e.key === "ArrowUp" || e.key === "ArrowRight") n = db + step; else if (e.key === "ArrowDown" || e.key === "ArrowLeft") n = db - step;
+    else if (e.key === "PageUp") n = db + 3; else if (e.key === "PageDown") n = db - 3; else if (e.key === "Home") n = 0;
+    if (n === null) return; e.preventDefault(); this.onTouch(true); this.emit(dbToPos(clampN(n, -60, 12)), true); this.onTouch(false);
+  }
+}
 
 class OmpMidiGatewayPanel extends HTMLElement {
   connectedCallback() {
@@ -148,17 +224,21 @@ class OmpMidiGatewayPanel extends HTMLElement {
     const evSec = h("details", { class: "sec" }, h("summary", {}, T("events")), h("div", { class: "body" }, evEl));
     shadow.append(h("style", {}, STYLE), banner, head, liveSec, simBox, setupSec, detSec, evSec);
 
-    const simSel = { strip: "1", fader: "12287" }; // überlebt das Neuzeichnen
+    const simSel = { strip: "1" }; // überlebt das Neuzeichnen
+    const faders = {}; // Fader bleiben beim Neuzeichnen erhalten (ein Zug am Fader wird nicht unterbrochen)
     const simUnit = (u) => {
       const n = u.unit;
       const stripIn = h("input", { type: "number", min: "1", max: "9", value: simSel.strip, style: "width:60px", oninput: (e) => { simSel.strip = e.target.value; } });
-      const faderIn = h("input", { type: "range", min: "0", max: "16383", value: simSel.fader, style: "width:200px", oninput: (e) => { simSel.fader = e.target.value; } });
       const strip = () => Math.max(0, Math.min(8, (Number(stripIn.value) || 1) - 1));
       const keys = ["mute", "solo", "select", "rec"];
       return h("details", { class: "sec", open: true }, h("summary", {}, T("sim_title", { n })), h("div", { class: "body" },
         h("div", { class: "lcd" }, u.sim.lcd[0]), h("div", { class: "lcd" }, u.sim.lcd[1]),
-        h("div", { class: "muted" }, "Fader: " + u.sim.faders.map((f) => Math.round((f / 16383) * 100)).join(" ")),
-        h("div", { class: "row" }, h("label", {}, T("strip"), stripIn), faderIn, h("button", { onclick: () => call("simulateFader", { unit: n, strip: strip(), value: Number(faderIn.value) }) }, T("fader")),
+        h("div", { class: "strips" }, ...u.sim.faders.map((v, i) => {
+          const f = faders[`${n}:${i}`] ??= new SimFader({ onTouch: (d) => call("simulateTouch", { unit: n, strip: i, down: d }), onMove: (x) => call("simulateMove", { unit: n, strip: i, value: x }) });
+          f.setValue(v);
+          return f.wrap;
+        })),
+        h("div", { class: "row" }, h("label", {}, T("strip"), stripIn),
           h("button", { onclick: () => call("simulateTurn", { unit: n, strip: Math.min(7, strip()), steps: 1 }) }, T("turn")), h("button", { onclick: () => call("simulateTurn", { unit: n, strip: Math.min(7, strip()), steps: -1 }) }, T("turnBack"))),
         h("div", { class: "row" }, ...keys.map((k) => h("button", { onclick: () => call("simulatePress", { unit: n, name: k + (strip() + 1) }) }, `${k} ${T("press")}`)),
           ...["bankLeft", "bankRight", "channelLeft", "channelRight", "nameValue", "play", "f1"].map((k) => h("button", { onclick: () => call("simulatePress", { unit: n, name: k }) }, k)),
@@ -200,7 +280,7 @@ class OmpMidiGatewayPanel extends HTMLElement {
           syncProf(); renderUnits();
         }
         // Eingabefelder behalten den Fokus; die Statusanzeige läuft weiter
-        if (!(shadow.activeElement && shadow.activeElement.tagName === "INPUT" && shadow.activeElement.type === "range")) render();
+        if (!Object.values(faders).some((f) => f.dragging)) render();
       } catch { /* nächster Takt */ }
     };
     shadow.addEventListener("contextmenu", (e) => { if (e.target && e.target.closest && e.target.closest("button")) e.preventDefault(); });

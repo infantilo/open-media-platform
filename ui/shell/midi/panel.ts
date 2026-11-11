@@ -8,9 +8,10 @@ import { type KeysConfig, validateKeys } from "./keys.ts";
 import { noteByName } from "./mcu.ts";
 import { type PortChoice, choices, openChoice, requestAccess, type WmAccess } from "./webmidi.ts";
 import { type Profile, validateProfile } from "./profile.ts";
+import { SIM_FADER_CSS, SimFader } from "./sim-fader.ts";
 import { SimSurface } from "./sim-surface.ts";
 
-const CSS = `
+const CSS = SIM_FADER_CSS + `
 :host{display:block;padding:12px;font-family:var(--omp-font,sans-serif);color:var(--omp-text,#ddd);min-width:min(560px,92vw)}
 h2{margin:0 0 6px;font-size:15px} h3{margin:12px 0 4px;font-size:13px}
 .hint{font-size:12px;opacity:.75;margin:0 0 8px}
@@ -25,12 +26,12 @@ textarea{width:100%;min-height:150px;box-sizing:border-box;font-family:monospace
 .lcd{font-family:monospace;font-size:11px;background:#1b2a1b;color:#9f9;padding:3px 5px;border-radius:3px;white-space:pre;overflow:hidden}
 .strips{display:flex;gap:4px;margin-top:6px}
 .strip{display:flex;flex-direction:column;align-items:center;gap:3px;width:44px}
+.strip.master{justify-content:flex-end}
 .strip button{width:40px;padding:1px 0;font-size:10px}
 .led-on{background:#c33!important;border-color:#e66!important}
 .led-blink{background:#c93!important}
 .meter{width:6px;height:40px;background:#222;position:relative}
 .meter i{position:absolute;bottom:0;left:0;right:0;background:#4c4}
-.fader{writing-mode:vertical-lr;direction:rtl;height:110px;width:22px;padding:0}
 .knob{width:30px;height:30px;border-radius:50%;padding:0}
 .bar{display:flex;gap:4px;margin-top:6px}
 `;
@@ -279,7 +280,7 @@ export class MidiPanel extends HTMLElement {
     const parts: (() => void)[] = [];
     for (let i = 0; i < 9; i++) {
       const s = document.createElement("div");
-      s.className = "strip";
+      s.className = i === 8 ? "strip master" : "strip";
       const btn = (label: string, name: string, note: number) => {
         const b = document.createElement("button");
         b.textContent = label;
@@ -305,19 +306,12 @@ export class MidiPanel extends HTMLElement {
         };
         s.append(m, btn("R", `rec${i + 1}`, i), btn("S", `solo${i + 1}`, 8 + i), btn("M", `mute${i + 1}`, 16 + i), btn("▷", `select${i + 1}`, 24 + i), knob);
       }
-      const f = document.createElement("input");
-      f.type = "range";
-      f.className = "fader";
-      f.min = "0";
-      f.max = "16383";
-      f.value = String(sim.faders[i]);
-      f.onpointerdown = () => sim.touch(i, true);
-      f.oninput = () => sim.drag(i, +f.value);
-      f.onpointerup = f.onpointercancel = () => sim.release(i);
+      const f = new SimFader({ onTouch: (d) => sim.touch(i, d), onMove: (v) => sim.drag(i, v) });
+      f.setValue14(sim.faders[i]);
       parts.push(() => {
-        if (!sim.touched[i]) f.value = String(sim.faders[i]);
+        if (!sim.touched[i]) f.setValue14(sim.faders[i]);
       });
-      s.appendChild(f);
+      s.appendChild(f.wrap);
       strips.appendChild(s);
     }
     const bar = el.querySelector(".bar") as HTMLElement;
