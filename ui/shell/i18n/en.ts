@@ -2307,6 +2307,7 @@ export const en: Record<keyof typeof de, string> = {
   "midi.err.denied": "MIDI access was not allowed (SysEx permission required).",
   "midi.err.no-port": "No MIDI device selected.",
   "midi.err.no-profile": "No valid profile.",
+  "midi.err.imap": "This port belongs to the surface's programming software iMAP (port 4) — choose one of the “DAW 1–3” ports.",
   "midi.err.no-mixer": "Please choose an audio mixer.",
   "midi.profile.label": "Profile (JSON)",
   "midi.profile.check": "Check",

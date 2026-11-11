@@ -4,6 +4,7 @@
 
 import { dbToFader, faderToDb, FADER_MAX } from "./fader-law.ts";
 import { fillTemplate, getPath, type InternalAction, type JogMode, type KeyBinding, type KeysConfig, ledPath, PAGE_KEYS, resolveKeys, type ResolvedKeys, setPath, usesChannel } from "./keys.ts";
+import { ProfileEngine } from "./profile.ts";
 import { BUTTON, type LedState, type McuEvent, meterStep, noteByName, noteName, NOTE, type RingMode } from "./mcu.ts";
 
 export interface StripInfo {
@@ -103,6 +104,7 @@ export class SurfaceLogic {
   #held = new Map<string, Held>();
   #heldMaster: Held | null = null;
   #keys: ResolvedKeys;
+  #profile: ProfileEngine | null = null;
   page = 0;
   jogMode = 0;
   shift = false;
@@ -115,10 +117,12 @@ export class SurfaceLogic {
   constructor(private mixer: MixerActions, opts: LogicOptions) {
     this.#o = { gainIntervalMs: 50, echoGuardMs: 300, panStep: 0.05, holdMs: 2000, keys: null, ...opts };
     this.#keys = resolveKeys(this.#o.keys);
+    this.#profile = this.#keys.profile ? new ProfileEngine(this.#keys.profile, "") : null;
   }
 
   setKeys(k: KeysConfig | null) {
     this.#keys = resolveKeys(k);
+    this.#profile = this.#keys.profile ? new ProfileEngine(this.#keys.profile, "") : null;
     this.page = Math.min(this.page, this.#keys.pages.length - 1);
     this.jogMode = 0;
   }
@@ -209,6 +213,13 @@ export class SurfaceLogic {
         break;
       case "jog":
         this.#jog(ev.delta, now);
+        break;
+      case "other":
+        // Zusatzprofil: am Pult frei belegte Pads/Regler (andere MIDI-Kanäle als das Mackie-Protokoll)
+        for (const a of this.#profile?.handle(ev.bytes) ?? []) {
+          if (a.kind === "call") this.mixer.call?.(a.node, a.method, a.args);
+          else this.mixer.nudge?.({ node: a.node, method: a.method, args: a.args, arg: a.arg, delta: a.delta, min: a.min, max: a.max, readParam: a.readParam });
+        }
         break;
       case "vpot": {
         const c = this.#strip(unit, ev.strip);

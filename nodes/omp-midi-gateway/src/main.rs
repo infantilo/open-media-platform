@@ -89,7 +89,7 @@ impl ParamStore for Store {
             "config" => json!(config::to_value(&s.cfg).to_string()),
             "status" => json!(s.status.to_string()),
             "ports" => {
-                let devs: Vec<Value> = raw::list_devices().iter().map(|d| json!({"path": d.path, "card": d.card, "device": d.device, "name": d.name})).collect();
+                let devs: Vec<Value> = raw::list_devices().iter().map(|d| json!({"path": d.path, "card": d.card, "device": d.device, "name": d.name, "hint": d.hint})).collect();
                 json!(Value::Array(devs).to_string())
             }
             "recent" => json!(Value::Array(s.recent.iter().cloned().collect()).to_string()),

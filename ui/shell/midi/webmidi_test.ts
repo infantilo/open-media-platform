@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { choices, openChoice, pairPorts, requestAccess, type WmAccess, type WmInput, type WmOutput } from "./webmidi.ts";
+import { portRole, choices, openChoice, pairPorts, requestAccess, type WmAccess, type WmInput, type WmOutput } from "./webmidi.ts";
 
 const inp = (id: string, name: string): WmInput => ({ id, name, onmidimessage: null });
 const out = (id: string, name: string, sent: number[][] = []): WmOutput => ({ id, name, send: (d) => void sent.push(d) });
@@ -7,6 +7,18 @@ const out = (id: string, name: string, sent: number[][] = []): WmOutput => ({ id
 Deno.test("Anschlüsse: gleiche Namen werden gepaart, gleiche Geräte nummeriert, Einzelne bleiben sichtbar", () => {
   const c = pairPorts([inp("i1", "V1-M"), inp("i2", "V1-M"), inp("i3", "Nur-Ein")], [out("o1", "V1-M"), out("o2", "V1-M"), out("o9", "Nur-Aus")]);
   assertEquals(c.map((x) => [x.key, x.inId, x.outId]), [["V1-M", "i1", "o1"], ["V1-M #2", "i2", "o2"], ["Nur-Ein", "i3", undefined], ["Nur-Aus (nur Ausgang)", undefined, "o9"]]);
+});
+
+Deno.test("iCON-Anschlüsse: Rollen nach Namen (Handbuch P1-M)", () => {
+  assertEquals(portRole("iCON P1-M V1.02"), "daw1");
+  assertEquals(portRole("MIDIIN2 (iCON P1-M V1.02)"), "daw2");
+  assertEquals(portRole("MIDIIN3 (iCON P1-M V1.02)"), "daw3");
+  assertEquals(portRole("MIDIIN4 (iCON P1-M V1.02)"), "imap");
+  assertEquals(portRole("MIDIOUT4 (iCON P1-M V1.02)"), "imap");
+  assertEquals(portRole("Akai APC"), null);
+  const c = pairPorts([inp("i", "MIDIIN4 (iCON P1-M V1.02)")], [out("o", "MIDIIN4 (iCON P1-M V1.02)")]);
+  assertEquals(c[0].role, "imap");
+  assertEquals(c[0].label.endsWith("— iMAP"), true);
 });
 
 Deno.test("Port: Bytes hin und her, Schließen löst den Eingang", () => {

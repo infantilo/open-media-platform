@@ -2306,6 +2306,7 @@ export const de = {
   "midi.err.denied": "Zugriff auf MIDI wurde nicht erlaubt (SysEx-Erlaubnis nötig).",
   "midi.err.no-port": "Kein MIDI-Gerät gewählt.",
   "midi.err.no-profile": "Kein gültiges Profil.",
+  "midi.err.imap": "Dieser Anschluss gehört der Programmier-Software iMAP des Pults (Anschluss 4) — einen der Anschlüsse „DAW 1–3“ wählen.",
   "midi.err.no-mixer": "Bitte einen Audiomischer wählen.",
   "midi.profile.label": "Profil (JSON)",
   "midi.profile.check": "Prüfen",

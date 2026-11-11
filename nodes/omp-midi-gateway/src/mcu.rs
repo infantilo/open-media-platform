@@ -51,7 +51,8 @@ pub fn note_name(note: u8) -> Option<String> {
     if (NOTE_TOUCH..=NOTE_MASTER_TOUCH).contains(&note) {
         return Some(format!("touch{}", note - NOTE_TOUCH + 1));
     }
-    BUTTONS.iter().find(|(_, v)| *v == note).map(|(k, _)| k.to_string())
+    // Noten ohne Namen im Protokoll (frei belegbare Pads, „Navi“, „Focus“): `note<N>`, damit sie sich beobachten und belegen lassen
+    BUTTONS.iter().find(|(_, v)| *v == note).map(|(k, _)| k.to_string()).or_else(|| (note <= 127).then(|| format!("note{note}")))
 }
 
 pub fn note_by_name(name: &str) -> Option<u8> {
@@ -62,6 +63,9 @@ pub fn note_by_name(name: &str) -> Option<u8> {
                 return if (1..=max).contains(&i) { Some(base + i - 1) } else { None };
             }
         }
+    }
+    if let Some(n) = name.strip_prefix("note").and_then(|r| r.parse::<u8>().ok()) {
+        return (n <= 127).then_some(n);
     }
     BUTTONS.iter().find(|(k, _)| *k == name).map(|(_, v)| *v)
 }
@@ -154,7 +158,8 @@ pub fn decode_from_surface(msg: &[u8]) -> McuEvent {
         }
         return McuEvent::Other(msg.to_vec());
     }
-    if (st == 0x90 || st == 0x80) && msg.len() >= 3 {
+    // Tasten, Drehgeber und Jog gelten nur auf MIDI-Kanal 1; alles andere (frei belegte Pads, Regler) bleibt `Other`
+    if (st == 0x90 || st == 0x80) && ch == 0 && msg.len() >= 3 {
         let note = msg[1];
         let down = st == 0x90 && msg[2] > 0;
         if (NOTE_TOUCH..=NOTE_MASTER_TOUCH).contains(&note) {
@@ -165,7 +170,7 @@ pub fn decode_from_surface(msg: &[u8]) -> McuEvent {
     if st == 0xe0 && ch <= 8 && msg.len() >= 3 {
         return McuEvent::Fader { strip: ch, value: ((msg[2] as i32) << 7) | msg[1] as i32 };
     }
-    if st == 0xb0 && msg.len() >= 3 {
+    if st == 0xb0 && ch == 0 && msg.len() >= 3 {
         let cc = msg[1];
         if (0x10..=0x17).contains(&cc) {
             return McuEvent::Vpot { strip: cc - 0x10, delta: decode_relative(msg[2]) };
@@ -388,7 +393,11 @@ mod tests {
         assert_eq!(note_name(0).as_deref(), Some("rec1"));
         assert_eq!(note_name(112).as_deref(), Some("touch9"));
         assert_eq!(note_name(94).as_deref(), Some("play"));
-        assert_eq!(note_name(120), None);
+        assert_eq!(note_name(120).as_deref(), Some("note120"));
+        assert_eq!(note_by_name("note120"), Some(120));
+        assert_eq!(note_by_name("note128"), None);
+        assert!(matches!(decode_from_surface(&[0x91, 5, 127]), McuEvent::Other(_)));
+        assert!(matches!(decode_from_surface(&[0xb2, 16, 5]), McuEvent::Other(_)));
         for n in 0..=112u8 {
             if let Some(name) = note_name(n) {
                 assert_eq!(note_by_name(&name), Some(n), "{name}");

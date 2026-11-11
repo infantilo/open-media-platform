@@ -93,7 +93,18 @@ fn build_ports(cfg: &Config, sh: &Mutex<Shared>) -> (Vec<Box<dyn MidiPort>>, Vec
     for (i, u) in cfg.units.iter().enumerate() {
         match &u.kind {
             UnitKind::Raw { path } => {
-                ports.push(Box::new(RawPort::open(path, &unit_label(i, &u.name, path))));
+                let label = unit_label(i, &u.name, path);
+                // iMAP-Anschluss (Anschluss 4 der iCON-Pulte) nicht öffnen: er gehört der Programmier-Software des Geräts
+                let imap = path.rsplit('/').next().and_then(crate::raw::parse_dev_name).is_some_and(|(card, dev)| {
+                    let cards = crate::raw::parse_cards(&std::fs::read_to_string("/proc/asound/cards").unwrap_or_default());
+                    cards.iter().find(|(c, _)| *c == card).is_some_and(|(_, n)| crate::raw::role_hint(n, dev) == "iMAP")
+                });
+                if imap {
+                    errors.push(format!("Einheit {}: {path} ist der iMAP-Anschluss des Pults (Anschluss 4) — einen der Anschlüsse 1–3 wählen", i + 1));
+                    ports.push(Box::new(DeadPort(label)));
+                } else {
+                    ports.push(Box::new(RawPort::open(path, &label)));
+                }
                 kinds.push("raw");
             }
             UnitKind::RtpListen { port, session } => {

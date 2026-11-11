@@ -2,7 +2,7 @@ import { assert, assertEquals } from "jsr:@std/assert";
 import golden from "../../../docs/midi/keys-golden.json" with { type: "json" };
 import { parseMixState } from "./audio-backend.ts";
 import { fillTemplate, getPath, type KeysConfig, resolveKeys, setPath, usesChannel, validateKeys } from "./keys.ts";
-import { noteByName } from "./mcu.ts";
+import { decodeFromSurface, noteByName } from "./mcu.ts";
 import { type MixerActions, type NudgeAction, SurfaceLogic } from "./surface-logic.ts";
 
 type Out = Record<string, unknown>;
@@ -35,6 +35,7 @@ for (const sc of golden.scenarios) {
       const note = st.key ? noteByName(st.key as string)! : 0;
       const ev = st.do === "press" ? { t: "button" as const, note, name: st.key as string, down: true }
         : st.do === "release" ? { t: "button" as const, note, name: st.key as string, down: false }
+        : st.do === "midi" ? decodeFromSurface(st.bytes as number[])
         : { t: "jog" as const, delta: st.delta as number };
       out.length = 0;
       logic.unbound.length = 0;
@@ -42,7 +43,7 @@ for (const sc of golden.scenarios) {
       now += (st.ms as number | undefined) ?? 100;
       logic.flush(now);
       const got = [...out, ...logic.unbound.map((u) => ({ c: "unbound", name: u.name, down: u.down }))];
-      assertEquals(got, st.expect, `Schritt ${i + 1} (${st.do} ${st.key ?? st.delta})`);
+      assertEquals(got, st.expect, `Schritt ${i + 1} (${st.do} ${st.key ?? st.delta ?? ""})`);
       const state = st.state as Record<string, unknown> | undefined;
       if (!state) continue;
       const v = logic.view(0, now - 50);

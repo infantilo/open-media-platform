@@ -4,6 +4,9 @@
 // Dynamisch heißt: `{ch}` in Methode/Argumenten steht für den **gewählten Kanal**, die LED einer Taste folgt dem Zustand dieses Kanals
 // (Pfad im `mixState`-Eintrag, z. B. `proc.phaseInvert`), die Reihe der acht Ansichtstasten (MIDI Tracks … User) schaltet die Seite.
 
+import type { Profile } from "./profile.ts";
+import { validateProfile } from "./profile.ts";
+
 export type KeyAction = "toggle" | "momentary" | "call" | "internal";
 
 export type InternalAction = "clearPfl" | "clearMute" | "selectPrev" | "selectNext" | "gainUp" | "gainDown" | "deselect" | "jogMode";
@@ -37,6 +40,8 @@ export interface KeysConfig {
   global?: Record<string, KeyBinding>;
   /** Jog-Modi; die Taste „Scrub“ schaltet weiter. */
   jog?: JogMode[];
+  /** Zusatzprofil für alles, was kein Mackie-Control ist (am Pult frei belegte Pads, Regler, Drehgeber auf anderen MIDI-Kanälen). */
+  profile?: Profile;
 }
 
 /** Ansichtstasten, die die Seite wählen (Reihe über den Schaltern, links nach rechts). */
@@ -73,6 +78,7 @@ export const DEFAULT_GLOBAL: Record<string, KeyBinding> = {
 export const DEFAULT_JOG: JogMode[] = [{ name: "Gain", kind: "gain" }, { name: "Select", kind: "select" }];
 
 export interface ResolvedKeys {
+  profile: Profile | null;
   pages: { name: string; keys: Record<string, KeyBinding> }[];
   global: Record<string, KeyBinding>;
   jog: JogMode[];
@@ -82,7 +88,7 @@ export interface ResolvedKeys {
 export function resolveKeys(c?: KeysConfig | null): ResolvedKeys {
   const pages = [DEFAULT_PAGE, ...(c?.pages ?? []).slice(1)];
   if (c?.pages?.[0]) pages[0] = c.pages[0];
-  return { pages: pages.slice(0, PAGE_KEYS.length), global: { ...DEFAULT_GLOBAL, ...(c?.global ?? {}) }, jog: c?.jog?.length ? c.jog : DEFAULT_JOG };
+  return { profile: c?.profile ?? null, pages: pages.slice(0, PAGE_KEYS.length), global: { ...DEFAULT_GLOBAL, ...(c?.global ?? {}) }, jog: c?.jog?.length ? c.jog : DEFAULT_JOG };
 }
 
 export function ledPath(b: KeyBinding): { path: string; equals?: unknown } | null {
@@ -146,6 +152,7 @@ export function validateKeys(c: unknown, knownKeys: (n: string) => boolean): str
     }
   }
   for (const [k, b] of Object.entries(o.global ?? {})) bind("global", k, b);
+  if (o.profile !== undefined) for (const e of validateProfile(o.profile)) errs.push(`profile: ${e}`);
   if (o.jog !== undefined) {
     if (!Array.isArray(o.jog) || !o.jog.length) errs.push("jog muss eine nicht leere Liste sein");
     else o.jog.forEach((j, i) => {

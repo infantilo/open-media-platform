@@ -24,7 +24,17 @@ export interface WmAccess {
 
 export type WebMidiError = "no-webmidi" | "insecure-context" | "denied";
 
+/** Rolle eines iCON-Anschlusses nach Namen (Handbuch P1-M: „iCON P1-M“ = DAW 1, „MIDIIN2/OUT2“ = DAW 2, „MIDIIN3“ = DAW 3, „MIDIIN4“ = iMAP). */
+export function portRole(name: string): "daw1" | "daw2" | "daw3" | "imap" | null {
+  if (/MIDI(IN|OUT)\s*4\b/i.test(name)) return "imap";
+  if (/MIDI(IN|OUT)\s*2\b/i.test(name)) return "daw2";
+  if (/MIDI(IN|OUT)\s*3\b/i.test(name)) return "daw3";
+  return /\b(P1|V1)-[MX]\b/i.test(name) ? "daw1" : null;
+}
+const ROLE_TEXT = { daw1: "DAW 1", daw2: "DAW 2", daw3: "DAW 3", imap: "iMAP" } as const;
+
 export interface PortChoice {
+  role?: "daw1" | "daw2" | "daw3" | "imap";
   /** Stabiler Schlüssel (Name; bei gleichen Namen mit Nummer). */
   key: string;
   label: string;
@@ -45,7 +55,9 @@ export function pairPorts(inputs: WmInput[], outputs: WmOutput[]): PortChoice[] 
     if (o) used.add(o.id);
     const n = (count.get(name) ?? 0) + 1;
     count.set(name, n);
-    out.push({ key: n > 1 ? `${name} #${n}` : name, label: n > 1 ? `${name} (${n})` : name, inId: i.id, outId: o?.id });
+    const role = portRole(name) ?? undefined;
+    const base = n > 1 ? `${name} (${n})` : name;
+    out.push({ key: n > 1 ? `${name} #${n}` : name, label: role ? `${base} — ${ROLE_TEXT[role]}` : base, inId: i.id, outId: o?.id, role });
   }
   for (const o of outputs) {
     if (used.has(o.id)) continue;

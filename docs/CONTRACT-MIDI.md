@@ -15,11 +15,21 @@ Beide Wege teilen **Codec, Fader-Kennlinie, Pult-Logik und Profil-Zuordnung** (T
 
 ## 1. Unterstützte Geräte
 
-**iCON Pro Audio V1-M / V1-X, P1-M / P1-X** (und andere Pulte im Mackie-Control-Modus): Die Hersteller- bzw. Händlerangaben nennen für diese Geräte
-Universal Mackie Control und HUI; die V1-M hat 9, jede Erweiterung 8 berührungsempfindliche Fahrfader. **Nicht geprüft (kein Gerät
-vorhanden):** wie der Modus am Gerät umgeschaltet wird, wie die Erweiterung am Rechner erscheint (eigener USB-Anschluss → eigene
-Einheit; so ist es hier angenommen) und ob das Gerät die Anmeldung (§2.4) verlangt. Das Handbuch des Geräts war nicht abrufbar. **HUI wird
-nicht umgesetzt** (andere Sprache mit Ping/Zonen-Schaltern; MCU genügt für die genannten Geräte).
+**iCON Pro Audio P1-M / P1-X** (V1-M/V1-X sind Schwestergeräte desselben Herstellers; ihr Handbuch lag nicht vor, die Aussagen unten gelten dort **nur sinngemäß**). Quelle: *iCON P1-M Benutzerhandbuch, deutsche Ausgabe, Dokument „P1M-PD3A102-German“* (vom Nutzer bereitgestellt, gelesen). Was das Handbuch sagt und was OMP daraus macht:
+
+| Aussage des Handbuchs | Folge für OMP |
+|---|---|
+| Das Gerät spricht **Universal Mackie Control und HUI**; 8 berührungsempfindliche 12-Bit-Motorfader, 8 Endlos-Drehgeber (mit Druck), 8 × 12-Segment-LED-Pegel, Mute/Solo/Rec/Select je Kanal, Transport (Play/Stop/Rec/Rew/FF/Loop), Bank-/Track-Tasten, Flip, Master | MCU wird umgesetzt (HUI nicht). 12 Pegelsegmente = unsere Stufen 0–12 |
+| **Vier USB-MIDI-Anschlüsse:** „iCON P1-M V1.02“ (= Taste DAW 1), „MIDIIN2/OUT2“ (= DAW 2), „MIDIIN3/OUT3“ (= DAW 3), „**MIDIIN4/OUT4**“ — **gehört der Software iMAP**, „Sie können diesen Port nicht zum Anschließen Ihres Geräts verwenden“ | OMP öffnet nur einen der Anschlüsse 1–3. Der Browser-Dialog und das Gateway beschriften sie „DAW 1/2/3/iMAP“ und **verweigern den iMAP-Anschluss**. Die **DAW-Taste am Gerät** (1–3) wählt, auf welchem Anschluss das Gerät spricht — OMP muss dem Anschluss der gedrückten Taste folgen |
+| Die **P1-X-Erweiterung** (8 Kanäle je Einheit) arbeitet mit dem P1-M zusammen; die „Sperren“-Tasten stimmen sich über iMAP als „Brücke“ ab | Erweiterung = eigene Einheit (eigener USB-Anschluss, wie angenommen). Die Sperrfunktion wirkt **nur mit laufender iMAP** und ist für OMP unerheblich |
+| **Touchscreen mit 16 Feldern in 5 Farbebenen (80 Funktionen)**, in iMAP per Ziehen belegt, Änderungen sofort auf dem Gerät. Standard: Ebenen „U1“ (lila) und „U2“ (rot) = **Tastaturkürzel** (iMAP sendet Tasten an den Rechner, kein MIDI), blau/grün/orange = **MIDI-Funktionen „über das Mackie Control Protocol“** (z. B. Marker, Click, Save, Undo, Cancel, Enter, Shift, Option, Ctrl, Alt, Plug-in, Page up/down) | Die Felder senden **gewöhnliche MCU-Tastennoten** (Tabelle `BUTTON`); in OMP belegt man sie wie jede andere Taste (§3.1). **Beschriftung und Farbe der Felder legt iMAP fest, nicht der Rechner** — das MCU-Protokoll hat keine Anzeige je Taste. Die Farbebenen schaltet das Gerät selbst um (der Rechner sieht nur die Noten). Empfehlung: in iMAP die Felder mit den Tasten belegen, die OMP braucht (F1–F8, Ansichtstasten, `userSwitch`…) und passend beschriften |
+| Felder, Fader und Drehgeber lassen sich in iMAP auf **eigene MIDI-Nachrichten** legen („Pitch, Note, CC, Channel, Message“ für MCP, „Value 1/2, Function“ für HUI) | Solche Nachrichten kommen auf **anderen MIDI-Kanälen** als das Protokoll (Tasten/Drehgeber gelten nur auf Kanal 1) → OMP leitet sie an ein **Zusatzprofil** (`keys.profile`, §4) |
+| **Jog-Rad („Jogwheel-Shuttle“):** Druck wechselt zwischen zwei DAW-spezifischen Funktionen; Tasten **Zoom** (auf/ab, links/rechts), **Focus**, **Navi** („Jog dreht durch die Kanäle“), **Shuttle-Taste** („Jog dreht in 8er-Bänken“), Richtungstasten | Jog = CC 60 (§2.1). Welche Noten Navi/Shuttle/Focus senden, nennt das Handbuch nicht → unbekannte Noten heißen **`note<N>`** und werden als Ereignis gemeldet bzw. lassen sich belegen; so findet man sie am Gerät heraus |
+| **Master/Assign:** Kanal-8-Fader wird zum Master-Fader; **Flip** tauscht Fader und ersten Drehgeber | Master am Gerät = (vermutlich) Pitchbend-Kanal 9; Flip wird nicht umgesetzt (kommt als Ereignis `button.flip`) |
+| Optionale **D-4T-Anzeige**: 2-Zoll-TFT mit Kanalnamen, Steuerwerten, Pegeln, Kanalfarben und einer 10-stelligen Zeitcode-LED; ohne sie zeigt das kleine eingebaute Display DAW-abhängige Infos | Namen, Werte und Pegel kommen über die MCU-Anzeige (§2.2); die Zeitcode-LED entspricht den 7-Segment-Stellen (CC 64–73) — OMP schreibt dort bisher nur die Banknummer. **Kanalfarben** und Farb-„Balken“ sind laut Handbuch nur bei wenigen DAWs möglich und über MCU nicht belegt |
+| Firmware/Reihenfolge: erst Pult einschalten, dann iMAP, dann DAWs; iMAP und manche DAWs konkurrieren um Anschluss 4; iMAP gibt es für **Windows und macOS** | Unter Linux läuft iMAP nicht: Pad-Belegung und DAW-Zuweisung lassen sich dort nicht ändern (am Windows-/Mac-Rechner einmal einstellen; die Einstellung liegt im Gerät, `.imap`-Dateien sind speicherbar). Ob die Ebenen ohne iMAP die zuletzt gespeicherte Belegung behalten, ist offen |
+
+**Nicht geprüft (kein Gerät):** welches DAW-Profil im Gerät die für OMP sinnvollste Voreinstellung ist, ob die Anmeldung (§2.4) verlangt wird, welche Gerätekennung die Erweiterung nutzt, und wie V1-M/V1-X die Anschlüsse nummerieren. **HUI wird nicht umgesetzt.**
 
 ## 2. Mackie Control (MCU)
 
@@ -83,7 +93,7 @@ Der rechte Teil der Pulte (Jog-Rad, Transport, Cursor, Funktionstasten F1–F8, 
 
 ## 4. Generisches Profil
 
-JSON, je Regler/Taste ein Eintrag (`docs/midi/profile-golden.json` zeigt alle Fälle):
+JSON, je Regler/Taste ein Eintrag (`docs/midi/profile-golden.json` zeigt alle Fälle). In der Betriebsart `mcu` steht es als **Zusatzprofil** unter `keys.profile` zur Verfügung und bekommt alles, was das Mackie-Protokoll nicht verbraucht (andere MIDI-Kanäle, unbekannte CC):
 `{ "id", "in": {type: cc|note|pitchbend, channel?, num?}, "mode": absolute|momentary|toggle|relative, "to": {node?, method, args?, arg?, min?, max?, step?, readParam?, onValue?, offValue?} }`.
 `absolute` skaliert 0–127 (Pitchbend 0–16383) linear auf `min…max` in das Argument `arg`; `momentary` setzt `onValue`/`offValue` bei Druck/Loslassen (ohne `arg`: löst nur beim Drücken aus);
 `toggle` schaltet bei jedem Druck um; `relative` (CC, Wert 64 = 0, 65 = +1, 63 = −1) liest `readParam`, addiert `Schritte × step`, klemmt auf `min/max` und schreibt. `node` ist der Anzeigename des Ziel-Nodes (leer = der gewählte Mischer). **Lernen:** die Oberfläche zeigt die nächste Bewegung am Gerät als Typ/Kanal/Nummer (Weg A: Knopf „Lernen“).

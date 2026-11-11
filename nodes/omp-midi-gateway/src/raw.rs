@@ -19,6 +19,22 @@ pub struct RawDevice {
     pub card: u32,
     pub device: u32,
     pub name: String,
+    /// Rolle laut Handbuch (iCON P1-M: Anschluss 1–3 = DAW-Plätze, 4 = iMAP-Programmierung), sonst leer.
+    pub hint: String,
+}
+
+/// iCON-Pulte zeigen vier USB-MIDI-Anschlüsse: die ersten drei gehören den DAW-Tasten 1–3, der vierte gehört der Programmier-Software iMAP
+/// (Handbuch P1-M: „MIDI Port 4 wird von iMAP verwendet … Sie können diesen Port nicht zum Anschließen Ihres Geräts verwenden“).
+pub fn role_hint(card_name: &str, device: u32) -> String {
+    let n = card_name.to_ascii_lowercase();
+    if !(n.contains("icon") || n.contains("p1-") || n.contains("v1-")) {
+        return String::new();
+    }
+    match device {
+        0..=2 => format!("DAW {}", device + 1),
+        3 => "iMAP".to_string(),
+        _ => String::new(),
+    }
 }
 
 /// Karten-Kurznamen aus `/proc/asound/cards` (Zeilen wie ` 1 [V1M            ]: USB-Audio - iCON V1-M`).
@@ -51,7 +67,8 @@ pub fn list_devices() -> Vec<RawDevice> {
             let fname = e.file_name().to_string_lossy().to_string();
             if let Some((card, device)) = parse_dev_name(&fname) {
                 let name = cards.iter().find(|(i, _)| *i == card).map(|(_, n)| n.clone()).unwrap_or_default();
-                out.push(RawDevice { path: format!("/dev/snd/{fname}"), card, device, name });
+                let hint = role_hint(&name, device);
+                out.push(RawDevice { path: format!("/dev/snd/{fname}"), card, device, name, hint });
             }
         }
     }
@@ -168,6 +185,14 @@ impl MidiPort for RawPort {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_ports_have_roles() {
+        assert_eq!(role_hint("iCON P1-M V1.02", 0), "DAW 1");
+        assert_eq!(role_hint("iCON P1-M V1.02", 2), "DAW 3");
+        assert_eq!(role_hint("iCON P1-M V1.02", 3), "iMAP");
+        assert_eq!(role_hint("HDA Intel PCH", 3), "");
+    }
 
     #[test]
     fn cards_and_names() {

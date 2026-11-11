@@ -46,7 +46,8 @@ export function noteName(note: number): string | null {
   const groups: [string, number][] = [["rec", NOTE.rec], ["solo", NOTE.solo], ["mute", NOTE.mute], ["select", NOTE.select], ["vpotPush", NOTE.vpotPush]];
   for (const [n, base] of groups) if (note >= base && note < base + 8) return `${n}${note - base + 1}`;
   if (note >= NOTE.faderTouch && note <= NOTE.masterTouch) return `touch${note - NOTE.faderTouch + 1}`;
-  return BUTTON_BY_NOTE.get(note) ?? null;
+  // Noten ohne Namen im Protokoll (z. B. frei belegbare Pads, „Navi“, „Focus“): `note<N>`, damit sie sich beobachten und belegen lassen
+  return BUTTON_BY_NOTE.get(note) ?? (note >= 0 && note <= 127 ? `note${note}` : null);
 }
 
 /** Umkehrung von `noteName` (für Konfigurationen). */
@@ -57,6 +58,8 @@ export function noteByName(name: string): number | null {
     if (m[1] === "touch") return i <= 8 ? NOTE.faderTouch + i : null;
     return i <= 7 ? NOTE[m[1] as "rec" | "solo" | "mute" | "select" | "vpotPush"] + i : null;
   }
+  const m2 = /^note(\d{1,3})$/.exec(name);
+  if (m2 && Number(m2[1]) <= 127) return Number(m2[1]);
   return BUTTON[name] ?? null;
 }
 
@@ -143,14 +146,15 @@ export function decodeFromSurface(msg: number[]): McuEvent {
     }
     return { t: "other", bytes: msg };
   }
-  if (st === 0x90 || st === 0x80) {
+  // Tasten, Drehgeber und Jog gelten nur auf MIDI-Kanal 1 (Mackie-Protokoll); alles andere (frei belegte Pads, Regler) bleibt `other`
+  if ((st === 0x90 || st === 0x80) && ch === 0) {
     const note = msg[1];
     const down = st === 0x90 && msg[2] > 0;
     if (note >= NOTE.faderTouch && note <= NOTE.masterTouch) return { t: "touch", strip: note - NOTE.faderTouch, down };
     return { t: "button", note, name: noteName(note), down };
   }
   if (st === 0xe0 && ch <= 8) return { t: "fader", strip: ch, value: (msg[2] << 7) | msg[1] };
-  if (st === 0xb0) {
+  if (st === 0xb0 && ch === 0) {
     const cc = msg[1];
     if (cc >= 0x10 && cc <= 0x17) return { t: "vpot", strip: cc - 0x10, delta: decodeRelative(msg[2]) };
     if (cc === 0x3c) return { t: "jog", delta: decodeRelative(msg[2]) };

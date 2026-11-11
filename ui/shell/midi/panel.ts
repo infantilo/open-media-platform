@@ -222,6 +222,7 @@ export class MidiPanel extends HTMLElement {
     this.#$("err").textContent = "";
     if (!s.mixer && (s.mode ?? "mcu") === "mcu") return void (this.#$("err").textContent = t("midi.err.no-mixer"));
     const keys = (s.units ?? []).filter((k) => k);
+    if (keys.some((k) => this.#choices.find((c) => c.key === k)?.role === "imap")) return void (this.#$("err").textContent = t("midi.err.imap"));
     const ports = keys.map((k) => this.#choices.find((c) => c.key === k)).filter((c): c is PortChoice => !!c).map((c) => openChoice(this.#access!, c));
     if (s.mode === "profile") {
       const p = this.#parseProfile();

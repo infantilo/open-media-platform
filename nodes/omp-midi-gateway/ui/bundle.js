@@ -182,7 +182,7 @@ class OmpMidiGatewayPanel extends HTMLElement {
         h("td", {}, u.up ? T("up") : T("down")), h("td", {}, u.online ? T("up") : T("down")))));
       simBox.replaceChildren(...(status.units || []).filter((u) => u.sim).map(simUnit));
       evEl.replaceChildren(...(events.length ? events.slice().reverse().map((e) => h("div", { class: "ev" }, `#${e.event.seq} ${e.subject} ${JSON.stringify({ name: e.event.name, down: e.event.down, up: e.event.up, value: e.event.value })}`)) : [h("span", { class: "muted" }, T("noEvents"))]));
-      portList.replaceChildren(...(ports.length ? ports.map((p) => h("div", { class: "row" }, h("code", {}, p.path), h("span", { class: "muted" }, p.name),
+      portList.replaceChildren(...(ports.length ? ports.map((p) => h("div", { class: "row" }, h("code", {}, p.path), h("span", { class: "muted" }, p.name + (p.hint ? ` — ${p.hint}` : "")),
         h("button", { onclick: () => { editing = true; cfg.units.push({ type: "raw", path: p.path }); renderUnits(); } }, T("add")))) : [h("span", { class: "muted" }, T("noneDetected"))]));
     };
 

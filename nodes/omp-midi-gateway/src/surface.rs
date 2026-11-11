@@ -110,6 +110,7 @@ pub struct SurfaceLogic {
     cmds: Vec<MixerCmd>,
     buttons: Vec<(String, bool)>,
     keys: Keys,
+    profile: Option<crate::profile::ProfileEngine>,
     pub page: usize,
     pub jog_mode: usize,
     pub shift: bool,
@@ -137,8 +138,10 @@ pub fn fmt_pan(pan: Option<f64>) -> String {
 impl SurfaceLogic {
     pub fn new(o: LogicOptions) -> Self {
         let keys = resolve(o.keys.as_ref());
+        let profile = keys.profile.clone().map(|p| crate::profile::ProfileEngine::new(p, ""));
         SurfaceLogic {
             keys,
+            profile,
             page: 0,
             jog_mode: 0,
             shift: false,
@@ -281,6 +284,17 @@ impl SurfaceLogic {
             }
             McuEvent::Button { note, name, down } => self.button(unit, *note, name.as_deref(), *down, now),
             McuEvent::Jog { delta } => self.jog(*delta, now),
+            McuEvent::Other(bytes) => {
+                // Zusatzprofil: am Pult frei belegte Pads/Regler (andere MIDI-Kanäle als das Mackie-Protokoll)
+                if let Some(p) = self.profile.as_mut() {
+                    for a in p.handle(bytes) {
+                        self.cmds.push(match a {
+                            crate::profile::Action::Call { node, method, args, .. } => MixerCmd::Call { node, method, args },
+                            crate::profile::Action::Nudge { node, method, args, arg, delta, min, max, read_param, .. } => MixerCmd::Nudge { node, method, args, arg, delta, min, max, read_param },
+                        });
+                    }
+                }
+            }
             McuEvent::Vpot { strip, delta } => {
                 let Some(k) = self.strip_idx(unit, *strip as usize) else { return };
                 let step = self.o.pan_step;

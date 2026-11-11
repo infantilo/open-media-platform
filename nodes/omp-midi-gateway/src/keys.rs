@@ -68,6 +68,8 @@ pub struct KeysConfig {
     pub pages: Vec<Page>,
     pub global: HashMap<String, KeyBinding>,
     pub jog: Vec<JogMode>,
+    /// Zusatzprofil für alles, was kein Mackie-Control ist (frei belegte Pads, Regler auf anderen MIDI-Kanälen).
+    pub profile: Option<crate::profile::Profile>,
 }
 
 pub const PAGE_KEYS: [&str; 8] = ["midiTracks", "inputs", "audioTracks", "audioInstruments", "aux", "busses", "outputs", "user"];
@@ -114,6 +116,7 @@ pub struct Keys {
     pub pages: Vec<Page>,
     pub global: HashMap<String, KeyBinding>,
     pub jog: Vec<JogMode>,
+    pub profile: Option<crate::profile::Profile>,
 }
 
 /// Konfiguration mit Standardwerten zusammenführen: konfigurierte Seiten ersetzen die Standardseite Stück für Stück.
@@ -132,7 +135,7 @@ pub fn resolve(c: Option<&KeysConfig>) -> Keys {
         }
     }
     pages.truncate(PAGE_KEYS.len());
-    Keys { pages, global, jog }
+    Keys { pages, global, jog, profile: c.and_then(|c| c.profile.clone()) }
 }
 
 pub fn get_path<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
@@ -265,6 +268,12 @@ pub fn parse_keys(v: &Value) -> Result<KeysConfig, Vec<String>> {
             c.global.insert(k, b);
         }
     }
+    if let Some(p) = v.get("profile").filter(|p| !p.is_null()) {
+        match crate::profile::parse_profile(p) {
+            Ok(pr) => c.profile = Some(pr),
+            Err(e) => errs.extend(e.into_iter().map(|x| format!("profile: {x}"))),
+        }
+    }
     if let Some(j) = v.get("jog") {
         match j.as_array().filter(|a| !a.is_empty()) {
             None => errs.push("jog muss eine nicht leere Liste sein".into()),
@@ -337,7 +346,7 @@ mod tests {
     /// Gemeinsame Szenarien (docs/midi/keys-golden.json) gegen die Pult-Logik.
     #[test]
     fn golden_scenarios() {
-        use crate::mcu::{McuEvent, note_by_name};
+        use crate::mcu::{McuEvent, decode_from_surface, note_by_name};
         use crate::mixer::parse_mix_state;
         use crate::surface::{LogicOptions, MixerCmd, SurfaceLogic, UnitSpec};
         let g: Value = serde_json::from_str(include_str!("../../../docs/midi/keys-golden.json")).unwrap();
@@ -381,6 +390,7 @@ mod tests {
                 let key = st.get("key").and_then(Value::as_str);
                 let note = key.map(|k| note_by_name(k).unwrap()).unwrap_or(0);
                 let ev = match st["do"].as_str().unwrap() {
+                    "midi" => decode_from_surface(&st["bytes"].as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u8).collect::<Vec<u8>>()),
                     "press" => McuEvent::Button { note, name: key.map(str::to_string), down: true },
                     "release" => McuEvent::Button { note, name: key.map(str::to_string), down: false },
                     _ => McuEvent::Jog { delta: st["delta"].as_i64().unwrap() as i32 },

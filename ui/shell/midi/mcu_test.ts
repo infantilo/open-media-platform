@@ -33,7 +33,11 @@ Deno.test("Notennamen und Rückwärtsabbildung", () => {
   assertEquals(mcu.noteName(31), "select8");
   assertEquals(mcu.noteName(112), "touch9");
   assertEquals(mcu.noteName(94), "play");
-  assertEquals(mcu.noteName(120), null);
+  assertEquals(mcu.noteName(120), "note120");
+  assertEquals(mcu.noteByName("note120"), 120);
+  assertEquals(mcu.noteByName("note128"), null);
+  assertEquals(mcu.decodeFromSurface([0x91, 5, 127]).t, "other", "Noten auf anderen Kanälen sind keine Pult-Tasten");
+  assertEquals(mcu.decodeFromSurface([0xb2, 16, 5]).t, "other");
   for (let n = 0; n <= 112; n++) {
     const name = mcu.noteName(n);
     if (name) assertEquals(mcu.noteByName(name), n, name);
