@@ -1252,7 +1252,7 @@ Rollenbindungen, den Node-Katalog-Import/Export, Storage-Backends, zeigt
 ein Audit-Log aller schreibenden API-Zugriffe und Diagnose-Angaben,
 erstellt/restauriert Datenbank-Sicherungen, spielt **System-Updates** ein
 und verwaltet den Orchestrator-Cluster selbst. Die Bereiche liegen als
-eigene Unter-Reiter nebeneinander (Nutzer, Organisationen, Gruppen,
+eigene Unter-Reiter nebeneinander (Nutzer, Verbundene Clients, Organisationen, Gruppen,
 Rollenbindungen, Node-Katalog, Storage, Audit-Log, Diagnose,
 Backup/Restore, System-Update, Cluster, ffmpeg-Jobs) statt untereinander.
 Innerhalb von **Plattform** sind die Unter-Reiter in **umrahmten Gruppen mit
@@ -1264,6 +1264,33 @@ untereinander):
 ![Administration: Nutzer, Rollenbindungen, Node-Katalog, Audit-Log](screenshots/administration.png)
 
 - **Nutzer** — anlegen, Passwort zurücksetzen, löschen.
+- **Verbundene Clients** (in „Zugang & Rechte“) — zeigt, wer gerade mit einem
+  Browser an der Oberfläche hängt: je offener Verbindung **Benutzer**,
+  **Adresse** (hinter einem Reverse-Proxy auf demselben Rechner die Adresse des
+  Aufrufers; Loopback steht als „localhost“), **Verbunden seit** und den
+  **Browser** in Kurzform (z. B. „Chrome 150 · ChromeOS“; der volle
+  User-Agent steht im Tooltip). Über der Tabelle steht die Zahl der
+  Verbindungen und der angemeldeten Benutzer; die Liste aktualisiert sich alle
+  5 Sekunden, solange der Reiter offen ist. Ein Benutzer mit mehreren offenen
+  Tabs erscheint mehrfach. Reine API-Aufrufe mit Token ohne offenen
+  Ereignis-Strom und die internen Abonnenten des Orchestrators (Alarm-Mail,
+  Zeitleiste) zählen nicht mit.
+
+  ![Verbundene Clients: Benutzer, Adresse, Dauer, Browser, Trennen/Abmelden](screenshots/admin-clients.png)
+
+  Je Zeile gibt es zwei Knöpfe, beide mit Rückfrage:
+  - **Disconnect / Trennen** schließt nur diese eine Verbindung. Der Browser
+    baut sie nach wenigen Sekunden von selbst wieder auf, solange seine
+    Anmeldung gültig ist — gedacht für hängende Verbindungen.
+  - **Sign out / Abmelden** beendet **alle** Anmeldungen dieses Benutzers (wie
+    „Sitzungen beenden“) und trennt dessen Verbindungen sofort. Danach kommt
+    der Browser nicht zurück, bis sich der Benutzer neu anmeldet. Das gilt auch
+    für die eigene Zeile: Wer sich selbst abmeldet, muss sich neu anmelden.
+
+  Beide Aktionen stehen im Audit-Log („Client getrennt“, „Sitzungen von … beendet“).
+  Für die Überwachung liefert `/metrics` `omp_sse_clients_identified`,
+  `omp_sse_clients_by_user{user="…"}` und `omp_sse_client_kicks_total`
+  (HANDBUCH §7).
 - **Rechte** (früher „Rollenbindungen") — ein Editor mit Suche, in zwei
   Blickrichtungen:
   - **Wer?** — links Nutzer und Gruppen wählen, rechts steht, worauf sie

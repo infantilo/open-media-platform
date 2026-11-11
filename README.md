@@ -368,6 +368,12 @@ Full walkthroughs and context for every screen above are in
   metadata, and submits it for approval (none / single / four-eyes). The
   original file is never modified. This is a probe plus content checks,
   not an MXF structure validation.
+- **Connected clients (admin)**: Administration → Connected clients lists
+  every browser currently attached to the UI — user, address, connected
+  since, browser — and can disconnect a single connection or sign the user
+  out everywhere. `/metrics` exposes `omp_sse_clients_identified`,
+  `omp_sse_clients_by_user` and `omp_sse_client_kicks_total`. API-only
+  token calls without an open event stream are not listed.
 - **Feature rights, responsibility and a workstation for operators**:
   modules declare named rights (e.g. create schedules, run QC, approve),
   granted to users or groups in Administration → Permissions (global
