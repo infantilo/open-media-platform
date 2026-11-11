@@ -9,6 +9,7 @@
 // Vollfläche ohne jede Chrome, wie schon vor diesem Schritt.
 import "../graph/flow-canvas.ts";
 import { createDeckToggle } from "./streamdeck/panel.ts";
+import { createMidiToggle } from "./midi/panel.ts";
 import type { FlowCanvas } from "../graph/flow-canvas.ts";
 import "./hosts-view.ts";
 import "./workflows-view.ts";
@@ -340,6 +341,9 @@ class AppShell extends HTMLElement {
         "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-xs);",
     );
     deck.button.setAttribute("data-role", "deck-toggle");
+    // MIDI-Pulte (Kap. 93): gleiche Haltung wie das Stream Deck — die Sitzung gehört der App.
+    const midi = createMidiToggle(deck.button.style.cssText);
+    midi.button.setAttribute("data-role", "midi-toggle");
     // Marker „Problem jetzt“ (Kap. 72.6): ein Klick setzt einen Marker auf die Zeitleiste, ohne Tippen — der Support findet später
     // genau diese Minute.
     const mark = document.createElement("button");
@@ -375,7 +379,7 @@ class AppShell extends HTMLElement {
       freezeBtn.textContent = t("fr.button");
       window.setTimeout(() => (freezeBtn.disabled = false), 3000);
     });
-    right.append(mark, freezeBtn, deck.button);
+    right.append(mark, freezeBtn, deck.button, midi.button);
 
     bar.append(left, right);
 
@@ -392,7 +396,7 @@ class AppShell extends HTMLElement {
     const alertBar = document.createElement("omp-alert-bar");
     alertBar.addEventListener("omp-open-alarms", () => this.#switchTab("alarms"));
 
-    this.replaceChildren(bar, banner, content, alertBar, deck.panel);
+    this.replaceChildren(bar, banner, content, alertBar, deck.panel, midi.panel);
     this.#bannerEl = banner;
     this.#contentEl = content;
   }

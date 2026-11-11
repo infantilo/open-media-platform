@@ -1,0 +1,37 @@
+{
+  "_comment": "Gemeinsame Prüfwerte für den Mackie-Control-Codec (TypeScript: ui/shell/midi/mcu_test.ts, Rust: nodes/omp-midi-gateway/src/mcu.rs). Von Hand aus docs/CONTRACT-MIDI.md §2 hergeleitet, nicht aus dem Code erzeugt.",
+  "encode": [
+    {"fn": "ledNote", "args": [24, "on"], "bytes": [144, 24, 127]},
+    {"fn": "ledNote", "args": [16, "blink"], "bytes": [144, 16, 1]},
+    {"fn": "ledNote", "args": [8, "off"], "bytes": [144, 8, 0]},
+    {"fn": "faderMove", "args": [0, 16383], "bytes": [224, 127, 127]},
+    {"fn": "faderMove", "args": [8, 8192], "bytes": [232, 0, 64]},
+    {"fn": "faderMove", "args": [3, 0], "bytes": [227, 0, 0]},
+    {"fn": "vpotRing", "args": [0, "wrap", 6, false], "bytes": [176, 48, 38]},
+    {"fn": "vpotRing", "args": [7, "spread", 11, true], "bytes": [176, 55, 123]},
+    {"fn": "meterLevel", "args": [3, 12], "bytes": [208, 60]},
+    {"fn": "lcdWrite", "args": [1, 0, "Hi"], "bytes": [240, 0, 0, 102, 20, 18, 56, 72, 105, 247]},
+    {"fn": "lcdWrite", "args": [0, 7, "A"], "bytes": [240, 0, 0, 102, 20, 18, 7, 65, 247]},
+    {"fn": "deviceQuery", "args": [], "bytes": [240, 0, 0, 102, 20, 0, 247]}
+  ],
+  "decode": [
+    {"bytes": [176, 16, 65], "event": {"t": "vpot", "strip": 0, "delta": -1}},
+    {"bytes": [176, 19, 3], "event": {"t": "vpot", "strip": 3, "delta": 3}},
+    {"bytes": [226, 0, 64], "event": {"t": "fader", "strip": 2, "value": 8192}},
+    {"bytes": [232, 127, 127], "event": {"t": "fader", "strip": 8, "value": 16383}},
+    {"bytes": [144, 104, 127], "event": {"t": "touch", "strip": 0, "down": true}},
+    {"bytes": [144, 112, 0], "event": {"t": "touch", "strip": 8, "down": false}},
+    {"bytes": [144, 16, 127], "event": {"t": "button", "note": 16, "name": "mute1", "down": true}},
+    {"bytes": [128, 94, 0], "event": {"t": "button", "note": 94, "name": "play", "down": false}},
+    {"bytes": [176, 60, 2], "event": {"t": "jog", "delta": 2}}
+  ],
+  "connectionResponse": [
+    {"challenge": [1, 2, 3, 4], "response": [5, 5, 123, 47]},
+    {"challenge": [18, 52, 86, 120], "response": [88, 15, 22, 78]}
+  ],
+  "stream": {
+    "_comment": "Laufstatus, SysEx über zwei Blöcke, Echtzeitbyte mittendrin",
+    "chunks": [[144, 16, 127, 17, 127, 248, 240, 0, 0], [102, 20, 1, 247, 224, 0, 64]],
+    "messages": [[144, 16, 127], [144, 17, 127], [240, 0, 0, 102, 20, 1, 247], [224, 0, 64]]
+  }
+}

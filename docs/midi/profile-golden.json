@@ -1,0 +1,29 @@
+{
+  "_comment": "Gemeinsame Prüffälle für die generische MIDI-Zuordnung (TypeScript: ui/shell/midi/profile_test.ts, Rust: nodes/omp-midi-gateway/src/profile.rs). Von Hand gerechnet.",
+  "profile": {
+    "name": "Beispiel-Regler",
+    "controls": [
+      {"id": "fader1", "in": {"type": "cc", "channel": 1, "num": 7}, "to": {"method": "channel.mic1.setGain", "arg": "db", "min": -60, "max": 12}},
+      {"id": "mute1", "in": {"type": "note", "num": 40}, "mode": "toggle", "to": {"node": "Mischer 2", "method": "channel.mic1.setMute", "arg": "muted"}},
+      {"id": "cue", "in": {"type": "note", "num": 41}, "to": {"method": "channel.mic1.setPfl", "arg": "enabled"}},
+      {"id": "go", "in": {"type": "note", "num": 42}, "to": {"method": "takeNext"}},
+      {"id": "knob", "in": {"type": "cc", "num": 16}, "mode": "relative", "to": {"method": "channel.mic1.setGain", "arg": "db", "readParam": "channel.mic1.gain", "step": 0.5, "min": -60, "max": 12}},
+      {"id": "bend", "in": {"type": "pitchbend", "channel": 2}, "to": {"method": "setX", "arg": "x", "min": 0, "max": 1}}
+    ]
+  },
+  "cases": [
+    {"msg": [176, 7, 127], "actions": [{"kind": "call", "node": "Mischer", "method": "channel.mic1.setGain", "args": {"db": 12}, "controlId": "fader1"}]},
+    {"msg": [176, 7, 0], "actions": [{"kind": "call", "node": "Mischer", "method": "channel.mic1.setGain", "args": {"db": -60}, "controlId": "fader1"}]},
+    {"msg": [177, 7, 127], "actions": []},
+    {"msg": [144, 40, 127], "actions": [{"kind": "call", "node": "Mischer 2", "method": "channel.mic1.setMute", "args": {"muted": true}, "controlId": "mute1"}]},
+    {"msg": [144, 41, 127], "actions": [{"kind": "call", "node": "Mischer", "method": "channel.mic1.setPfl", "args": {"enabled": true}, "controlId": "cue"}]},
+    {"msg": [128, 41, 0], "actions": [{"kind": "call", "node": "Mischer", "method": "channel.mic1.setPfl", "args": {"enabled": false}, "controlId": "cue"}]},
+    {"msg": [144, 42, 127], "actions": [{"kind": "call", "node": "Mischer", "method": "takeNext", "args": {}, "controlId": "go"}]},
+    {"msg": [144, 42, 0], "actions": []},
+    {"msg": [176, 16, 65], "actions": [{"kind": "nudge", "node": "Mischer", "method": "channel.mic1.setGain", "args": {}, "arg": "db", "delta": 0.5, "min": -60, "max": 12, "readParam": "channel.mic1.gain", "controlId": "knob"}]},
+    {"msg": [176, 16, 62], "actions": [{"kind": "nudge", "node": "Mischer", "method": "channel.mic1.setGain", "args": {}, "arg": "db", "delta": -1, "min": -60, "max": 12, "readParam": "channel.mic1.gain", "controlId": "knob"}]},
+    {"msg": [176, 16, 64], "actions": []},
+    {"msg": [225, 0, 64], "actions": [{"kind": "call", "node": "Mischer", "method": "setX", "args": {"x": 0.5}, "controlId": "bend"}]},
+    {"msg": [224, 0, 64], "actions": []}
+  ]
+}

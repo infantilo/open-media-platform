@@ -36,6 +36,7 @@ import type { OperatorHome } from "./operator-home.ts";
 import type { WorkTile } from "./modules-logic.ts";
 import { installListenService } from "./listen.ts";
 import { createDeckToggle } from "./streamdeck/panel.ts";
+import { createMidiToggle } from "./midi/panel.ts";
 import { connectionMonitor } from "./connection.ts";
 // Reiner Seiteneffekt-Import (registriert nur customElements.define) —
 // gleicher Grund wie beim console-view.ts-Fall oben. app-shell.ts
@@ -234,6 +235,10 @@ function mountUserWidget(root: HTMLElement, username: string, homeHref: string |
     deck.button.setAttribute("data-role", "deck-toggle");
     widget.insertBefore(deck.button, widget.firstChild);
     document.body.appendChild(deck.panel);
+    const midi = createMidiToggle(deck.button.style.cssText);
+    midi.button.setAttribute("data-role", "midi-toggle");
+    widget.insertBefore(midi.button, deck.button.nextSibling);
+    document.body.appendChild(midi.panel);
   }
   document.body.appendChild(widget);
 }
