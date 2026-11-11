@@ -146,6 +146,10 @@ export interface TriggerKind {
   label: string;
   subject: string; // NATS-Subject, "*" = beliebiges Asset
   inputFields: OutputField[]; // Felder des Ereignis-Payloads = input.*
+  count?: number; // wie oft auf dem Bus gesehen
+  lastSeen?: string; // ISO-Zeit des letzten Ereignisses
+  sample?: unknown; // zuletzt gesehene Nutzlast
+  observed?: boolean; // nur beobachtet, nicht angemeldet
   group?: string; // Gruppe im Auswahlfeld (alarm, ingest, bus, …); fest eingebaute Asset-Ereignisse: "asset"
 }
 
@@ -158,12 +162,20 @@ export interface BusEvent {
   labelEn?: string;
   fields?: { path: string; label?: string }[];
   observed?: boolean;
+  count?: number;
+  lastSeen?: string;
+  sample?: unknown;
 }
 
 /** Ergänzt die festen Auslöser um den dynamischen Katalog; Subjects, die schon vorkommen, bleiben unverändert. */
 export function mergeBusEvents(base: TriggerKind[], bus: BusEvent[], lang: string): TriggerKind[] {
   const have = new Set(base.map((k) => k.subject));
   const out = base.map((k) => ({ ...k, group: k.group ?? "asset" }));
+  const byS = new Map(bus.map((e) => [e.subject, e]));
+  for (const k of out) {
+    const e = byS.get(k.subject);
+    if (e) Object.assign(k, { count: e.count, lastSeen: e.lastSeen, sample: e.sample });
+  }
   for (const e of bus) {
     if (have.has(e.subject)) continue;
     have.add(e.subject);
@@ -171,6 +183,7 @@ export function mergeBusEvents(base: TriggerKind[], bus: BusEvent[], lang: strin
     out.push({
       id: e.id, subject: e.subject, group: e.group, label: e.observed ? e.subject : label,
       inputFields: (e.fields ?? []).map((f) => ({ path: f.path, label: f.label ?? f.path })),
+      count: e.count, lastSeen: e.lastSeen, sample: e.sample, observed: e.observed,
     });
   }
   return out;

@@ -36,6 +36,7 @@ func TestNormalizeAndObserve(t *testing.T) {
 	}
 	observed = map[string]*Info{}
 	registry = nil
+	samples = map[string]*sample{}
 	Observe("omp.newthing.abc", []byte(`{"b":1,"a":2}`))
 	Observe("omp.newthing.abc", []byte(`{}`))
 	l := List()
@@ -56,5 +57,26 @@ func TestEmit(t *testing.T) {
 	Emit("omp.x.y", map[string]any{"a": 1})
 	if len(r.subj) != 1 || r.subj[0] != "omp.x.y" {
 		t.Fatalf("Emit: %v", r.subj)
+	}
+}
+
+func TestSamplesAndFlatten(t *testing.T) {
+	observed, registry, samples = map[string]*Info{}, nil, map[string]*sample{}
+	Register(Info{Subject: "omp.ingest.*.completed", Group: "ingest", Label: "x"})
+	Observe("omp.ingest.8f3c1a2b-1111-2222-3333-444455556666.completed", []byte(`{"jobId":"j","detail":{"a":1,"b":{"c":2}}}`))
+	l := List()
+	if len(l) != 1 || l[0].Count != 1 || l[0].LastSeen == nil || len(l[0].Sample) == 0 {
+		t.Fatalf("Muster ohne Beispiel: %+v", l)
+	}
+	p, n, _ := SampleFor("omp.ingest.>")
+	if n != 1 || len(p) == 0 {
+		t.Fatalf("SampleFor: %s %d", p, n)
+	}
+	var paths []string
+	for _, f := range FlattenFields(p) {
+		paths = append(paths, f.Path)
+	}
+	if len(paths) != 3 || paths[0] != "detail.a" || paths[1] != "detail.b.c" || paths[2] != "jobId" {
+		t.Fatalf("Flatten: %v", paths)
 	}
 }

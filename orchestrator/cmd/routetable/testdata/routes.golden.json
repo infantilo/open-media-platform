@@ -891,6 +891,12 @@
     "domain": "core"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/event-catalog/test-filter",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/events",
     "auth": "auth",

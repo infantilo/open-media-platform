@@ -78,6 +78,7 @@ function triggerGroupLabel(g: string): string {
   const v = tt(k as never);
   return v === k ? g : v;
 }
+import { openTriggerDialog, type TriggerDef } from "./trigger-dialog.ts";
 import { decisionLabel, openStepConfigModal } from "./process-step-config.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -772,121 +773,23 @@ export class ProcessEditor extends HTMLElement {
   // JSON — Ereignisse (Asset, Alarme, Ingest, Module, auf dem Bus beobachtete) als gruppierte Auswahl, eigenes Subject
   // unter "Erweitert". Der optionale Filter-Ausdruck (input.*, subject) wird vom Backend ausgewertet.
   #openTriggersModal() {
-    const kinds = this.#triggerKinds();
-    const triggers = ((this.#def.triggers ?? []) as { subject?: string; filter?: string }[]).map((t) => ({ ...t }));
-    const overlay = document.createElement("div");
-    overlay.className = "omp-modal-overlay";
-    overlay.style.zIndex = "2100";
-    const modal = document.createElement("div");
-    modal.className = "omp-modal";
-    modal.style.maxWidth = "560px";
-    modal.setAttribute("data-role", "triggers-modal");
-    modal.innerHTML = `<div class="omp-h1">${tt("pe.c8a8be")}</div>
-      <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin:4px 0 8px;">
-        ${tt("pe.d4054d")}</div>`;
-    const list = document.createElement("div");
-    modal.appendChild(list);
-
-    const render = () => {
-      list.replaceChildren();
-      if (triggers.length === 0) {
-        const e = document.createElement("div");
-        e.className = "omp-empty";
-        e.textContent = tt("pe.ff11ee");
-        list.appendChild(e);
-      }
-      triggers.forEach((t, idx) => {
-        const row = document.createElement("div");
-        row.style.cssText = "display:flex;gap:4px;margin-top:4px;align-items:center;";
-        const sel = document.createElement("select");
-        sel.name = "trigger-kind";
-        sel.style.cssText = "flex:1;min-width:0;";
-        const groups = new Map<string, HTMLOptGroupElement>();
-        for (const k of kinds) {
-          const g = k.group ?? "";
-          let og = groups.get(g);
-          if (!og) {
-            og = document.createElement("optgroup");
-            og.label = triggerGroupLabel(g);
-            groups.set(g, og);
-            sel.appendChild(og);
-          }
-          og.appendChild(new Option(k.label, k.subject));
-        }
-        const known = triggerKindForSubject(kinds, t.subject ?? "");
-        const custom = document.createElement("input");
-        custom.name = "trigger-subject";
-        custom.placeholder = tt("pe.7e436d");
-        custom.style.cssText = "flex:1;min-width:0;font-family:ui-monospace,monospace;";
-        sel.appendChild(new Option(tt("pe.083fea"), "__custom"));
-        sel.value = known ? known.subject : "__custom";
-        custom.value = known ? "" : t.subject ?? "";
-        custom.style.display = known ? "none" : "block";
-        sel.addEventListener("change", () => {
-          if (sel.value === "__custom") {
-            custom.style.display = "block";
-            t.subject = custom.value;
-          } else {
-            custom.style.display = "none";
-            t.subject = sel.value;
-          }
-        });
-        custom.addEventListener("input", () => (t.subject = custom.value.trim()));
-        const rm = document.createElement("button");
-        rm.textContent = "✕";
-        rm.addEventListener("click", () => {
-          triggers.splice(idx, 1);
-          render();
-        });
-        row.append(sel, custom, rm);
-        list.appendChild(row);
-        const filt = document.createElement("input");
-        filt.name = "trigger-filter";
-        filt.placeholder = tt("pe.trigFilter");
-        filt.title = tt("pe.trigFilterHint");
-        filt.value = t.filter ?? "";
-        filt.style.cssText = "width:100%;box-sizing:border-box;margin:2px 0 6px;font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);";
-        filt.addEventListener("input", () => (t.filter = filt.value.trim() || undefined));
-        list.appendChild(filt);
-      });
-    };
-    render();
-
-    const add = document.createElement("button");
-    add.textContent = tt("pe.c481e8");
-    add.setAttribute("data-role", "trigger-add");
-    add.style.marginTop = "6px";
-    add.addEventListener("click", () => {
-      triggers.push({ subject: kinds[0]?.subject ?? "" });
-      render();
+    openTriggerDialog({
+      triggers: ((this.#def.triggers ?? []) as TriggerDef[]),
+      getKinds: () => this.#triggerKinds(),
+      refresh: () => this.#loadEventCatalog(),
+      groupLabel: triggerGroupLabel,
+      onError: (m) => showToast(m, { variant: "error" }),
+      onApply: (triggers) => {
+        this.#def = { ...this.#def, triggers: triggers.length ? triggers : undefined };
+        this.#renderToolbar();
+      },
+      host: this,
     });
-    modal.appendChild(add);
+  }
 
-    const actions = document.createElement("div");
-    actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:12px;";
-    const cancel = document.createElement("button");
-    cancel.textContent = tt("pe.4b9727");
-    cancel.addEventListener("click", () => overlay.remove());
-    const ok = document.createElement("button");
-    ok.className = "omp-btn-primary";
-    ok.textContent = tt("pe.bf8310");
-    ok.setAttribute("data-role", "triggers-apply");
-    ok.addEventListener("click", () => {
-      if (triggers.some((t) => !t.subject)) {
-        showToast(tt("pe.9b9089"), { variant: "error" });
-        return;
-      }
-      this.#def = { ...this.#def, triggers: triggers.length ? triggers : undefined };
-      overlay.remove();
-      this.#renderToolbar();
-    });
-    actions.append(cancel, ok);
-    modal.appendChild(actions);
-    overlay.appendChild(modal);
-    overlay.addEventListener("mousedown", (ev) => {
-      if (ev.target === overlay) overlay.remove();
-    });
-    this.appendChild(overlay);
+  async #loadEventCatalog() {
+    const res = await apiFetch("/api/v1/event-catalog");
+    if (res.ok) this.#busEvents = ((await res.json()) as { events: BusEvent[] }).events ?? [];
   }
 
   // Kleines Modal nach dem Ablegen einer gezogenen Verbindung: Next

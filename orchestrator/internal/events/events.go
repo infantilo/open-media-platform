@@ -31,6 +31,93 @@ type Info struct {
 	Observed bool       `json:"observed,omitempty"` // nur auf dem Bus gesehen, nicht angemeldet
 	Count    int64      `json:"count,omitempty"`    // nur bei beobachteten Arten
 	LastSeen *time.Time `json:"lastSeen,omitempty"`
+	// Sample: zuletzt gesehene Nutzlast (JSON, gekürzt) — Grundlage für Feldauswahl und Filter-Test.
+	Sample json.RawMessage `json:"sample,omitempty"`
+}
+
+type sample struct {
+	payload []byte
+	count   int64
+	last    time.Time
+}
+
+const maxSampleBytes = 8 << 10
+
+// samples: je normalisiertem Subject die letzte Nutzlast (auch für angemeldete Arten und Alarme).
+var samples = map[string]*sample{}
+
+func recordSample(norm string, payload []byte) {
+	sm, ok := samples[norm]
+	if !ok {
+		if len(samples) >= maxObserved*2 {
+			return
+		}
+		sm = &sample{}
+		samples[norm] = sm
+	}
+	sm.count++
+	sm.last = time.Now().UTC()
+	if len(payload) <= maxSampleBytes && json.Valid(payload) {
+		sm.payload = append(sm.payload[:0], payload...)
+	}
+}
+
+// SampleFor liefert Nutzlast, Anzahl und Zeit des jüngsten Ereignisses, dessen Subject vom Muster pattern abgedeckt wird.
+func SampleFor(pattern string) (payload json.RawMessage, count int64, last *time.Time) {
+	mu.RLock()
+	defer mu.RUnlock()
+	return sampleFor(pattern)
+}
+
+func sampleFor(pattern string) (json.RawMessage, int64, *time.Time) {
+	var best *sample
+	var total int64
+	for subj, sm := range samples {
+		if Covers(pattern, subj) {
+			total += sm.count
+			if best == nil || sm.last.After(best.last) {
+				best = sm
+			}
+		}
+	}
+	if best == nil {
+		return nil, 0, nil
+	}
+	t := best.last
+	return append(json.RawMessage(nil), best.payload...), total, &t
+}
+
+// FlattenFields leitet aus einer Beispiel-Nutzlast die Pfade ab („a“, „a.b“, „liste[0]“ als „liste“), je Pfad höchstens bis Tiefe 4.
+func FlattenFields(payload []byte) []Field {
+	var v any
+	if json.Unmarshal(payload, &v) != nil {
+		return nil
+	}
+	var out []Field
+	var walk func(prefix string, v any, depth int)
+	walk = func(prefix string, v any, depth int) {
+		m, ok := v.(map[string]any)
+		if !ok || depth >= 4 {
+			if prefix != "" {
+				out = append(out, Field{Path: prefix})
+			}
+			return
+		}
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			p := k
+			if prefix != "" {
+				p = prefix + "." + k
+			}
+			walk(p, m[k], depth+1)
+		}
+	}
+	walk("", v, 0)
+	return out
 }
 
 // Publisher ist der Teil des NATS-Clients, den Emit braucht.
@@ -122,6 +209,7 @@ func Observe(subject string, payload []byte) {
 	norm := Normalize(subject)
 	mu.Lock()
 	defer mu.Unlock()
+	recordSample(norm, payload)
 	for _, r := range registry {
 		if Covers(r.Subject, norm) || Covers(r.Subject, subject) {
 			return
@@ -156,10 +244,15 @@ func List() []Info {
 	mu.RLock()
 	defer mu.RUnlock()
 	out := append([]Info(nil), registry...)
+	for i := range out {
+		out[i].Sample, out[i].Count, out[i].LastSeen = sampleFor(out[i].Subject)
+	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Group < out[j].Group })
 	obs := make([]Info, 0, len(observed))
 	for _, o := range observed {
-		obs = append(obs, *o)
+		c := *o
+		c.Sample, _, _ = sampleFor(c.Subject)
+		obs = append(obs, c)
 	}
 	sort.Slice(obs, func(i, j int) bool { return obs[i].Subject < obs[j].Subject })
 	return append(out, obs...)
