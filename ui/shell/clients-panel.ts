@@ -61,16 +61,16 @@ export class ClientsPanel {
       if (!res.ok) throw new Error(String(res.status));
       const data = (await res.json()) as { total: number; clients: ClientRow[] };
       if (seq !== this.#seq) return;
-      this.#render(data.total, data.clients ?? []);
+      this.#render(data.clients ?? []);
     } catch {
       if (seq !== this.#seq) return;
       this.#summary.textContent = t("clients.error");
     }
   }
 
-  #render(total: number, rows: ClientRow[]) {
+  #render(rows: ClientRow[]) {
     const users = new Set(rows.map((r) => r.user).filter(Boolean));
-    this.#summary.textContent = t("clients.summary", { total: String(total), users: String(users.size) });
+    this.#summary.textContent = t("clients.summary", { total: String(rows.length), users: String(users.size) });
     this.#body.replaceChildren();
     if (rows.length === 0) {
       this.#body.append(el("div", "color:var(--omp-text-dim);", t("clients.none")));
