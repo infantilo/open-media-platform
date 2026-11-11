@@ -40,7 +40,7 @@
 | EBU Tech 3293 v1.10 (EBUCore) | Metadata exchange for assets, including your own dynamic fields | Export validated against the official `ebucore.xsd` 1.10.1; round trip keeps dynamic fields; import preview |
 | EBU R 143 v3.0 | Cybersecurity requirements for media vendors' products | Honest control-by-control assessment in `docs/R143-KONFORMITAET.md` (8 met, 17 partly, 2 open of 28) — an assessment, not a certification |
 
-![OpenMediaPlatform Hero](./OpenMediaPlatform%20Hero.png)
+![OpenMediaPlatform Hero](docs/hero.png)
 
 New, standalone project (separate from `PIPELINE CONTROLLER`).
 
