@@ -23,3 +23,27 @@ Deno.test("showAddress: Loopback als localhost", () => {
   assertEquals(showAddress("::1"), "localhost");
   assertEquals(showAddress("10.1.2.3"), "10.1.2.3");
 });
+
+import { matchesClient } from "./clients-logic.ts";
+
+Deno.test("matchesClient: Begriffe, Geräte, Stichworte", () => {
+  const a = {
+    user: "Anna",
+    remoteIp: "10.0.0.5",
+    userAgent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/150.0.0.0 Safari/537.36",
+    devices: { midi: [{ name: "iCON Platform M+" }], streamDeck: [{ name: "Stream Deck XL (Simulator)", simulated: true }] },
+  };
+  const b = { user: "bob", remoteIp: "::1", userAgent: "Mozilla/5.0 (Windows NT 10.0) Firefox/121.0" };
+  assertEquals(matchesClient(a, ""), true);
+  assertEquals(matchesClient(a, "anna"), true);
+  assertEquals(matchesClient(a, "ANNA chrome"), true);
+  assertEquals(matchesClient(a, "anna firefox"), false);
+  assertEquals(matchesClient(a, "icon"), true);
+  assertEquals(matchesClient(a, "midi"), true);
+  assertEquals(matchesClient(b, "midi"), false);
+  assertEquals(matchesClient(a, "stream deck"), true);
+  assertEquals(matchesClient(b, "streamdeck"), false);
+  assertEquals(matchesClient(a, "simulator"), true);
+  assertEquals(matchesClient(b, "localhost"), true);
+  assertEquals(matchesClient(a, "10.0.0"), true);
+});

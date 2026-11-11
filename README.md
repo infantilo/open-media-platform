@@ -370,7 +370,7 @@ Full walkthroughs and context for every screen above are in
   not an MXF structure validation.
 - **Connected clients (admin)**: Administration → Connected clients lists
   every browser currently attached to the UI — user, address, connected
-  since, browser — and can disconnect a single connection or sign the user
+  since, browser, and whether it uses a MIDI surface or Stream Deck — searchable, and can disconnect a single connection or sign the user
   out everywhere. `/metrics` exposes `omp_sse_clients_identified`,
   `omp_sse_clients_by_user` and `omp_sse_client_kicks_total`. API-only
   token calls without an open event stream are not listed.

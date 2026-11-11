@@ -173,6 +173,20 @@ func writeSSEMetrics(b *strings.Builder, events EventSubscriber) {
 		for u := range perUser {
 			users = append(users, u)
 		}
+		var withMidi, withDeck int
+		for _, c := range clients {
+			if c.Devices == nil {
+				continue
+			}
+			if len(c.Devices.Midi) > 0 {
+				withMidi++
+			}
+			if len(c.Devices.StreamDeck) > 0 {
+				withDeck++
+			}
+		}
+		writeMetric(b, "omp_sse_clients_with_midi", "Browser clients reporting a MIDI device (real or simulated).", "gauge", float64(withMidi), "")
+		writeMetric(b, "omp_sse_clients_with_streamdeck", "Browser clients reporting a Stream Deck (real or simulated).", "gauge", float64(withDeck), "")
 		sort.Strings(users)
 		fmt.Fprintf(b, "# HELP omp_sse_clients_by_user Connected SSE clients per user.\n# TYPE omp_sse_clients_by_user gauge\n")
 		for _, u := range users {

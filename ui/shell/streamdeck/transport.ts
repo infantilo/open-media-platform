@@ -57,6 +57,11 @@ export class DeckDevice {
     return dev;
   }
 
+  /** Anzeigename des Geräts (Produktname des HID-Geräts, sonst das Modell). */
+  get label(): string {
+    return this.#hid.productName || this.model.name;
+  }
+
   onEvent(cb: (e: DeckEvent) => void): () => void {
     this.#listeners.add(cb);
     return () => this.#listeners.delete(cb);

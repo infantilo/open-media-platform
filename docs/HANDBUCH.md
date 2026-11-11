@@ -662,13 +662,18 @@ SSE-Kennzahlen im Einzelnen: `omp_sse_clients` (alle offenen Ereignis-Ströme,
 auch die internen Abonnenten des Orchestrators wie Alarm-Mail und Zeitleiste),
 `omp_sse_clients_identified` (nur Browser mit bekanntem Benutzer),
 `omp_sse_clients_by_user{user="…"}` (je Benutzer),
+`omp_sse_clients_with_midi` / `omp_sse_clients_with_streamdeck` (Browser, die ein
+MIDI-Pult bzw. Stream Deck melden, auch Simulatoren),
 `omp_sse_client_kicks_total` (vom Admin getrennte Clients seit Prozessstart)
 und `omp_sse_dropped_events_total`. Wer verbunden ist, zeigt Administration →
 Verbundene Clients; per API `GET /api/v1/admin/clients` (Liste mit `id`,
-`user`, `remoteIp`, `userAgent`, `since`) und `POST
+`user`, `remoteIp`, `userAgent`, `since`, `devices`) und `POST
 /api/v1/admin/clients/{id}/disconnect` (Rumpf `{"endSessions":true}` beendet
 zusätzlich alle Anmeldungen des Benutzers; ohne baut der Browser die Verbindung
-selbst wieder auf), beide nur für Admins.
+selbst wieder auf), beide nur für Admins. Die Geräte (`devices.midi`, `devices.streamDeck`)
+meldet der Browser selbst per `PUT /api/v1/clients/devices` (Rumpf `cid`, `midi`,
+`streamDeck`; die Kennung `cid` hängt er als `?cid=` an den Ereignis-Strom); der
+Server ordnet sie nur Verbindungen desselben Benutzers zu.
 
 **Soak-Test:**
 

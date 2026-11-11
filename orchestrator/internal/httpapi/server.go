@@ -447,6 +447,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/workflows/{id}/drift", g.requireAuth(handleWorkflowDrift(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/admin/clients", g.requireVerbGlobal(authz.VerbAdmin, handleAdminClients(events)))
 	mux.HandleFunc("POST /api/v1/admin/clients/{id}/disconnect", g.requireVerbGlobal(authz.VerbAdmin, handleAdminClientDisconnect(events, authSvc)))
+	mux.HandleFunc("PUT /api/v1/clients/devices", g.requireAuth(handlePutClientDevices(events)))
 	mux.HandleFunc("GET /api/v1/events", g.requireAuth(handleEvents(events)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/descriptor.json", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))
@@ -1017,7 +1018,7 @@ func handleEvents(events EventSubscriber) http.HandlerFunc {
 		if is, ok := events.(interface {
 			SubscribeInfo(sse.ClientInfo) (<-chan sse.Event, func())
 		}); ok {
-			ci := sse.ClientInfo{RemoteIP: clientIP(r), UserAgent: r.UserAgent()}
+			ci := sse.ClientInfo{RemoteIP: clientIP(r), UserAgent: r.UserAgent(), CID: cleanText(r.URL.Query().Get("cid"), 40)}
 			if p, ok := principalFromContext(r); ok {
 				ci.User = p.Username
 			}
@@ -1054,6 +1055,60 @@ func handleAdminClients(events EventSubscriber) http.HandlerFunc {
 			list = l.Clients()
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"total": events.ClientCount(), "clients": list})
+	}
+}
+
+// cleanText kürzt auf max. n Zeichen und entfernt Steuerzeichen (Eingaben des Browsers landen in Listen und Metriken).
+func cleanText(v string, n int) string {
+	out := make([]rune, 0, len(v))
+	for _, c := range v {
+		if c < 0x20 || c == 0x7f {
+			continue
+		}
+		out = append(out, c)
+		if len(out) >= n {
+			break
+		}
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func cleanDevices(in []sse.ClientDevice) []sse.ClientDevice {
+	out := []sse.ClientDevice{}
+	for _, d := range in {
+		if len(out) >= 8 {
+			break
+		}
+		if n := cleanText(d.Name, 80); n != "" {
+			out = append(out, sse.ClientDevice{Name: n, Simulated: d.Simulated})
+		}
+	}
+	return out
+}
+
+// handlePutClientDevices: der Browser meldet seine Bedien-Geräte (MIDI, Stream Deck) für die Admin-Ansicht
+// „Verbundene Clients“. Gilt nur für Verbindungen desselben Benutzers.
+func handlePutClientDevices(events EventSubscriber) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		hub, ok := events.(interface {
+			SetDevices(user, cid string, d sse.ClientDevices) bool
+		})
+		p, authed := principalFromContext(r)
+		if !ok || !authed {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var req struct {
+			CID        string             `json:"cid"`
+			Midi       []sse.ClientDevice `json:"midi"`
+			StreamDeck []sse.ClientDevice `json:"streamDeck"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		hub.SetDevices(p.Username, cleanText(req.CID, 40), sse.ClientDevices{Midi: cleanDevices(req.Midi), StreamDeck: cleanDevices(req.StreamDeck)})
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

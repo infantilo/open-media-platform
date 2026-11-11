@@ -215,3 +215,22 @@ func TestHubKick(t *testing.T) {
 		t.Fatalf("count=%d kicks=%d", h.ClientCount(), h.TotalKicks())
 	}
 }
+
+func TestHubSetDevicesOnlyForOwnClient(t *testing.T) {
+	h := NewHub()
+	_, _ = h.SubscribeInfo(ClientInfo{User: "anna", RemoteIP: "1.1.1.1", CID: "tab1"})
+	d := ClientDevices{Midi: []ClientDevice{{Name: "iCON"}}}
+	if h.SetDevices("bob", "tab1", d) {
+		t.Fatal("fremder Benutzer darf keine Geräte melden")
+	}
+	if !h.SetDevices("anna", "tab1", d) {
+		t.Fatal("eigener Client")
+	}
+	if c := h.Clients()[0]; c.Devices == nil || c.Devices.Midi[0].Name != "iCON" {
+		t.Fatalf("devices=%+v", c.Devices)
+	}
+	h.SetDevices("anna", "tab1", ClientDevices{})
+	if h.Clients()[0].Devices != nil {
+		t.Fatal("leere Meldung räumt auf")
+	}
+}

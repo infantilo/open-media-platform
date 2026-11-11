@@ -7,6 +7,7 @@
 // der Dokument-Empfehlung "andockbare Panels"). Nur für die Engineering-
 // Ansicht gemountet (shell.ts) — Console-Ansicht (§14) bleibt unverändert
 // Vollfläche ohne jede Chrome, wie schon vor diesem Schritt.
+import { startDeviceReporting } from "./client-devices.ts";
 import "../graph/flow-canvas.ts";
 import { createDeckToggle } from "./streamdeck/panel.ts";
 import { createMidiToggle } from "./midi/panel.ts";
@@ -192,6 +193,7 @@ class AppShell extends HTMLElement {
     connectionMonitor.addEventListener("statechange", this.#onStateChange);
     connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
     connectionMonitor.start();
+    startDeviceReporting();
     this.#applyConnectionState({ state: connectionMonitor.state, nextRetryAt: connectionMonitor.nextRetryAt });
   }
 

@@ -2612,6 +2612,13 @@ export const en: Record<keyof typeof de, string> = {
   "clients.endSessions.done": "User signed out.",
   "clients.error.action": "Action failed.",
   "aud.a.clientKick": "Client disconnected",
+  "clients.search": "Search: user, address, browser, device (e.g. midi, streamdeck, simulator)",
+  "clients.summary.filtered": " — {n} shown",
+  "clients.noMatch": "No client matches the search.",
+  "clients.col.devices": "Devices",
+  "clients.dev.midi": "MIDI",
+  "clients.dev.deck": "Stream Deck",
+  "clients.dev.sim": "simulator",
   "admin.tab.support": "Support",
 
   "tl.title": "Timeline",

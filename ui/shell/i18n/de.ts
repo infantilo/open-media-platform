@@ -2611,6 +2611,13 @@ export const de = {
   "clients.endSessions.done": "Benutzer abgemeldet.",
   "clients.error.action": "Aktion fehlgeschlagen.",
   "aud.a.clientKick": "Client getrennt",
+  "clients.search": "Suchen: Benutzer, Adresse, Browser, Gerät (z. B. midi, streamdeck, simulator)",
+  "clients.summary.filtered": " — {n} angezeigt",
+  "clients.noMatch": "Kein Client passt zur Suche.",
+  "clients.col.devices": "Geräte",
+  "clients.dev.midi": "MIDI",
+  "clients.dev.deck": "Stream Deck",
+  "clients.dev.sim": "Simulator",
   "admin.tab.support": "Support",
 
   "tl.title": "Zeitleiste",

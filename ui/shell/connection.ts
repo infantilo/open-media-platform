@@ -30,6 +30,8 @@
 // Token-Lesezugriff, kein Fetch-Patching. Gleicher Storage-Key wie
 // `auth.ts`s `TOKEN_KEY`, absichtlich dupliziert statt einer gemeinsamen
 // dritten Datei nur für eine Konstante.
+import { clientId } from "./client-id.ts";
+
 const TOKEN_KEY = "omp-auth-token";
 
 export type ConnectionState = "connected" | "degraded" | "disconnected";
@@ -97,7 +99,8 @@ class ConnectionMonitor extends EventTarget {
     // blieb dadurch dauerhaft "disconnected", sobald ein echter Nutzer
     // (also außerhalb des Zero-User-Bootstrap-Zustands) angemeldet war.
     const token = localStorage.getItem(TOKEN_KEY);
-    const url = token ? `/api/v1/events?access_token=${encodeURIComponent(token)}` : "/api/v1/events";
+    const cid = `cid=${encodeURIComponent(clientId())}`;
+    const url = token ? `/api/v1/events?access_token=${encodeURIComponent(token)}&${cid}` : `/api/v1/events?${cid}`;
     const es = new EventSource(url);
     this.#es = es;
 

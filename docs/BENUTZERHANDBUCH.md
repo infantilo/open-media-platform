@@ -1276,6 +1276,20 @@ untereinander):
   Ereignis-Strom und die internen Abonnenten des Orchestrators (Alarm-Mail,
   Zeitleiste) zählen nicht mit.
 
+  Die Spalte **Geräte** zeigt, welche Bedien-Geräte der Browser gerade nutzt:
+  ein **MIDI-Pult** (laufende MIDI-Sitzung, mit dem Namen der Anschlüsse) und/oder
+  ein **Stream Deck** (mit Modellname); Bildschirm-Simulatoren sind als
+  „simulator“ gekennzeichnet. Der Browser meldet das selbst, sobald sich etwas
+  ändert und nach jedem Neuaufbau der Verbindung; ein Browser, der gar nichts
+  meldet (ältere Version, API-Skript), zeigt „–“.
+
+  Das **Suchfeld** über der Tabelle filtert, während Sie tippen. Leerzeichen
+  trennen Begriffe, alle müssen vorkommen (Groß-/Kleinschreibung egal), gesucht
+  wird in Benutzer, Adresse, Browser und Gerätenamen. Die Stichworte `midi`,
+  `streamdeck` (auch `stream deck`) und `simulator` finden alle Clients mit so
+  einem Gerät — z. B. `anna midi` für Annas Pult-Browser. Die Zusammenfassung
+  nennt dann zusätzlich, wie viele Zeilen angezeigt werden.
+
   ![Verbundene Clients: Benutzer, Adresse, Dauer, Browser, Trennen/Abmelden](screenshots/admin-clients.png)
 
   Je Zeile gibt es zwei Knöpfe, beide mit Rückfrage:
@@ -1289,7 +1303,8 @@ untereinander):
 
   Beide Aktionen stehen im Audit-Log („Client getrennt“, „Sitzungen von … beendet“).
   Für die Überwachung liefert `/metrics` `omp_sse_clients_identified`,
-  `omp_sse_clients_by_user{user="…"}` und `omp_sse_client_kicks_total`
+  `omp_sse_clients_by_user{user="…"}`, `omp_sse_clients_with_midi`,
+  `omp_sse_clients_with_streamdeck` und `omp_sse_client_kicks_total`
   (HANDBUCH §7).
 - **Rechte** (früher „Rollenbindungen") — ein Editor mit Suche, in zwei
   Blickrichtungen:

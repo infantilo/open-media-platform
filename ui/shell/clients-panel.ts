@@ -4,7 +4,7 @@ import { t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { showToast } from "../kit/omp-toast.ts";
-import { shortBrowser, showAddress } from "./clients-logic.ts";
+import { type ClientDevice, deviceLabels, matchesClient, shortBrowser, showAddress } from "./clients-logic.ts";
 
 const REFRESH_MS = 5_000;
 
@@ -14,6 +14,7 @@ interface ClientRow {
   remoteIp: string;
   userAgent: string;
   since: string;
+  devices?: { midi?: ClientDevice[]; streamDeck?: ClientDevice[] };
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, css = "", text = ""): HTMLElementTagNameMap[K] {
@@ -35,6 +36,8 @@ export class ClientsPanel {
   readonly el: HTMLElement;
   #summary = el("div", "margin:4px 0 12px;color:var(--omp-text-dim);");
   #body = el("div");
+  #search = el("input", "margin:0 0 10px;min-width:280px;");
+  #rows: ClientRow[] = [];
   #timer: number | undefined;
   #seq = 0;
 
@@ -42,7 +45,12 @@ export class ClientsPanel {
     this.el = el("div", "margin-bottom:var(--omp-space-4);max-width:900px;");
     const title = el("span", "", t("clients.title"));
     title.className = "omp-h1";
-    this.el.append(title, this.#summary, this.#body);
+    this.#search.type = "search";
+    this.#search.className = "omp-input";
+    this.#search.placeholder = t("clients.search");
+    this.#search.setAttribute("aria-label", t("clients.search"));
+    this.#search.addEventListener("input", () => this.#render(this.#rows));
+    this.el.append(title, this.#summary, this.#search, this.#body);
   }
 
   start() {
@@ -73,26 +81,35 @@ export class ClientsPanel {
   }
 
   #render(rows: ClientRow[]) {
+    this.#rows = rows;
     const users = new Set(rows.map((r) => r.user).filter(Boolean));
-    this.#summary.textContent = t("clients.summary", { total: String(rows.length), users: String(users.size) });
+    const query = this.#search.value;
+    const shown = rows.filter((r) => matchesClient(r, query));
+    this.#summary.textContent = t("clients.summary", { total: String(rows.length), users: String(users.size) }) +
+      (query.trim() ? t("clients.summary.filtered", { n: String(shown.length) }) : "");
     this.#body.replaceChildren();
     if (rows.length === 0) {
       this.#body.append(el("div", "color:var(--omp-text-dim);", t("clients.none")));
       return;
     }
+    if (shown.length === 0) {
+      this.#body.append(el("div", "color:var(--omp-text-dim);", t("clients.noMatch")));
+      return;
+    }
     const table = el("table", "border-collapse:collapse;width:100%;");
     const head = el("tr");
-    for (const k of ["clients.col.user", "clients.col.ip", "clients.col.since", "clients.col.agent", "clients.col.actions"] as const) {
+    for (const k of ["clients.col.user", "clients.col.ip", "clients.col.since", "clients.col.agent", "clients.col.devices", "clients.col.actions"] as const) {
       head.append(el("th", "text-align:left;padding:4px 8px;border-bottom:1px solid var(--omp-border);", t(k)));
     }
     table.append(head);
-    for (const r of rows) {
+    for (const r of shown) {
       const tr = el("tr");
       const cell = (txt: string, title = "") => {
         const td = el("td", "padding:4px 8px;border-bottom:1px solid var(--omp-border);", txt);
         if (title) td.title = title;
         return td;
       };
+      const devs = deviceLabels(r, { midi: t("clients.dev.midi"), deck: t("clients.dev.deck"), sim: t("clients.dev.sim") });
       const actions = el("td", "padding:4px 8px;border-bottom:1px solid var(--omp-border);white-space:nowrap;");
       const drop = el("button", "", t("clients.disconnect"));
       drop.className = "omp-btn";
@@ -108,6 +125,7 @@ export class ClientsPanel {
         cell(showAddress(r.remoteIp), r.remoteIp),
         cell(duration(r.since), new Date(r.since).toLocaleString()),
         cell(shortBrowser(r.userAgent), r.userAgent),
+        cell(devs.join(" · ") || "–", devs.join("\n")),
         actions,
       );
       table.append(tr);

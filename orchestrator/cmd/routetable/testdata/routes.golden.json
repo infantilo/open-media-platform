@@ -751,6 +751,12 @@
     "domain": "core"
   },
   {
+    "method": "PUT",
+    "path": "/api/v1/clients/devices",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/cloud/costs",
     "auth": "auth",

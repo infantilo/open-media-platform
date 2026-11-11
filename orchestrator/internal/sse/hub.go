@@ -14,11 +14,27 @@ import (
 
 // ClientInfo beschreibt einen verbundenen SSE-Client für die Admin-Ansicht.
 type ClientInfo struct {
-	ID        string    `json:"id"`
+	ID string `json:"id"`
+	// CID ist die vom Browser je Tab gewählte Kennung (Query ?cid=); darüber ordnet der Server gemeldete Geräte zu.
+	CID       string    `json:"-"`
 	User      string    `json:"user"`
 	RemoteIP  string    `json:"remoteIp"`
 	UserAgent string    `json:"userAgent"`
 	Since     time.Time `json:"since"`
+	// Devices: vom Browser gemeldete Bedien-Geräte (MIDI-Pulte, Stream Deck); nil = nichts gemeldet.
+	Devices *ClientDevices `json:"devices,omitempty"`
+}
+
+// ClientDevice ist ein vom Browser gemeldetes Gerät; Simulated = Bildschirm-Simulator, kein echtes Gerät.
+type ClientDevice struct {
+	Name      string `json:"name"`
+	Simulated bool   `json:"simulated,omitempty"`
+}
+
+// ClientDevices fasst die Geräte eines Browsers zusammen.
+type ClientDevices struct {
+	Midi       []ClientDevice `json:"midi"`
+	StreamDeck []ClientDevice `json:"streamDeck"`
 }
 
 // Event ist die über den SSE-Stream ausgelieferte Hülle. Type identifiziert
@@ -164,6 +180,30 @@ func (h *Hub) Clients() []ClientInfo {
 	h.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Since.Before(out[j].Since) })
 	return out
+}
+
+// SetDevices merkt die gemeldeten Geräte am Client mit dieser Kennung — nur, wenn er dem Benutzer gehört
+// (ein Benutzer kann keine Geräte für fremde Verbindungen melden). Liefert false, wenn kein Client passt.
+func (h *Hub) SetDevices(user, cid string, d ClientDevices) bool {
+	if cid == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ok := false
+	for ch, ci := range h.info {
+		if ci.CID == cid && ci.User == user {
+			if len(d.Midi) == 0 && len(d.StreamDeck) == 0 {
+				ci.Devices = nil
+			} else {
+				dd := d
+				ci.Devices = &dd
+			}
+			h.info[ch] = ci
+			ok = true
+		}
+	}
+	return ok
 }
 
 // Kick trennt den Client mit dieser ID (schließt seinen Kanal; der SSE-Handler beendet daraufhin den
