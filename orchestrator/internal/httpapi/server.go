@@ -726,6 +726,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Workflow-Start/-Stop). HumanTask-Aktionen (zuweisen/entscheiden)
 	// sind "operate" — eine Bedienhandlung an einem laufenden Prozess,
 	// keine Konfigurations- oder Admin-Handlung.
+	mux.HandleFunc("GET /api/v1/event-catalog", g.requireAuth(handleEventCatalog()))
 	mux.HandleFunc("GET /api/v1/process-capabilities", g.requireAuth(handleProcessCapabilities(processEngine, options.scriptCommands)))
 	// UMSETZUNG.md Kapitel 22 (W1): Introspektion statt roher CLI-
 	// Argumente für den `script`-Schritt — reines Leseangebot, daher

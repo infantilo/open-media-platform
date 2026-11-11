@@ -274,3 +274,53 @@ func TestTriggerListenerStopDuringSyncDoesNotLeakConsumer(t *testing.T) {
 		t.Fatalf("active consumers after Stop() = %d, want 0", n)
 	}
 }
+
+// Neues, im Stream noch nicht abgedecktes Subject (wie ein künftig auftauchendes Ereignis) wird beim Anlegen des Auslösers
+// in den Stream aufgenommen; der Filter lässt nur passende Nachrichten durch.
+func TestTriggerListenerExtendsStreamAndFilters(t *testing.T) {
+	engine, store := testEngine(t)
+	js, closeNC := testJetStream(t)
+	t.Cleanup(closeNC)
+
+	streamName := "TEST_TRIGGER_" + mustNewTestID(t)
+	subject := "omp.test.dyn." + streamName + ".happened"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name: streamName, Subjects: []string{"omp.test.other." + streamName + ".>"}, Retention: jetstream.LimitsPolicy, MaxAge: time.Minute,
+	})
+	cancel()
+	if err != nil {
+		t.Fatalf("CreateOrUpdateStream() error = %v", err)
+	}
+	t.Cleanup(func() { _ = js.DeleteStream(context.Background(), streamName) })
+
+	cfg := mustMarshal(t, notificationConfig{Subject: "noop"})
+	_, v := publishedVersion(t, store, Definition{
+		StartStepID: "noop",
+		Steps:       []Step{{ID: "noop", Type: StepTypeTask, Config: cfg}},
+		Triggers:    []EventTrigger{{Subject: subject, Filter: `input.severity == "critical"`}},
+	})
+	engine.Register(StepTypeTask, StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
+		return json.RawMessage(`{}`), nil
+	}))
+	listener := NewTriggerListener(store, engine, js, streamName, WithTriggerSyncInterval(20*time.Millisecond))
+	listener.Start()
+	t.Cleanup(listener.Stop)
+	waitForConsumerActive(t, listener, v.ID, 3*time.Second)
+
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer pubCancel()
+	for _, body := range []string{`{"severity":"info"}`, `{"severity":"critical"}`} {
+		if _, err := js.Publish(pubCtx, subject, []byte(body)); err != nil {
+			t.Fatalf("Publish(%s) error = %v (Stream nicht erweitert?)", body, err)
+		}
+	}
+	time.Sleep(time.Second)
+	executions, err := store.ListExecutions(ExecutionFilter{ProcessDefinitionID: v.ProcessDefinitionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executions) != 1 {
+		t.Fatalf("Ausführungen = %d, erwartet genau 1 (nur die kritische Nachricht)", len(executions))
+	}
+}

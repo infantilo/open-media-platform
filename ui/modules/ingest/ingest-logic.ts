@@ -352,3 +352,45 @@ export function zonedToUtc(local: string, tz: string): Date | null {
     return null;
   }
 }
+
+// ---- Ziehen in der Zeitleiste -------------------------------------------------------------------------------------------
+
+export type DragMode = "move" | "start" | "end";
+export const DRAG_SNAP_MS = 5 * 60000;
+export const MIN_DURATION_MS = 60000;
+
+/** Welche Griffe ein Balken hat: laufende Aufnahmen nur das Ende (verlängern/verkürzen), geplante alles, sonst keinen. */
+export function dragModes(state: string): DragMode[] {
+  if (canAbort(state)) return ["end"];
+  if (canCancel(state)) return ["move", "start", "end"];
+  return [];
+}
+
+const snapTo = (t: number, snap: number): number => Math.round(t / snap) * snap;
+
+/**
+ * Neue Zeiten nach dem Ziehen um deltaMs. Der gezogene Rand rastet auf `snap` ein; die Dauer bleibt ≥ 1 min; bei laufenden
+ * Aufnahmen liegt das Ende frühestens `nowMs` + 1 min (früher beenden = „Jetzt beenden“).
+ */
+export function dragResult(
+  job: Pick<Job, "plannedStart" | "plannedEnd" | "state">,
+  mode: DragMode,
+  deltaMs: number,
+  nowMs: number,
+  snap = DRAG_SNAP_MS,
+): { start: number; end: number } {
+  const s0 = Date.parse(job.plannedStart);
+  const e0 = Date.parse(job.plannedEnd);
+  let start = s0;
+  let end = e0;
+  if (mode === "move") {
+    start = snapTo(s0 + deltaMs, snap);
+    end = start + (e0 - s0);
+  } else if (mode === "start") {
+    start = Math.min(snapTo(s0 + deltaMs, snap), e0 - MIN_DURATION_MS);
+  } else {
+    end = Math.max(snapTo(e0 + deltaMs, snap), s0 + MIN_DURATION_MS);
+    if (canAbort(job.state)) end = Math.max(end, nowMs + MIN_DURATION_MS);
+  }
+  return { start, end };
+}

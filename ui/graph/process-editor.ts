@@ -30,7 +30,7 @@
 // orchestrator/internal/process/validate.go) — wird stattdessen im
 // Konfigurations-Panel je Kachel als Dropdown gesetzt, optisch als
 // eigene, gepunktete Linie mitgezeichnet.
-import { t as tt } from "../shell/i18n.ts";
+import { getLang, t as tt } from "../shell/i18n.ts";
 import {
   arrangeByFlow,
   HEADER_HEIGHT,
@@ -62,7 +62,9 @@ import { confirmDialog } from "../kit/omp-confirm.ts";
 import { apiFetch } from "../shell/connection.ts";
 import {
   branchLabelsFor,
+  type BusEvent,
   DECISION_LABELS,
+  mergeBusEvents,
   missingConfig,
   type OutputField,
   STEP_TYPE_INFO,
@@ -71,6 +73,11 @@ import {
   type TriggerKind,
   triggerKinds,
 } from "./process-step-config-logic.ts";
+function triggerGroupLabel(g: string): string {
+  const k = `pe.trigGroup.${g}`;
+  const v = tt(k as never);
+  return v === k ? g : v;
+}
 import { decisionLabel, openStepConfigModal } from "./process-step-config.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -185,7 +192,11 @@ export class ProcessEditor extends HTMLElement {
 
   async #loadCapabilities() {
     try {
-      const [capRes, lcRes] = await Promise.all([apiFetch("/api/v1/process-capabilities"), apiFetch("/api/v1/asset-lifecycle")]);
+      const [capRes, lcRes, evRes] = await Promise.all([apiFetch("/api/v1/process-capabilities"), apiFetch("/api/v1/asset-lifecycle"), apiFetch("/api/v1/event-catalog")]);
+      if (evRes.ok) {
+        const ev = (await evRes.json()) as { events: BusEvent[] };
+        this.#busEvents = ev.events ?? [];
+      }
       if (capRes.ok) {
         const caps = (await capRes.json()) as { stepTypes: string[]; scriptCommands: string[] };
         this.#executable = new Set(caps.stepTypes ?? []);
@@ -210,8 +221,12 @@ export class ProcessEditor extends HTMLElement {
     return this.#executable === null || this.#executable.has(type);
   }
 
+  // Dynamischer Katalog aus dem Orchestrator (Alarme, Ingest, Module, auf dem Bus beobachtete Ereignisse) —
+  // ergänzt die festen Asset-Ereignisse; Doppelte (gleiches Subject) entfallen.
+  #busEvents: BusEvent[] = [];
+
   #triggerKinds(): TriggerKind[] {
-    return triggerKinds(this.#assetStatuses, (st) => ASSET_STATUS_LABEL[st] ?? st);
+    return mergeBusEvents(triggerKinds(this.#assetStatuses, (st) => ASSET_STATUS_LABEL[st] ?? st), this.#busEvents, getLang());
   }
 
   // Felder, die die konfigurierten Auslöser als Start-Eingabe liefern
@@ -754,13 +769,11 @@ export class ProcessEditor extends HTMLElement {
   }
 
   // Auslöser (A8): wann startet der Prozess automatisch? Formular statt
-  // JSON — Asset-Ereignisse als Auswahl, eigenes Subject nur unter
-  // "Erweitert". Ein Filter-Ausdruck wird bewusst NICHT angeboten: das
-  // Backend (triggerlistener.go) wertet EventTrigger.Filter noch nicht
-  // aus, ein Feld dafür würde eine Wirkung versprechen, die es nicht gibt.
+  // JSON — Ereignisse (Asset, Alarme, Ingest, Module, auf dem Bus beobachtete) als gruppierte Auswahl, eigenes Subject
+  // unter "Erweitert". Der optionale Filter-Ausdruck (input.*, subject) wird vom Backend ausgewertet.
   #openTriggersModal() {
     const kinds = this.#triggerKinds();
-    const triggers = ((this.#def.triggers ?? []) as { subject?: string }[]).map((t) => ({ ...t }));
+    const triggers = ((this.#def.triggers ?? []) as { subject?: string; filter?: string }[]).map((t) => ({ ...t }));
     const overlay = document.createElement("div");
     overlay.className = "omp-modal-overlay";
     overlay.style.zIndex = "2100";
@@ -788,7 +801,18 @@ export class ProcessEditor extends HTMLElement {
         const sel = document.createElement("select");
         sel.name = "trigger-kind";
         sel.style.cssText = "flex:1;min-width:0;";
-        for (const k of kinds) sel.appendChild(new Option(k.label, k.subject));
+        const groups = new Map<string, HTMLOptGroupElement>();
+        for (const k of kinds) {
+          const g = k.group ?? "";
+          let og = groups.get(g);
+          if (!og) {
+            og = document.createElement("optgroup");
+            og.label = triggerGroupLabel(g);
+            groups.set(g, og);
+            sel.appendChild(og);
+          }
+          og.appendChild(new Option(k.label, k.subject));
+        }
         const known = triggerKindForSubject(kinds, t.subject ?? "");
         const custom = document.createElement("input");
         custom.name = "trigger-subject";
@@ -816,6 +840,14 @@ export class ProcessEditor extends HTMLElement {
         });
         row.append(sel, custom, rm);
         list.appendChild(row);
+        const filt = document.createElement("input");
+        filt.name = "trigger-filter";
+        filt.placeholder = tt("pe.trigFilter");
+        filt.title = tt("pe.trigFilterHint");
+        filt.value = t.filter ?? "";
+        filt.style.cssText = "width:100%;box-sizing:border-box;margin:2px 0 6px;font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);";
+        filt.addEventListener("input", () => (t.filter = filt.value.trim() || undefined));
+        list.appendChild(filt);
       });
     };
     render();

@@ -660,6 +660,24 @@ const TABLE: Record<string, [string, string]> = {
     "Zeitumstellung: die Uhrzeit kommt zweimal vor — die erste zählt.",
     "Clock change: the wall time occurs twice — the first one counts."
   ],
+  "ing.drag.move": ["Verschieben", "Move"],
+  "ing.drag.start": ["Start ändern", "Change start"],
+  "ing.drag.end": ["Ende ändern (verlängern/verkürzen)", "Change end (extend/shorten)"],
+  "ing.drag.confirm": [
+    "„{p0}“: {p1}\nBisher {p2} → neu {p3} ({p4}).\nÜbernehmen?",
+    "“{p0}”: {p1}\nWas {p2} → now {p3} ({p4}).\nApply?"
+  ],
+  "ing.drag.ok": ["Übernehmen", "Apply"],
+  "ing.drag.blocked": [
+    "Nach der Änderung ist die Aufnahme nicht mehr zugelassen: {p0}",
+    "After the change the recording is no longer admitted: {p0}"
+  ],
+  "ing.stopnow": ["Jetzt beenden", "End now"],
+  "ing.timeline.hint": [
+    "Balken ziehen: verschieben · Ränder ziehen: Start/Ende ändern · laufende Aufnahme: rechten Rand ziehen zum Verlängern, ■ zum sofortigen Beenden. Jede Änderung wird vorher abgefragt.",
+    "Drag a bar to move it · drag its edges to change start/end · running recording: drag the right edge to extend, ■ to end it right now. Every change is confirmed first."
+  ],
+  "ing.legend": ["Farben", "Colours"],
   "ing.abort": [
     "Abbrechen (laufend)",
     "Abort (running)"

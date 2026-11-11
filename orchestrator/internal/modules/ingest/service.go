@@ -479,15 +479,35 @@ func (s *Service) RescheduleJob(ctx context.Context, id, actor string, start tim
 	if durationS < 1 || durationS > 7*24*3600 {
 		return Decision{}, Job{}, &ValidationError{Problems: []string{"Dauer muss zwischen 1 s und 7 Tagen liegen"}}
 	}
-	_, err := s.St.Mutate(ctx, id, expectedRev, "verschoben durch "+actor, func(x *Job) (map[string]any, error) {
+	cur, err := s.St.GetJob(ctx, id)
+	if err != nil {
+		return Decision{}, Job{}, err
+	}
+	if cur.State == StStarting || cur.State == StRecording {
+		// Laufende Aufnahme: nur das Ende lässt sich ändern (Verlängern/Verkürzen); der Start bleibt.
+		end := start.UTC().Add(time.Duration(durationS) * time.Second)
+		if !end.After(s.now()) {
+			return Decision{}, Job{}, &ValidationError{Problems: []string{"Das neue Ende liegt in der Vergangenheit — zum sofortigen Beenden „Jetzt beenden“ verwenden"}}
+		}
+		out, err := s.St.Mutate(ctx, id, expectedRev, "Ende geändert durch "+actor, func(x *Job) (map[string]any, error) {
+			if x.State != StStarting && x.State != StRecording {
+				return nil, fmt.Errorf("%w: Zustand %s", ErrState, x.State)
+			}
+			x.PlannedEnd = end
+			return map[string]any{"end": end}, nil
+		})
+		if err != nil {
+			return Decision{}, Job{}, err
+		}
+		s.audit(actor, id, "extended", map[string]any{"end": end})
+		return Decision{Admit: true}, out, nil
+	}
+	_, err = s.St.Mutate(ctx, id, expectedRev, "verschoben durch "+actor, func(x *Job) (map[string]any, error) {
 		if x.State != StBlocked && x.State != StScheduled && x.State != StWaiting {
 			return nil, fmt.Errorf("%w: Zustand %s", ErrState, x.State)
 		}
 		x.PlannedStart, x.PlannedEnd = start.UTC(), start.UTC().Add(time.Duration(durationS)*time.Second)
 		x.Shifted, x.Ambiguous = false, false
-		if x.State != StBlocked && x.State != StScheduled {
-			return map[string]any{"start": x.PlannedStart, "durationS": durationS}, nil
-		}
 		return map[string]any{"start": x.PlannedStart, "durationS": durationS}, nil
 	})
 	if err != nil {

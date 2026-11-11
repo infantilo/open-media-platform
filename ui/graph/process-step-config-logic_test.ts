@@ -35,6 +35,7 @@ import {
   splitSeconds,
   toSeconds,
   triggerKinds,
+  mergeBusEvents,
   validateArgValue,
   variableOptions,
   genericScriptTaskById,
@@ -809,4 +810,18 @@ Deno.test("Untertitel-Schritt: Pflichtangabe Datei oder Asset, Ausgabefelder", a
   assertEquals(missingConfig({ id: "s", type: "subtitles", config: { file: "/a.mxf" } }), null);
   assertEquals(missingConfig({ id: "s", type: "subtitles", config: { assetId: "x" } }), null);
   assertEquals(outputFieldsFor({ id: "s", type: "subtitles" }).map((f) => f.path), ["srt", "playoutTrack", "speakers", "cues"]);
+});
+
+Deno.test("mergeBusEvents ergänzt den Katalog ohne Doppelte", () => {
+  const base = triggerKinds([], (s) => s);
+  const merged = mergeBusEvents(base, [
+    { id: "alarm.host-offline", subject: "omp.alarm.host-offline", group: "alarm", label: "Host offline", fields: [{ path: "message" }] },
+    { id: "x", subject: "omp.asset.*.created", group: "bus", label: "doppelt" },
+    { id: "bus", subject: "omp.neu.*", group: "bus", label: "omp.neu.*", observed: true },
+  ], "de");
+  const subjects = merged.map((k) => k.subject);
+  if (subjects.filter((s) => s === "omp.asset.*.created").length !== 1) throw new Error("Doppelt");
+  const a = merged.find((k) => k.id === "alarm.host-offline")!;
+  if (a.group !== "alarm" || a.inputFields[0].path !== "message") throw new Error("Alarm fehlt");
+  if (!subjects.includes("omp.neu.*")) throw new Error("beobachtet fehlt");
 });

@@ -63,6 +63,8 @@ type Sink struct {
 	StatusProvider func(Alert) *StatusReport
 	// MailProvider (optional) liefert den aktuellen Mailer je Zustellung und ersetzt Mail.
 	MailProvider func() *Mailer
+	// OnAlert (optional): wird für jeden nicht entprellten Alarm aufgerufen (Alarme als Bus-Ereignisse, Auslöser für Prozesse).
+	OnAlert func(Alert)
 	// Debounce: gleiche (Art, Gegenstand, Meldung) höchstens einmal in dieser Zeit.
 	Debounce time.Duration
 	// Retry: Wartezeiten zwischen den Versuchen (Länge = Zahl der Wiederholungen).
@@ -120,6 +122,9 @@ func (s *Sink) Send(a Alert) {
 	s.mu.Unlock()
 	if s.Resolve != nil && len(a.Workflows) == 0 {
 		a.Workflows = s.Resolve(a)
+	}
+	if s.OnAlert != nil {
+		s.OnAlert(a)
 	}
 	select {
 	case s.queue <- a:

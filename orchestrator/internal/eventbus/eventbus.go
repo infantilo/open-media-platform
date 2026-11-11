@@ -12,6 +12,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/events"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
@@ -68,6 +69,7 @@ func Connect(url string, hub *sse.Hub, onHealth func(nodeID string), onHostMetri
 
 	if _, err := nc.Subscribe(Subject, func(msg *nats.Msg) {
 		hub.Broadcast(sse.Event{Type: msg.Subject, Data: normalizePayload(msg.Data)})
+		events.Observe(msg.Subject, msg.Data)
 		if onHealth != nil && strings.HasPrefix(msg.Subject, healthSubjectPrefix) {
 			onHealth(strings.TrimPrefix(msg.Subject, healthSubjectPrefix))
 		}

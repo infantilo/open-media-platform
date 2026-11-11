@@ -143,3 +143,24 @@ Deno.test("Einstellungen: Prüfung meldet Endung, Nachbearbeitung, negativen Bed
   bad.leadTimeS = 5000;
   assertEquals(validateConfig(bad).map((x) => x.key), ["ing.cfg.err.lead", "ing.cfg.err.ext", "ing.cfg.err.convert", "ing.cfg.err.demand"]);
 });
+
+import { dragModes, dragResult } from "./ingest-logic.ts";
+
+Deno.test("dragModes: laufend nur Ende, geplant alles, sonst nichts", () => {
+  assertEquals(dragModes("recording"), ["end"]);
+  assertEquals(dragModes("scheduled"), ["move", "start", "end"]);
+  assertEquals(dragModes("completed"), []);
+});
+
+Deno.test("dragResult: einrasten, Mindestdauer, laufend nicht in die Vergangenheit", () => {
+  const j = { plannedStart: "2026-11-11T10:00:00Z", plannedEnd: "2026-11-11T11:00:00Z", state: "scheduled" };
+  const t = (s: string) => Date.parse(s);
+  const mv = dragResult(j, "move", 31 * 60000, 0);
+  assertEquals(mv.start, t("2026-11-11T10:30:00Z"));
+  assertEquals(mv.end, t("2026-11-11T11:30:00Z"));
+  assertEquals(dragResult(j, "end", 62 * 60000, 0).end, t("2026-11-11T12:00:00Z"));
+  assertEquals(dragResult(j, "end", -600 * 60000, 0).end, t("2026-11-11T10:01:00Z"));
+  assertEquals(dragResult(j, "start", 600 * 60000, 0).start, t("2026-11-11T10:59:00Z"));
+  const run = { ...j, state: "recording" };
+  assertEquals(dragResult(run, "end", -50 * 60000, t("2026-11-11T10:40:00Z")).end, t("2026-11-11T10:41:00Z"));
+});

@@ -146,6 +146,34 @@ export interface TriggerKind {
   label: string;
   subject: string; // NATS-Subject, "*" = beliebiges Asset
   inputFields: OutputField[]; // Felder des Ereignis-Payloads = input.*
+  group?: string; // Gruppe im Auswahlfeld (alarm, ingest, bus, …); fest eingebaute Asset-Ereignisse: "asset"
+}
+
+/** Ereignisart aus dem Katalog des Orchestrators (GET /api/v1/event-catalog). */
+export interface BusEvent {
+  id: string;
+  subject: string;
+  group: string;
+  label: string;
+  labelEn?: string;
+  fields?: { path: string; label?: string }[];
+  observed?: boolean;
+}
+
+/** Ergänzt die festen Auslöser um den dynamischen Katalog; Subjects, die schon vorkommen, bleiben unverändert. */
+export function mergeBusEvents(base: TriggerKind[], bus: BusEvent[], lang: string): TriggerKind[] {
+  const have = new Set(base.map((k) => k.subject));
+  const out = base.map((k) => ({ ...k, group: k.group ?? "asset" }));
+  for (const e of bus) {
+    if (have.has(e.subject)) continue;
+    have.add(e.subject);
+    const label = (lang === "en" && e.labelEn ? e.labelEn : e.label) || e.subject;
+    out.push({
+      id: e.id, subject: e.subject, group: e.group, label: e.observed ? e.subject : label,
+      inputFields: (e.fields ?? []).map((f) => ({ path: f.path, label: f.label ?? f.path })),
+    });
+  }
+  return out;
 }
 
 // Asset-Ereignisse aus orchestrator/internal/asset/store.go (enqueueEvent,

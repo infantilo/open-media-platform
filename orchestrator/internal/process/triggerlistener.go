@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/events"
 )
 
 // TriggerListener realisiert A8 "event -> workflow trigger": für jede
@@ -46,6 +48,7 @@ type TriggerListener struct {
 	mu       sync.Mutex
 	cancel   context.CancelFunc
 	done     chan struct{}
+	eval     Evaluator
 	active   map[string]context.CancelFunc // Schlüssel: ProcessVersionID + "#" + Trigger-Index
 	activeWG sync.WaitGroup
 	// stopped wird von Stop() unter mu gesetzt und von Sync() unter mu
@@ -230,6 +233,13 @@ func (tl *TriggerListener) Sync(ctx context.Context) error {
 // Trigger ein und verarbeitet Nachrichten, bis ctx endet.
 func (tl *TriggerListener) runConsumer(ctx context.Context, version ProcessVersion, trigger EventTrigger, index int) {
 	consumerName := fmt.Sprintf("trigger-%s-%d", version.ID, index)
+	if err := tl.ensureSubject(ctx, trigger.Subject); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		slog.Error("process: trigger listener: stream deckt Subject nicht ab", "version", version.ID, "subject", trigger.Subject, "error", err)
+		return
+	}
 	cons, err := tl.js.CreateOrUpdateConsumer(ctx, tl.streamName, jetstream.ConsumerConfig{
 		Durable:       consumerName,
 		FilterSubject: trigger.Subject,
@@ -263,6 +273,23 @@ func (tl *TriggerListener) handleMessage(version ProcessVersion, trigger EventTr
 	}
 	correlationID := fmt.Sprintf("trigger:%s:%d", version.ID, meta.Sequence.Stream)
 
+	if trigger.Filter != "" {
+		var payload any
+		if err := json.Unmarshal(msg.Data(), &payload); err != nil {
+			payload = string(msg.Data())
+		}
+		ok, err := tl.eval.EvalBool(trigger.Filter, map[string]any{"input": payload, "subject": msg.Subject()})
+		if err != nil {
+			slog.Warn("process: trigger listener: Filter nicht auswertbar, Ereignis übersprungen", "version", version.ID, "filter", trigger.Filter, "error", err)
+			_ = msg.Ack()
+			return
+		}
+		if !ok {
+			_ = msg.Ack()
+			return
+		}
+	}
+
 	existing, err := tl.store.ListExecutions(ExecutionFilter{
 		ProcessDefinitionID: version.ProcessDefinitionID,
 		CorrelationID:       correlationID,
@@ -292,4 +319,22 @@ func (tl *TriggerListener) handleMessage(version ProcessVersion, trigger EventTr
 		return
 	}
 	_ = msg.Ack()
+}
+
+// ensureSubject erweitert den Stream um das Subject des Auslösers, falls er es noch nicht abdeckt — so ist jedes Ereignis
+// (auch ein künftig neu auftauchendes) als Auslöser nutzbar, ohne dass der Stream vorab alles („omp.>“) mitschneidet.
+func (tl *TriggerListener) ensureSubject(ctx context.Context, subject string) error {
+	st, err := tl.js.Stream(ctx, tl.streamName)
+	if err != nil {
+		return err
+	}
+	cfg := st.CachedInfo().Config
+	for _, s := range cfg.Subjects {
+		if events.Covers(s, subject) {
+			return nil
+		}
+	}
+	cfg.Subjects = append(cfg.Subjects, subject)
+	_, err = tl.js.UpdateStream(ctx, cfg)
+	return err
 }

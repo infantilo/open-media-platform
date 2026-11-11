@@ -786,7 +786,7 @@ func (e *Engine) publishExecutionEvent(executionID, status string) {
 		return
 	}
 	subject := fmt.Sprintf("omp.process.%s.%s", executionID, status)
-	if err := e.events.Publish(subject, []byte(`{}`)); err != nil {
+	if err := e.events.Publish(subject, []byte(fmt.Sprintf(`{"executionId":%q,"status":%q}`, executionID, status))); err != nil {
 		slog.Warn("process: engine: publish execution event failed", "execution", executionID, "status", status, "error", err)
 	}
 }

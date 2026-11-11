@@ -67,6 +67,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 	extsvcmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/extsvc"
 	filesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/files"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/events"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
 	jobsmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/jobs"
 	audiorulesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/audiorules"
@@ -454,13 +455,14 @@ func main() {
 	// nicht erst gestartet.
 	var processJS jetstream.JetStream
 	if nc != nil {
+		events.SetPublisher(nc)
 		processJS, err = jetstream.New(nc)
 		if err != nil {
 			slog.Error("process: jetstream init failed, continuing without domain event delivery", "error", err)
 			processJS = nil
 		} else if _, err := outbox.EnsureStream(ctx, processJS, jetstream.StreamConfig{
 			Name:     processEventsStreamName,
-			Subjects: []string{"omp.asset.>", "omp.process.>", "omp.files.>"},
+			Subjects: []string{"omp.asset.>", "omp.process.>", "omp.files.>", "omp.alarm.>", "omp.ingest.>"},
 			MaxAge:   processEventsRetention,
 			Storage:  jetstream.FileStorage,
 			// Gleiche Replikationstiefe wie OMP_LOGS/der 3-Knoten-NATS-
@@ -1002,6 +1004,8 @@ func main() {
 	}
 	alertSink = alertsink.NewWithMail(os.Getenv("OMP_ALERT_WEBHOOK_URL"), os.Getenv("OMP_ALERT_WEBHOOK_TOKEN"), alertMailer)
 	if sink := alertSink; sink != nil {
+		// Jeder Alarm ist zugleich ein Bus-Ereignis „omp.alarm.<Art>“ und damit als Auslöser für Prozesse wählbar.
+		sink.OnAlert = func(a alertsink.Alert) { events.Emit("omp.alarm."+a.Kind, a) }
 		if alertMailStore != nil {
 			sink.MailProvider = alertMailStore.Current
 		}

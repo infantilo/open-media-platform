@@ -7,7 +7,7 @@ import { planSummary } from "./audio-plan-logic.ts";
 import { openSettingsForm } from "./settings-form.ts";
 import type { IngestConfig } from "./settings-logic.ts";
 import {
-  actionKey, canAbort, canCancel, fmtDuration, fmtInZone, groupLanes, type HostView, isRunning, isTerminal, type Job, layoutBars, RESOURCE_UNITS, resourceLevel, stateColor, ticks,
+  actionKey, canAbort, canCancel, type DragMode, dragModes, dragResult, fmtDuration, fmtInZone, groupLanes, type HostView, isRunning, isTerminal, type Job, layoutBars, RESOURCE_UNITS, resourceLevel, stateColor, ticks,
   usageSeries, type Verdict,
 } from "./ingest-logic.ts";
 
@@ -59,6 +59,7 @@ class IngestView extends HTMLElement {
   #stateFilter = "";
   #timer = 0;
   #pendingRender = false;
+  #dragging = false;
   #focusHooked = false;
   #loaded = false;
   #root = el("div");
@@ -120,6 +121,7 @@ class IngestView extends HTMLElement {
   }
 
   async #refresh() {
+    if (this.#dragging) return;
     const now = new Date();
     const from = new Date(now.getTime() - 3600000);
     from.setMinutes(0, 0, 0);
@@ -239,7 +241,15 @@ class IngestView extends HTMLElement {
     const to = Date.parse(cap.to);
     const sec = el("div", "margin-bottom:14px;");
     sec.dataset.role = "timeline";
-    sec.append(el("div", "font-weight:600;margin-bottom:4px;", tt("ing.timeline")));
+    sec.append(el("div", "font-weight:600;margin-bottom:2px;", tt("ing.timeline")));
+    sec.append(el("div", "font-size:11px;color:var(--omp-text-dim);margin-bottom:6px;", tt("ing.timeline.hint")));
+    const legend = el("div", "display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;margin:0 0 6px 150px;");
+    for (const st of ["scheduled", "recording", "starting", "blocked", "failed", "completed", "cancelled"]) {
+      const li = el("span", "display:inline-flex;align-items:center;gap:4px;color:var(--omp-text-dim);");
+      li.append(el("span", `display:inline-block;width:10px;height:10px;border-radius:2px;background:${stateColor(st)};`), document.createTextNode(tt("ing.state." + st)));
+      legend.append(li);
+    }
+    sec.append(legend);
     const axis = el("div", "position:relative;height:18px;margin-left:150px;border-bottom:1px solid var(--omp-border);");
     for (const t of ticks(from, to)) {
       const x = ((t.t - from) / (to - from)) * 100;
@@ -258,15 +268,7 @@ class IngestView extends HTMLElement {
       row.append(el("div", `width:150px;flex:none;font-size:12px;padding:4px 6px 0 0;${k === "__blocked" ? "color:var(--omp-error);" : ""}`, label));
       const track = el("div", `position:relative;flex:1;height:${n * 24 + 6}px;background:${k === "__blocked" ? "repeating-linear-gradient(45deg,rgba(239,83,80,.07) 0 8px,transparent 8px 16px)" : "transparent"};`);
       for (const t of ticks(from, to)) track.append(el("div", `position:absolute;top:0;bottom:0;left:${((t.t - from) / (to - from)) * 100}%;border-left:1px solid ${t.major ? "var(--omp-border)" : "rgba(255,255,255,.04)"};`));
-      for (const b of bars) {
-        const d = el("div", `position:absolute;top:${3 + b.lane * 24}px;height:20px;left:${b.left}%;width:${b.width}%;background:${stateColor(b.job.state)};opacity:${isTerminal(b.job.state) ? 0.45 : 0.9};border-radius:3px;font-size:11px;line-height:20px;padding:0 4px;overflow:hidden;white-space:nowrap;color:#fff;cursor:pointer;box-sizing:border-box;${b.job.state === "blocked" ? "outline:1px dashed #fff;" : ""}`,
-          b.job.name);
-        d.dataset.job = b.job.id;
-        d.dataset.state = b.job.state;
-        d.title = `${b.job.name}\n${fmtInZone(b.job.plannedStart, b.job.tz, dateLocale())} – ${fmtInZone(b.job.plannedEnd, b.job.tz, dateLocale(), false)} (${b.job.tz})\n${tt("ing.state." + b.job.state)}`;
-        d.addEventListener("click", () => void this.#jobDialog(b.job.id));
-        track.append(d);
-      }
+      for (const b of bars) track.append(this.#bar(b.job, b.left, b.width, b.lane, b.clippedLeft, b.clippedRight, from, to, track));
       const now = Date.now();
       if (now >= from && now <= to) track.append(el("div", `position:absolute;top:0;bottom:0;left:${((now - from) / (to - from)) * 100}%;border-left:2px solid var(--omp-onair);pointer-events:none;`));
       row.append(track);
@@ -274,6 +276,103 @@ class IngestView extends HTMLElement {
     }
     if (!cap.jobs.length) sec.append(el("div", "color:var(--omp-text-dim);padding:10px 0;", tt("ing.none")));
     return sec;
+  }
+
+  /** Ein Balken der Zeitleiste mit Griffen (Ziehen), Zeitangabe und — bei laufender Aufnahme — „Jetzt beenden“. */
+  #bar(job: Job, left: number, width: number, lane: number, clipL: boolean, clipR: boolean, from: number, to: number, track: HTMLElement): HTMLElement {
+    const editable = dragModes(job.state).length > 0 && this.#can("ingest.job.control") && this.#mayAct(job.owner, job.ownerGroup);
+    const modes = editable ? dragModes(job.state) : [];
+    const d = el("div", `position:absolute;top:${3 + lane * 24}px;height:20px;left:${left}%;width:${width}%;background:${stateColor(job.state)};opacity:${isTerminal(job.state) ? 0.45 : 0.9};` +
+      `border-radius:${clipL ? 0 : 3}px ${clipR ? 0 : 3}px ${clipR ? 0 : 3}px ${clipL ? 0 : 3}px;font-size:11px;line-height:20px;overflow:hidden;white-space:nowrap;color:#fff;cursor:${modes.includes("move") ? "grab" : "pointer"};` +
+      `box-sizing:border-box;user-select:none;touch-action:none;${job.state === "blocked" ? "outline:1px dashed #fff;" : ""}`);
+    d.dataset.job = job.id;
+    d.dataset.state = job.state;
+    const label = el("span", "padding:0 8px;pointer-events:none;");
+    label.textContent = job.name;
+    d.append(label);
+    const tip = () => `${job.name}\n${fmtInZone(job.plannedStart, job.tz, dateLocale())} – ${fmtInZone(job.plannedEnd, job.tz, dateLocale(), false)} (${job.tz})\n${tt("ing.state." + job.state)}`;
+    d.title = tip();
+    let moved = false;
+    d.addEventListener("click", () => {
+      if (!moved) void this.#jobDialog(job.id);
+      moved = false;
+    });
+    if (modes.includes("start")) d.append(this.#handle("left", d, job, "start", from, to, track, () => (moved = true)));
+    if (modes.includes("end")) d.append(this.#handle("right", d, job, "end", from, to, track, () => (moved = true)));
+    if (modes.includes("move")) d.addEventListener("pointerdown", (ev) => { if (ev.target === d || ev.target === label) this.#drag(ev, d, job, "move", from, to, track, () => (moved = true)); });
+    if (canAbort(job.state) && editable) {
+      const stop = el("span", "position:absolute;right:8px;top:0;padding:0 5px;cursor:pointer;background:rgba(0,0,0,.35);border-radius:3px;", "■");
+      stop.dataset.role = "stop-now";
+      stop.title = tt("ing.stopnow");
+      stop.addEventListener("pointerdown", (e) => e.stopPropagation());
+      stop.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void this.#cancel(job);
+      });
+      d.append(stop);
+    }
+    return d;
+  }
+
+  #handle(side: "left" | "right", bar: HTMLElement, job: Job, mode: DragMode, from: number, to: number, track: HTMLElement, onMove: () => void): HTMLElement {
+    const h = el("div", `position:absolute;top:0;bottom:0;${side}:0;width:7px;cursor:ew-resize;background:rgba(255,255,255,.25);`);
+    h.dataset.handle = mode;
+    h.addEventListener("pointerdown", (ev) => this.#drag(ev, bar, job, mode, from, to, track, onMove));
+    return h;
+  }
+
+  #drag(ev: PointerEvent, bar: HTMLElement, job: Job, mode: DragMode, from: number, to: number, track: HTMLElement, onMove: () => void) {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const msPerPx = (to - from) / track.getBoundingClientRect().width;
+    const x0 = ev.clientX;
+    const pct = (t: number) => ((t - from) / (to - from)) * 100;
+    let cur = dragResult(job, mode, 0, Date.now());
+    let dragging = false;
+    this.#dragging = true;
+    const move = (e: PointerEvent) => {
+      if (!dragging && Math.abs(e.clientX - x0) < 4) return;
+      dragging = true;
+      onMove();
+      cur = dragResult(job, mode, (e.clientX - x0) * msPerPx, Date.now());
+      const l = Math.max(0, pct(cur.start));
+      const r = Math.min(100, pct(cur.end));
+      bar.style.left = `${l}%`;
+      bar.style.width = `${Math.max(0.15, r - l)}%`;
+      bar.title = `${fmtInZone(new Date(cur.start).toISOString(), job.tz, dateLocale())} – ${fmtInZone(new Date(cur.end).toISOString(), job.tz, dateLocale(), false)}`;
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      this.#dragging = false;
+      if (!dragging) return;
+      void this.#applyDrag(job, mode, cur);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  async #applyDrag(job: Job, mode: DragMode, r: { start: number; end: number }) {
+    const unchanged = r.start === Date.parse(job.plannedStart) && r.end === Date.parse(job.plannedEnd);
+    if (!unchanged) {
+      const fmt = (s: string | number) => fmtInZone(new Date(s).toISOString(), job.tz, dateLocale());
+      const msg = tt("ing.drag.confirm", {
+        p0: job.name, p1: tt(mode === "move" ? "ing.drag.move" : mode === "start" ? "ing.drag.start" : "ing.drag.end"),
+        p2: `${fmt(job.plannedStart)} – ${fmtInZone(job.plannedEnd, job.tz, dateLocale(), false)}`,
+        p3: `${fmt(r.start)} – ${fmtInZone(new Date(r.end).toISOString(), job.tz, dateLocale(), false)}`, p4: fmtDuration((r.end - r.start) / 1000),
+      });
+      if (await confirmDialog(msg, { confirmLabel: tt("ing.drag.ok") })) {
+        const res = await api<{ decision?: { admit: boolean; verdicts?: Verdict[] } }>("POST", `/jobs/${job.id}/reschedule`, {
+          start: new Date(r.start).toISOString(), durationS: Math.round((r.end - r.start) / 1000), expectedRevision: job.revision,
+        });
+        if (!res.ok) showToast(errText(res.data) || tt("ing.err"));
+        else if (res.data.decision && !res.data.decision.admit) showToast(tt("ing.drag.blocked", { p0: res.data.decision.verdicts?.[0]?.message ?? "" }));
+      }
+    }
+    void this.#refresh();
   }
 
   // ---- Kapazität je Ressourcenart -------------------------------------------------------------------------------------

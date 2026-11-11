@@ -12,6 +12,7 @@ import { createDeckToggle } from "./streamdeck/panel.ts";
 import type { FlowCanvas } from "../graph/flow-canvas.ts";
 import "./hosts-view.ts";
 import "./workflows-view.ts";
+import { WorkflowPicker } from "./workflow-picker.ts";
 import "./process-view.ts";
 import "./asset-view.ts";
 import "./instances-view.ts";
@@ -134,7 +135,7 @@ class AppShell extends HTMLElement {
   // ersetzt sie per replaceChildren), eine dort gehaltene Auswahl ginge
   // sonst bei jedem Verlassen des Flow-Editor-Tabs verloren.
   #workflowFilter: string | null = null;
-  #workflowSelect!: HTMLSelectElement;
+  #workflowPicker!: WorkflowPicker;
   // Bug 2: workflows-view.ts feuert dieses Event (bubbles:true) mit der
   // Workflow-ID als detail, wenn der Nutzer dort "Im Flow-Editor
   // bearbeiten" klickt. #switchTab("flow") ersetzt die Tab-Kachel
@@ -277,28 +278,9 @@ class AppShell extends HTMLElement {
   }
 
   #renderWorkflowOptions(list: WorkflowOption[]) {
-    const select = this.#workflowSelect;
-    const previousValue = select.value;
-    select.replaceChildren();
-
-    const allOpt = document.createElement("option");
-    allOpt.value = "";
-    allOpt.textContent = tt("aps.00a8fd");
-    select.appendChild(allOpt);
-
-    for (const wf of list) {
-      const opt = document.createElement("option");
-      opt.value = wf.id;
-      opt.textContent = wf.definition.title || wf.name;
-      select.appendChild(opt);
-    }
-
-    // Auswahl erhalten, solange der Workflow noch existiert — verschwindet
-    // er (gestoppt+gelöscht), fällt die Auswahl auf "Alle" zurück statt
-    // einen toten Filter stillschweigend weiter anzuwenden.
-    if (list.some((wf) => wf.id === previousValue)) {
-      select.value = previousValue;
-    } else if (this.#workflowFilter !== null) {
+    // Auswahl bleibt erhalten, solange der Workflow existiert — sonst fällt sie auf "Alle" zurück statt einen toten Filter anzuwenden.
+    const still = this.#workflowPicker.setOptions(list.map((wf) => ({ id: wf.id, label: wf.definition.title || wf.name })));
+    if (!still && this.#workflowFilter !== null) {
       this.#workflowFilter = null;
       this.#applyWorkflowFilter();
     }
@@ -338,15 +320,13 @@ class AppShell extends HTMLElement {
     // S6: Workflow-Auswahl in der App-Bar — wirkt nur auf den Flow-
     // Editor-Tab (s. #switchTab/FlowCanvas.setWorkflowFilter), bleibt
     // aber über Tab-Wechsel hinweg erhalten (s. #workflowFilter-Doku).
-    const workflowSelect = document.createElement("select");
-    workflowSelect.setAttribute("data-role", "workflow-filter-select");
-    workflowSelect.style.cssText = "font-size:var(--omp-font-size-xs);";
-    workflowSelect.addEventListener("change", () => {
-      this.#workflowFilter = workflowSelect.value || null;
+    const picker = new WorkflowPicker();
+    picker.onChange = (id) => {
+      this.#workflowFilter = id || null;
       this.#applyWorkflowFilter();
-    });
-    this.#workflowSelect = workflowSelect;
-    right.appendChild(workflowSelect);
+    };
+    this.#workflowPicker = picker;
+    right.appendChild(picker.element);
 
     const pill = document.createElement("span");
     pill.setAttribute("data-role", "connection-pill");

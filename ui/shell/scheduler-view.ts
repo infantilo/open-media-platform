@@ -1263,6 +1263,28 @@ class SchedulerView extends HTMLElement {
       this.#deleteSchedules(wf, ids);
     });
     el.appendChild(delBtn);
+    // „Jetzt beenden“ nur an dem Balken, der gerade läuft (Workflow gestartet und jetzt innerhalb des Balkens).
+    if (wf.status === "started" || wf.status === "starting") {
+      const nowD = new Date();
+      const dates = this.#visibleDates();
+      const di = dates.findIndex((d) => d.toDateString() === nowD.toDateString());
+      const nowAbs = di * DAY_MINUTES + nowD.getHours() * 60 + nowD.getMinutes();
+      if (di >= 0 && nowAbs >= fullLeft && nowAbs <= fullRight) {
+        const stopBtn = document.createElement("span");
+        stopBtn.dataset.role = "stop-now";
+        stopBtn.textContent = "■";
+        stopBtn.title = tt("sched.stopNow");
+        stopBtn.style.cssText =
+          "position:absolute;left:1px;top:-1px;font-size:11px;color:var(--omp-error,#ef5350);cursor:pointer;" +
+          "background:rgba(0,0,0,0.5);border-radius:2px;padding:0 3px;line-height:1.3;";
+        stopBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+        stopBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          void this.#stopNow(wf);
+        });
+        el.appendChild(stopBtn);
+      }
+    }
     el.addEventListener("pointerenter", () => (delBtn.style.opacity = "1"));
     el.addEventListener("pointerleave", () => (delBtn.style.opacity = "0.6"));
 
@@ -1470,8 +1492,7 @@ class SchedulerView extends HTMLElement {
       // speichern, wenn sich tatsächlich etwas verschoben hat.
       if (currentLeft !== originalLeft || currentRight !== originalRight) {
         const next = this.#dragSchedules(wf, bar, currentLeft, currentRight, mode);
-        this.#warnNewBottlenecks(wf, next);
-        void this.#persist(wf, next);
+        void this.#confirmMove(wf, next, currentLeft, currentRight, originalLeft, originalRight);
       } else {
         this.#repaintResources();
       }
@@ -1480,6 +1501,34 @@ class SchedulerView extends HTMLElement {
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);
     el.addEventListener("pointercancel", onUp);
+  }
+
+  // Abfrage nach dem Ziehen (Verschieben/Verlängern/Verkürzen): zeigt alte und neue Zeit samt neu entstehender Engpässe;
+  // erst „Übernehmen“ speichert, sonst springt der Balken zurück.
+  async #confirmMove(wf: Workflow, next: Schedule[], newL: number, newR: number, oldL: number, oldR: number) {
+    const span = (l: number, r: number) => `${fmtMinutes(((l % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES)}–${fmtMinutes(((r % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES)}`;
+    const kind = newL === oldL ? tt("sched.mv.extend") : newR === oldR ? tt("sched.mv.start") : tt("sched.mv.move");
+    const parts = this.#newBottleneckParts(wf, next);
+    let msg = tt("sched.mv.confirm", { p0: wf.name, p1: kind, p2: span(oldL, oldR), p3: span(newL, newR) });
+    if (parts.length) msg += "\n\n" + tt("sched.48bff0", { p0: parts.join(" · ") });
+    if (await confirmDialog(msg, { confirmLabel: tt("sched.mv.ok") })) await this.#persist(wf, next);
+    else await this.#poll();
+  }
+
+  // „Jetzt beenden“: der laufende Workflow wird sofort gestoppt (ohne Zeitplan zu ändern).
+  async #stopNow(wf: Workflow) {
+    if (!(await confirmDialog(tt("sched.stopNow.confirm", { p0: wf.name }), { confirmLabel: tt("sched.stopNow") }))) return;
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${wf.id}/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      if (!res.ok) showToast(tt("sched.616d9c", { p0: await res.text() }));
+    } catch (err) {
+      showToast(tt("sched.616d9c", { p0: err }));
+    }
+    await this.#poll();
   }
 
   // Liefert die Zeitpläne des Workflows mit der gezogenen Position

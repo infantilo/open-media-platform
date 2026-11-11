@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/events"
 	"strings"
 	"time"
 
@@ -391,7 +392,19 @@ func (s *Store) Mutate(ctx context.Context, id string, expectedRev int, msg stri
 		return j, err
 	}
 	j.Revision++
+	if j.State != before {
+		emitJobState(j, before)
+	}
 	return j, nil
+}
+
+// emitJobState veröffentlicht den Zustandswechsel eines Auftrags als Bus-Ereignis „omp.ingest.<Auftrag>.<Zustand>“
+// (Auslöser für Prozesse, z. B. „Aufnahme beendet“).
+func emitJobState(j Job, from string) {
+	events.Emit("omp.ingest."+j.ID+"."+j.State, map[string]any{
+		"jobId": j.ID, "name": j.Name, "state": j.State, "previousState": from, "scheduleId": j.ScheduleID, "assetId": j.AssetID,
+		"hostId": j.HostID, "error": j.Error, "plannedStart": j.PlannedStart, "plannedEnd": j.PlannedEnd,
+	})
 }
 
 // ---- Reservierungen & Zulassung ------------------------------------------------------------------------------------
@@ -515,6 +528,9 @@ func (s *Store) Admit(ctx context.Context, jobID string, hosts []HostCap, demand
 		return d, j, err
 	}
 	got, err := s.GetJob(ctx, jobID)
+	if err == nil && newState != before {
+		emitJobState(got, before)
+	}
 	return d, got, err
 }
 

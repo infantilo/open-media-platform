@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/events"
 	"io"
 	"log/slog"
 	"os"
@@ -175,6 +176,18 @@ func diskFreeGB(dir string) float64 {
 		return 0
 	}
 	return float64(st.Bavail) * float64(st.Bsize) / 1e9
+}
+
+func init() {
+	f := []events.Field{{Path: "jobId", Label: "Auftrag"}, {Path: "name", Label: "Name"}, {Path: "state", Label: "Zustand"}, {Path: "previousState", Label: "Vorheriger Zustand"},
+		{Path: "scheduleId", Label: "Zeitplan"}, {Path: "assetId", Label: "Asset"}, {Path: "hostId", Label: "Host"}, {Path: "error", Label: "Fehler"}}
+	for _, st := range []struct{ state, label string }{
+		{StScheduled, "Aufnahme eingeplant"}, {StBlocked, "Aufnahme nicht zugelassen"}, {StWaiting, "Aufnahme wartet auf Ressourcen"}, {StStarting, "Aufnahme startet"},
+		{StRecording, "Aufnahme läuft"}, {StFinalizing, "Aufnahme beendet (wird gesichert)"}, {StProcessing, "Aufnahme wird nachbearbeitet"},
+		{StCompleted, "Aufnahme abgeschlossen"}, {StFailed, "Aufnahme fehlgeschlagen"}, {StCancelled, "Aufnahme abgebrochen"},
+	} {
+		events.Register(events.Info{ID: "ingest." + st.state, Subject: "omp.ingest.*." + st.state, Group: "ingest", Label: st.label, Fields: f})
+	}
 }
 
 func (m *Module) Mount(r module.Routes, d module.Deps) error {

@@ -886,6 +886,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/event-catalog",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/events",
     "auth": "auth",
     "domain": "core"
