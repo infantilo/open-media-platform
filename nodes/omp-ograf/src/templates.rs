@@ -186,6 +186,7 @@ fn content_type_for(path: &Path) -> &'static str {
 pub fn ensure_builtin_paternoster_frame(templates_root: &Path) {
     let dir = templates_root.join("paternoster-frame");
     if dir.join("paternoster-frame.ograf.json").exists() {
+        upgrade_old_builtin_manifest(&dir.join("paternoster-frame.ograf.json"), include_str!("../builtin/paternoster-frame/paternoster-frame.ograf.json"));
         return;
     }
     if std::fs::create_dir_all(&dir).is_ok() {
@@ -194,10 +195,21 @@ pub fn ensure_builtin_paternoster_frame(templates_root: &Path) {
     }
 }
 
+/// Ältere Installationen tragen das früher mitgelieferte Manifest (Feld `designWidth` ohne `v_`, keine `v_omp_zones`): nur dieses
+/// Manifest wird durch das heutige, normtreue ersetzt. Ein Manifest ohne diese Kennzeichen (vom Nutzer geändert) bleibt unberührt.
+fn upgrade_old_builtin_manifest(path: &Path, current: &str) {
+    let Ok(raw) = std::fs::read_to_string(path) else { return };
+    let Ok(json) = serde_json::from_str::<Value>(&raw) else { return };
+    if json.get("designWidth").is_some() && json.get("v_omp_zones").is_none() {
+        let _ = std::fs::write(path, current);
+    }
+}
+
 /// Mitgelieferte PIP-Wand (Hintergrund, Rahmen, Beschriftung für drei PIP-Fenster; Layout-Kopplung `follow`).
 pub fn ensure_builtin_pip_wall(templates_root: &Path) {
     let dir = templates_root.join("pip-wall");
     if dir.join("pip-wall.ograf.json").exists() {
+        upgrade_old_builtin_manifest(&dir.join("pip-wall.ograf.json"), include_str!("../builtin/pip-wall/pip-wall.ograf.json"));
         return;
     }
     if std::fs::create_dir_all(&dir).is_ok() {
@@ -282,5 +294,26 @@ mod zone_tests {
         }
         assert_eq!(zones["pip-wall"], vec!["pip1", "pip2", "pip3"]);
         assert_eq!(zones["paternoster-frame"], vec!["window"]);
+    }
+}
+
+#[cfg(test)]
+mod upgrade_tests {
+    use super::*;
+
+    #[test]
+    fn old_builtin_manifest_is_replaced_but_user_edits_stay() {
+        let dir = std::env::temp_dir().join(format!("omp-ograf-upg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("pip-wall")).unwrap();
+        let p = dir.join("pip-wall").join("pip-wall.ograf.json");
+        std::fs::write(&p, r#"{"id":"pip-wall","designWidth":1920}"#).unwrap();
+        ensure_builtin_pip_wall(&dir);
+        let now: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert!(now.get("designWidth").is_none() && now["v_omp_zones"].is_array());
+        std::fs::write(&p, r#"{"id":"pip-wall","name":"meins"}"#).unwrap(); // vom Nutzer geändert: bleibt
+        ensure_builtin_pip_wall(&dir);
+        assert!(std::fs::read_to_string(&p).unwrap().contains("meins"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
