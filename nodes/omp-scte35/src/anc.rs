@@ -5,9 +5,9 @@
 
 pub const DID_SCTE104: u8 = 0x41;
 pub const SDID_SCTE104: u8 = 0x07;
-pub use omp_mediaio::anc::{AncPacket, GRAIN_SIZE, mxl_grain, rfc8331_packet, with_parity};
+pub use omp_mediaio::anc::{AncPacket, mxl_grain};
 #[cfg(test)]
-pub use omp_mediaio::anc::{HEADER_LEN, parse_mxl_grain};
+pub use omp_mediaio::anc::{GRAIN_SIZE, HEADER_LEN, parse_mxl_grain, rfc8331_packet, with_parity};
 
 /// Nutzdaten (Nachrichtenbytes) je ANC-Paket: 255 Wörter minus Payload Descriptor.
 pub const MAX_MESSAGE_BYTES_PER_PACKET: usize = 254;

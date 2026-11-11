@@ -9,7 +9,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-async-nats = "0.49.1"
+async-nats = "0.52.0"
 # Nur fürs `Stream`-Trait (`Subscriber::next()`, `subscribe_tally`,
 # UMSETZUNG.md C11) — bereits transitive Abhängigkeit von async-nats/tokio
 # (siehe Cargo.lock), hier nur explizit gemacht statt neu eingeführt;
