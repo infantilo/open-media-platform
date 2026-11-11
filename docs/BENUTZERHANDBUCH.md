@@ -2606,7 +2606,7 @@ ein: Host:Port) —, den Audiomischer (Anzeigename) eintragen, „Speichern und 
 
 **Andere MIDI-Geräte:** Betriebsart „Generisches Profil“: ein JSON ordnet Regler und Tasten Methoden zu (absolut, Taste, Umschalter, relativer Drehgeber). Im Browser findet „Lernen“ den nächsten Regler am Gerät.
 
-**Ohne Gerät ausprobieren:** „Simulator starten“ (Browser) bzw. Einheit „Simulator“ (Gateway): ein virtuelles Pult mit Fadern, Tasten und Anzeige. **Hinweis:** getestet ist alles mit dem Simulator; an einem echten Pult ist es noch nicht erprobt
+**Ohne Gerät ausprobieren:** „Simulator starten“ (Browser) bzw. Einheit „Simulator“ (Gateway): ein virtuelles Pult mit Fadern (wie die Fader im Audiomischer: ziehen, Shift/seitlich = fein, Doppelklick = 0 dB), Tasten, Funktionsfeld, Jog-Rad und Anzeige. Die Fader des Pults und die Bildschirm-Fader des Mischers haben dieselbe Kennlinie. **Hinweis:** getestet ist alles mit dem Simulator; an einem echten Pult ist es noch nicht erprobt
 (Betriebsart am Gerät auf „Mackie Control“ stellen; Auffälligkeiten bitte melden).
 
 ## 10h. ffmpeg-Jobs: wo sie laufen und wie die Sendung geschützt wird

@@ -585,6 +585,15 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   (`docs/NODE-TUTORIAL.md`, "Stream-Deck-Belegung"). Verified against the simulator and the real stack; not yet tried on the physical device
 
   ![Stream Deck XL (simulator): OGraf page with one graphic on air](docs/screenshots/streamdeck-xl-ograf-onair.png)
+- **MIDI control surfaces (Mackie Control, browser and gateway node)** — motorised-fader surfaces such as the iCON P1-M/V1-M with their P1-X/V1-X extenders
+  operate the audio mixer: faders (motor follows the mixer, never fights a touching finger; same fader law as the on-screen faders), mute, solo (= PFL),
+  select, knobs (= pan), bank/channel keys, channel names and levels on the display, REC lamp = on air, master fader on an aux bus. The right-hand section is
+  configurable: function keys F1–F8 in pages (acting on the selected channel, LED = state, `{ch}` templates, calls to other nodes), fixed keys, a jog wheel with
+  switchable modes (level, channel select, any parameter) and an additional profile for pads and knobs the device sends as plain MIDI. Two ways with one logic:
+  **browser** (Web MIDI, USB, button "MIDI" in the app bar) and the **`omp-midi-gateway` node** (kernel USB raw devices, **RTP-MIDI** per RFC 6295 with an AppleMIDI session,
+  runs without a browser on any host; unmapped keys become NATS events that can trigger workflows). A generic **profile mode** maps any MIDI controller (CC/note/pitch bend,
+  absolute/toggle/relative) to node methods. Both paths have a **simulator surface**; TypeScript and Rust share their test vectors (`docs/midi/`). The Mackie protocol
+  is unpublished (sources and gaps in `docs/CONTRACT-MIDI.md`) and **everything is verified with the simulator only — not yet on a physical surface**
 - **omp-scope** — a passive measurement tap (taps a video and/or an
   audio flow, sends nothing itself): waveform/vectorscope, EBU R 128
   loudness with ITU-R BS.1770 true peak, held black/freeze/silence
