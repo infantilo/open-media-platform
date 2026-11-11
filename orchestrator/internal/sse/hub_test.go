@@ -195,3 +195,23 @@ func TestHubClientsListsIdentifiedOnly(t *testing.T) {
 		t.Fatal("expected empty after cancel")
 	}
 }
+
+func TestHubKick(t *testing.T) {
+	h := NewHub()
+	ch1, _ := h.SubscribeInfo(ClientInfo{User: "anna", RemoteIP: "1.1.1.1"})
+	_, _ = h.SubscribeInfo(ClientInfo{User: "anna", RemoteIP: "1.1.1.2"})
+	_, _ = h.SubscribeInfo(ClientInfo{User: "bob", RemoteIP: "1.1.1.3"})
+	id := h.Clients()[0].ID
+	if id == "" || !h.Kick(id) || h.Kick(id) {
+		t.Fatal("kick by id")
+	}
+	if _, open := <-ch1; open {
+		t.Fatal("channel should be closed after kick")
+	}
+	if n := h.KickUser("anna"); n != 1 {
+		t.Fatalf("kickUser=%d", n)
+	}
+	if h.ClientCount() != 1 || h.TotalKicks() != 2 {
+		t.Fatalf("count=%d kicks=%d", h.ClientCount(), h.TotalKicks())
+	}
+}

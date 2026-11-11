@@ -42,6 +42,12 @@
     "domain": "core"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/admin/clients/{id}/disconnect",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/admin/cluster-rollout",
     "auth": "verb:Admin",

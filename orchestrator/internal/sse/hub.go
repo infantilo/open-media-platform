@@ -4,6 +4,8 @@
 package sse
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"sort"
 	"sync"
@@ -12,6 +14,7 @@ import (
 
 // ClientInfo beschreibt einen verbundenen SSE-Client für die Admin-Ansicht.
 type ClientInfo struct {
+	ID        string    `json:"id"`
 	User      string    `json:"user"`
 	RemoteIP  string    `json:"remoteIp"`
 	UserAgent string    `json:"userAgent"`
@@ -63,6 +66,8 @@ type Hub struct {
 	totalDrops uint64
 	// info hält je Client die Verbindungsdaten (nur für Clients, die über SubscribeInfo kamen).
 	info map[chan Event]ClientInfo
+	// totalKicks zählt vom Admin getrennte Clients seit Prozessstart.
+	totalKicks uint64
 }
 
 // NewHub erstellt einen leeren Hub.
@@ -88,6 +93,9 @@ func (h *Hub) SubscribeInfo(ci ClientInfo) (<-chan Event, func()) {
 	h.mu.Lock()
 	h.clients[ch] = struct{}{}
 	if ci.User != "" || ci.RemoteIP != "" {
+		var b [6]byte
+		_, _ = rand.Read(b[:])
+		ci.ID = hex.EncodeToString(b[:])
 		h.info[ch] = ci
 	}
 	h.mu.Unlock()
@@ -156,6 +164,53 @@ func (h *Hub) Clients() []ClientInfo {
 	h.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Since.Before(out[j].Since) })
 	return out
+}
+
+// Kick trennt den Client mit dieser ID (schließt seinen Kanal; der SSE-Handler beendet daraufhin den
+// Stream). Liefert false, wenn es ihn nicht (mehr) gibt. Der Browser baut den Stream von selbst wieder auf,
+// solange seine Anmeldung gültig ist.
+func (h *Hub) Kick(id string) bool {
+	h.mu.Lock()
+	var target chan Event
+	for ch, ci := range h.info {
+		if ci.ID == id {
+			target = ch
+			break
+		}
+	}
+	if target != nil {
+		h.totalKicks++
+	}
+	h.mu.Unlock()
+	if target == nil {
+		return false
+	}
+	h.unsubscribe(target)
+	return true
+}
+
+// KickUser trennt alle Clients eines Benutzers und liefert deren Anzahl.
+func (h *Hub) KickUser(user string) int {
+	h.mu.Lock()
+	var targets []chan Event
+	for ch, ci := range h.info {
+		if ci.User == user {
+			targets = append(targets, ch)
+		}
+	}
+	h.totalKicks += uint64(len(targets))
+	h.mu.Unlock()
+	for _, ch := range targets {
+		h.unsubscribe(ch)
+	}
+	return len(targets)
+}
+
+// TotalKicks liefert die Anzahl vom Admin getrennter Clients seit Prozessstart.
+func (h *Hub) TotalKicks() uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.totalKicks
 }
 
 // TotalDrops liefert die kumulative Anzahl fehlgeschlagener

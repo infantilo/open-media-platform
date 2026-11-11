@@ -2,10 +2,14 @@
 // (Event-Streams des Orchestrators), mit Benutzer, Adresse und Verbindungsdauer.
 import { t } from "./i18n.ts";
 import { apiFetch } from "./connection.ts";
+import { confirmDialog } from "../kit/omp-confirm.ts";
+import { showToast } from "../kit/omp-toast.ts";
+import { shortBrowser, showAddress } from "./clients-logic.ts";
 
 const REFRESH_MS = 5_000;
 
 interface ClientRow {
+  id: string;
   user: string;
   remoteIp: string;
   userAgent: string;
@@ -78,7 +82,7 @@ export class ClientsPanel {
     }
     const table = el("table", "border-collapse:collapse;width:100%;");
     const head = el("tr");
-    for (const k of ["clients.col.user", "clients.col.ip", "clients.col.since", "clients.col.agent"] as const) {
+    for (const k of ["clients.col.user", "clients.col.ip", "clients.col.since", "clients.col.agent", "clients.col.actions"] as const) {
       head.append(el("th", "text-align:left;padding:4px 8px;border-bottom:1px solid var(--omp-border);", t(k)));
     }
     table.append(head);
@@ -89,14 +93,44 @@ export class ClientsPanel {
         if (title) td.title = title;
         return td;
       };
+      const actions = el("td", "padding:4px 8px;border-bottom:1px solid var(--omp-border);white-space:nowrap;");
+      const drop = el("button", "", t("clients.disconnect"));
+      drop.className = "omp-btn";
+      drop.title = t("clients.disconnect.hint");
+      drop.addEventListener("click", () => void this.#disconnect(r, false));
+      const end = el("button", "margin-left:6px;", t("clients.endSessions"));
+      end.className = "omp-btn";
+      end.title = t("clients.endSessions.hint");
+      end.addEventListener("click", () => void this.#disconnect(r, true));
+      actions.append(drop, end);
       tr.append(
         cell(r.user || "–"),
-        cell(r.remoteIp),
+        cell(showAddress(r.remoteIp), r.remoteIp),
         cell(duration(r.since), new Date(r.since).toLocaleString()),
-        cell(r.userAgent.length > 60 ? r.userAgent.slice(0, 60) + "…" : r.userAgent, r.userAgent),
+        cell(shortBrowser(r.userAgent), r.userAgent),
+        actions,
       );
       table.append(tr);
     }
     this.#body.append(table);
+  }
+
+  async #disconnect(r: ClientRow, endSessions: boolean) {
+    const msg = endSessions
+      ? t("clients.endSessions.confirm", { user: r.user })
+      : t("clients.disconnect.confirm", { user: r.user || "–", ip: showAddress(r.remoteIp) });
+    if (!(await confirmDialog(msg, { confirmLabel: endSessions ? t("clients.endSessions") : t("clients.disconnect") }))) return;
+    try {
+      const res = await apiFetch(`/api/v1/admin/clients/${encodeURIComponent(r.id)}/disconnect`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ endSessions }),
+      });
+      if (!res.ok && res.status !== 404) throw new Error(String(res.status));
+      showToast(t(endSessions ? "clients.endSessions.done" : "clients.disconnect.done"), { variant: "info" });
+    } catch {
+      showToast(t("clients.error.action"), { variant: "error" });
+    }
+    void this.refresh();
   }
 }

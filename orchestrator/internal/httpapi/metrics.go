@@ -12,10 +12,13 @@ import (
 	"io"
 	"net/http"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
 // requestCounters zählt HTTP-Requests nach Status-Klasse, geteilt
@@ -159,6 +162,26 @@ func writeRegistryMetrics(b *strings.Builder, nodes NodeLister) {
 
 func writeSSEMetrics(b *strings.Builder, events EventSubscriber) {
 	writeMetric(b, "omp_sse_clients", "Number of currently connected SSE clients.", "gauge", float64(events.ClientCount()), "")
+	if l, ok := events.(interface{ Clients() []sse.ClientInfo }); ok {
+		clients := l.Clients()
+		perUser := map[string]int{}
+		for _, c := range clients {
+			perUser[c.User]++
+		}
+		writeMetric(b, "omp_sse_clients_identified", "Number of connected SSE clients with a known user (browsers; excludes internal subscribers).", "gauge", float64(len(clients)), "")
+		users := make([]string, 0, len(perUser))
+		for u := range perUser {
+			users = append(users, u)
+		}
+		sort.Strings(users)
+		fmt.Fprintf(b, "# HELP omp_sse_clients_by_user Connected SSE clients per user.\n# TYPE omp_sse_clients_by_user gauge\n")
+		for _, u := range users {
+			fmt.Fprintf(b, "omp_sse_clients_by_user{user=%q} %d\n", u, perUser[u])
+		}
+	}
+	if k, ok := events.(interface{ TotalKicks() uint64 }); ok {
+		writeMetric(b, "omp_sse_client_kicks_total", "Cumulative number of SSE clients disconnected by an admin since process start.", "counter", float64(k.TotalKicks()), "")
+	}
 	writeMetric(b, "omp_sse_dropped_events_total", "Cumulative number of SSE events that failed delivery to a slow client since process start.", "counter", float64(events.TotalDrops()), "")
 }
 

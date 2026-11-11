@@ -446,6 +446,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/workflows/{id}/plan", g.requireAuth(handleWorkflowPlan(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}/drift", g.requireAuth(handleWorkflowDrift(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/admin/clients", g.requireVerbGlobal(authz.VerbAdmin, handleAdminClients(events)))
+	mux.HandleFunc("POST /api/v1/admin/clients/{id}/disconnect", g.requireVerbGlobal(authz.VerbAdmin, handleAdminClientDisconnect(events, authSvc)))
 	mux.HandleFunc("GET /api/v1/events", g.requireAuth(handleEvents(events)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/descriptor.json", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))
@@ -1053,6 +1054,50 @@ func handleAdminClients(events EventSubscriber) http.HandlerFunc {
 			list = l.Clients()
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"total": events.ClientCount(), "clients": list})
+	}
+}
+
+// handleAdminClientDisconnect trennt einen Client. Mit {"endSessions":true} werden zusätzlich alle Anmeldungen
+// seines Benutzers ungültig (revoke-sessions) und dessen Streams getrennt — erst dann kommt der Browser nicht
+// von selbst wieder; ohne das baut er den Stream nach wenigen Sekunden neu auf.
+func handleAdminClientDisconnect(events EventSubscriber, authSvc AuthService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		hub, ok := events.(interface {
+			Clients() []sse.ClientInfo
+			Kick(string) bool
+			KickUser(string) int
+		})
+		if !ok {
+			http.Error(w, "not supported", http.StatusNotImplemented)
+			return
+		}
+		var req struct {
+			EndSessions bool `json:"endSessions"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&req)
+		}
+		id := r.PathValue("id")
+		found, user := false, ""
+		for _, c := range hub.Clients() {
+			if c.ID == id {
+				found, user = true, c.User
+			}
+		}
+		if !found {
+			http.Error(w, "client not found", http.StatusNotFound)
+			return
+		}
+		if req.EndSessions && user != "" {
+			if err := authSvc.RevokeSessions(r.Context(), user); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			hub.KickUser(user)
+		} else {
+			hub.Kick(id)
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

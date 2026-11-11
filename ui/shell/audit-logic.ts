@@ -51,6 +51,7 @@ const ROUTES: Route[] = [
   ["PUT", /^\/api\/v1\/auth\/users\/([^\/]+)\/password$/, "users", "aud.a.userPw", "s"],
   ["PUT", /^\/api\/v1\/auth\/users\/([^\/]+)\/org$/, "users", "aud.a.userOrg", "s"],
   ["POST", /^\/api\/v1\/auth\/users\/([^\/]+)\/revoke-sessions$/, "users", "aud.a.userRevoke", "s"],
+  ["POST", /^\/api\/v1\/admin\/clients\/([^\/]+)\/disconnect$/, "users", "aud.a.clientKick", ""],
   ["POST", /^\/api\/v1\/organizations$/, "users", "aud.a.orgCreate", ""],
   ["DELETE", /^\/api\/v1\/organizations\/([^\/]+)$/, "users", "aud.a.orgDelete", "x"],
   ["POST", /^\/api\/v1\/admin\/role-bindings$/, "rights", "aud.a.bindCreate", ""],
