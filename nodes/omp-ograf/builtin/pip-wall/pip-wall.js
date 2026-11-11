@@ -40,11 +40,12 @@ export default class PipWall extends HTMLElement {
     <g mask="url(#m)"><rect width="100%" height="100%" fill="url(#g)"/><image id="img" width="100%" height="100%" preserveAspectRatio="xMidYMid slice"/></g>`;
     this._holes = this._bg.querySelector("#holes");
     this._img = this._bg.querySelector("#img");
-    for (let i = 0; i < N; i++) { const r = document.createElementNS(NS, "rect"); this._holes.append(r); }
+    for (let i = 0; i < N; i++) { const r = document.createElementNS(NS, "path"); this._holes.append(r); }
     root.append(style, this._bg);
     this._moveMs = 500;
     this._cover = true; // Option focusCover
     this._rad = 0;
+    this._mode = "all"; // Eckenform: all = alle Ecken, diagonal = rechts oben und links unten
     this._boxes = [];
     for (let i = 0; i < N; i++) {
       const el = document.createElement("div");
@@ -66,7 +67,13 @@ export default class PipWall extends HTMLElement {
     if (d.accentColor) this.style.setProperty("--accent", d.accentColor);
     if (d.captionColor) this.style.setProperty("--cap", d.captionColor);
     if (typeof d.borderWidth === "number") this.style.setProperty("--bw", `${d.borderWidth / 1920 * 100}vw`);
-    if (typeof d.cornerRadius === "number") { this._rad = Math.max(0, d.cornerRadius) / 1920; this.style.setProperty("--rad", `${this._rad * 100}vw`); }
+    if (typeof d.cornerRadius === "number") this._rad = Math.max(0, d.cornerRadius) / 1920;
+    if (d.cornerMode === "all" || d.cornerMode === "diagonal") this._mode = d.cornerMode;
+    if (typeof d.cornerRadius === "number" || d.cornerMode !== undefined) {
+      // CSS-Reihenfolge: links oben, rechts oben, rechts unten, links unten
+      const r = `${this._rad * 100}vw`;
+      this.style.setProperty("--rad", this._mode === "diagonal" ? `0 ${r} 0 ${r}` : r);
+    }
     if (typeof d.focusCover === "boolean") this._cover = d.focusCover;
     if (typeof d.leadMs === "number") this._leadMs = d.leadMs;
     if (typeof d.moveMs === "number") this._moveMs = Math.max(0, d.moveMs);
@@ -163,9 +170,16 @@ export default class PipWall extends HTMLElement {
     this._boxes.forEach((b, i) => {
       const r = this._holes.children[i];
       const [x, y, w, h] = b.cur;
-      r.setAttribute("rx", String(this._rad * (this._bg.clientWidth || 1920)));
-      r.setAttribute("x", `${x * 100}%`); r.setAttribute("y", `${y * 100}%`);
-      r.setAttribute("width", `${b.on && !b.dim ? w * 100 : 0}%`); r.setAttribute("height", `${b.on && !b.dim ? h * 100 : 0}%`);
+      const W = this._bg.clientWidth || 1920, H = this._bg.clientHeight || 1080;
+      const show = b.on && !b.dim && w > 0 && h > 0;
+      if (!show) { r.setAttribute("d", ""); return; }
+      // Fenster als Pfad mit Eckenradius je Ecke (links oben, rechts oben, rechts unten, links unten)
+      const px = x * W, py = y * H, pw = w * W, ph = h * H;
+      const k = Math.min(this._rad * W, pw / 2, ph / 2);
+      const [tl, tr, br, bl] = this._mode === "diagonal" ? [0, k, 0, k] : [k, k, k, k];
+      r.setAttribute("d",
+        `M${px + tl} ${py} H${px + pw - tr} ${tr ? `A${tr} ${tr} 0 0 1 ${px + pw} ${py + tr}` : ""} V${py + ph - br} ${br ? `A${br} ${br} 0 0 1 ${px + pw - br} ${py + ph}` : ""} ` +
+        `H${px + bl} ${bl ? `A${bl} ${bl} 0 0 1 ${px} ${py + ph - bl}` : ""} V${py + tl} ${tl ? `A${tl} ${tl} 0 0 1 ${px + tl} ${py}` : ""} Z`);
     });
     if (moving) this._start();
   }

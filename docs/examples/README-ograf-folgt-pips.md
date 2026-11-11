@@ -9,6 +9,7 @@ Einrichtung nach dem Start (steckt im gespeicherten Zustand des Demo-Workflows, 
    (Leinwand 1280×720: Slot 1 `0,467 427×240`, Slot 2 `438,275`, Slot 3 `847,453`).
 2. **Keyer:** Quelle „Grafik“ (Fill) wählen und einschalten (liegt über den PIPs).
 3. **Grafik:** Vorlage „PIP-Wand“ auf Ebene `pip-wall` einblenden.
+   Runde Ecken zeigen, dass die Grafik die PIP-Fenster formt (das Video bleibt rechteckig, der Hintergrund schneidet die Ecken ab): *Eckenradius* z. B. 48 und *Eckenform* `diagonal` (rechts oben und links unten rund; `all` = alle vier Ecken).
 4. **Layout-Kopplung** im Grafik-Panel: je Fenster *Fenster folgt PIP-Slot*, Mischer „Bildmischer“, Slot 1–3.
    Die Vorlage deklariert ihre Fenster im Manifest (Vendor-Feld `v_omp_zones`, OGraf v1 erlaubt Zusatzfelder nur mit Präfix `v_`);
    das Panel belegt Slot und Art vor (*Fenster folgt PIP-Slot*). Die Zuordnung gilt **je Vorlage**: Wechselt die Ebene zu einer
