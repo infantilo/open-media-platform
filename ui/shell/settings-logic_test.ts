@@ -39,8 +39,8 @@ Deno.test("matchesQuery: alle Wörter, egal wo und in welcher Schreibweise", () 
 });
 
 Deno.test("tabForQuery wechselt nur, wenn der aktuelle Reiter leer ausgeht", () => {
-  assertEquals(tabForQuery("nodes", { nodes: 2, system: 5, mail: 0 }), "nodes");
-  assertEquals(tabForQuery("nodes", { nodes: 0, system: 5, mail: 1 }), "system");
-  assertEquals(tabForQuery("system", { nodes: 0, system: 0, mail: 1 }), "mail");
-  assertEquals(tabForQuery("system", { nodes: 0, system: 0, mail: 0 }), "system");
+  assertEquals(tabForQuery("nodes", { nodes: 2, system: 5, mail: 0, directory: 0 }), "nodes");
+  assertEquals(tabForQuery("nodes", { nodes: 0, system: 5, mail: 1, directory: 0 }), "system");
+  assertEquals(tabForQuery("system", { nodes: 0, system: 0, mail: 1, directory: 0 }), "mail");
+  assertEquals(tabForQuery("system", { nodes: 0, system: 0, mail: 0, directory: 0 }), "system");
 });

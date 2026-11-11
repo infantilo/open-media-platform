@@ -83,8 +83,8 @@ export function matchesQuery(query: string, ...fields: (string | undefined)[]): 
   return words.every((w) => hay.includes(w));
 }
 
-export type SettingsTab = "nodes" | "system" | "mail";
-export const SETTINGS_TABS: SettingsTab[] = ["nodes", "system", "mail"];
+export type SettingsTab = "nodes" | "system" | "mail" | "directory";
+export const SETTINGS_TABS: SettingsTab[] = ["nodes", "system", "mail", "directory"];
 
 /** Erster Reiter mit Treffern; bleibt beim aktuellen, wenn der Treffer hat oder es keine Treffer gibt. */
 export function tabForQuery(current: SettingsTab, counts: Record<SettingsTab, number>): SettingsTab {

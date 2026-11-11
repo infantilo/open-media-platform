@@ -196,7 +196,7 @@ gültig (auch das Dev-Passwort oben — für den Produktivbetrieb ändern).
 
 **Windows Active Directory / LDAP (Kapitel 92).** Mit `OMP_LDAP_URL` am Orchestrator melden sich
 Verzeichnisnutzer mit ihrem Windows-Namen und -Passwort an; OMP speichert kein Passwort. **Alle Einstellungen
-sind in der Oberfläche pflegbar** (Administration → Gruppen → „Active Directory / LDAP“ → „Einstellungen …“:
+sind in der Oberfläche pflegbar** (Administration → Wartung → Einstellungen → Reiter „Active Directory“; die Gruppenzuordnung liegt unter Administration → Gruppen:
 Speichern wirkt sofort ohne Neustart, „Testen“ prüft die eingetragenen Werte vorher, andere Orchestratoren des
 Clusters übernehmen Änderungen binnen ~20 s; das Dienstkonto-Kennwort wird verschlüsselt gespeichert und braucht
 `OMP_STORAGE_SECRET_KEY`). Solange dort nichts gespeichert ist, gelten die Umgebungsvariablen: Ablauf: Suche des

@@ -49,27 +49,6 @@ interface UserEntry {
   source?: string;
 }
 
-// Wire-Format identisch zu directory.Settings (Kennwort nie zurück, nur hasPassword).
-interface DirSettings {
-  enabled: boolean;
-  urls: string[];
-  startTls: boolean;
-  allowPlain: boolean;
-  caPem: string;
-  baseDn: string;
-  bindDn: string;
-  userFilter: string;
-  userAttr: string;
-  groupBaseDn: string;
-  groupFilter: string;
-  requiredGroup: string;
-  timeoutS: number;
-  hasPassword: boolean;
-  clearPassword?: boolean;
-  source?: string;
-  caFile?: string;
-}
-
 interface RoleBinding {
   id: string;
   subject: string;
@@ -424,12 +403,8 @@ class AdminView extends HTMLElement {
   #groups: Group[] = [];
   // Active-Directory-Anbindung (Nutzerauftrag 2026-11-11).
   #dirEnabled = false;
-  #dirSettings: DirSettings | null = null;
   #dirError = "";
-  #dirOpen = false;
-  #dirPw = "";
   #dirMaps: { ldapGroup: string; groupId: string }[] = [];
-  #dirTest = "";
   #newDirLdapGroup = "";
   #newDirGroupId = "";
   #showGroupForm = false;
@@ -679,7 +654,6 @@ class AdminView extends HTMLElement {
         const j = await st.json();
         this.#dirEnabled = !!j.enabled;
         this.#dirError = String(j.error ?? "");
-        this.#dirSettings = j.settings as DirSettings;
       }
       const res = await apiFetch("/api/v1/auth/directory/mappings");
       if (res.ok) this.#dirMaps = await res.json();
@@ -687,153 +661,6 @@ class AdminView extends HTMLElement {
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar.
     }
-  }
-
-  async #testDirectory() {
-    this.#dirTest = tt("adm.dir.testing");
-    this.#render();
-    try {
-      const res = await apiFetch("/api/v1/auth/directory/test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...this.#dirSettings, bindPassword: this.#dirPw }),
-      });
-      if (!res.ok) {
-        this.#dirTest = tt("adm.dir.notConfigured");
-      } else {
-        const r = await res.json();
-        this.#dirTest = r.ok ? tt("adm.dir.testOk") : tt("adm.dir.testFailed", { p0: String(r.error ?? "") });
-      }
-    } catch (e) {
-      this.#dirTest = tt("adm.dir.testFailed", { p0: String(e) });
-    }
-    this.#render();
-  }
-
-  async #saveDirectory() {
-    if (!this.#dirSettings) return;
-    const res = await apiFetch("/api/v1/auth/directory", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...this.#dirSettings, bindPassword: this.#dirPw }),
-    });
-    if (!res.ok) {
-      this.#error = tt("adm.dir.saveFailed", { p0: await res.text() });
-      this.#render();
-      return;
-    }
-    this.#error = "";
-    this.#dirPw = "";
-    const j = await res.json();
-    this.#dirEnabled = !!j.enabled;
-    this.#dirError = String(j.error ?? "");
-    this.#dirSettings = j.settings as DirSettings;
-    this.#dirTest = tt("adm.dir.saved");
-    this.#render();
-  }
-
-  #renderDirectorySettings(): HTMLElement {
-    const st = this.#dirSettings!;
-    const form = document.createElement("div");
-    form.setAttribute("data-role", "directory-settings");
-    form.style.cssText = "display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:6px 10px;align-items:start;margin-bottom:var(--omp-space-3);max-width:820px;";
-    const row = (label: string, el: HTMLElement, help?: string) => {
-      const l = document.createElement("label");
-      l.textContent = label;
-      l.style.cssText = "padding-top:3px;";
-      const wrap = document.createElement("div");
-      wrap.appendChild(el);
-      if (help) {
-        const h = document.createElement("div");
-        h.textContent = help;
-        h.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-top:2px;";
-        wrap.appendChild(h);
-      }
-      form.append(l, wrap);
-    };
-    const text = (get: () => string, set: (v: string) => void, ph = "") => {
-      const i = document.createElement("input");
-      i.value = get();
-      i.placeholder = ph;
-      i.autocomplete = "off";
-      i.style.cssText = "width:100%;box-sizing:border-box;";
-      i.addEventListener("input", () => set(i.value));
-      return i;
-    };
-    const check = (get: () => boolean, set: (v: boolean) => void, label: string) => {
-      const l = document.createElement("label");
-      const c = document.createElement("input");
-      c.type = "checkbox";
-      c.checked = get();
-      c.addEventListener("change", () => {
-        set(c.checked);
-        this.#render();
-      });
-      l.append(c, " " + label);
-      return l;
-    };
-    const area = (get: () => string, set: (v: string) => void, rows: number, ph = "") => {
-      const a = document.createElement("textarea");
-      a.value = get();
-      a.rows = rows;
-      a.placeholder = ph;
-      a.style.cssText = "width:100%;box-sizing:border-box;font-family:var(--omp-font-mono, monospace);font-size:11px;";
-      a.addEventListener("input", () => set(a.value));
-      return a;
-    };
-    row(tt("adm.dir.f.enabled"), check(() => st.enabled, (v) => (st.enabled = v), tt("adm.dir.f.enabledLabel")),
-      st.source === "env" ? tt("adm.dir.f.fromEnv") : undefined);
-    row(tt("adm.dir.f.urls"), area(() => st.urls.join("\n"), (v) => (st.urls = v.split("\n").map((x) => x.trim()).filter(Boolean)), 2, "ldaps://dc1.firma.de:636"),
-      tt("adm.dir.f.urlsHelp"));
-    row(tt("adm.dir.f.startTls"), check(() => st.startTls, (v) => (st.startTls = v), tt("adm.dir.f.startTlsLabel")));
-    row(tt("adm.dir.f.allowPlain"), check(() => st.allowPlain, (v) => (st.allowPlain = v), tt("adm.dir.f.allowPlainLabel")),
-      st.allowPlain ? tt("adm.dir.f.allowPlainWarn") : undefined);
-    row(tt("adm.dir.f.ca"), area(() => st.caPem, (v) => (st.caPem = v), 3, "-----BEGIN CERTIFICATE-----"),
-      tt("adm.dir.f.caHelp") + (st.caFile ? " " + tt("adm.dir.f.caFile", { p0: st.caFile }) : ""));
-    row(tt("adm.dir.f.baseDn"), text(() => st.baseDn, (v) => (st.baseDn = v), "DC=firma,DC=de"));
-    row(tt("adm.dir.f.bindDn"), text(() => st.bindDn, (v) => (st.bindDn = v), "CN=omp-lesen,OU=Dienstkonten,DC=firma,DC=de"), tt("adm.dir.f.bindDnHelp"));
-    const pw = document.createElement("input");
-    pw.type = "password";
-    pw.autocomplete = "new-password";
-    pw.value = this.#dirPw;
-    pw.placeholder = st.hasPassword ? tt("adm.dir.f.pwKeep") : "";
-    pw.style.cssText = "width:100%;box-sizing:border-box;";
-    pw.addEventListener("input", () => {
-      this.#dirPw = pw.value;
-    });
-    row(tt("adm.dir.f.pw"), pw, tt("adm.dir.f.pwHelp"));
-    row(tt("adm.dir.f.userFilter"), text(() => st.userFilter, (v) => (st.userFilter = v), "(&(objectCategory=person)(objectClass=user)(|(sAMAccountName={user})(userPrincipalName={user})))"),
-      tt("adm.dir.f.userFilterHelp"));
-    row(tt("adm.dir.f.userAttr"), text(() => st.userAttr, (v) => (st.userAttr = v), "sAMAccountName"));
-    row(tt("adm.dir.f.groupBaseDn"), text(() => st.groupBaseDn, (v) => (st.groupBaseDn = v), tt("adm.dir.f.sameAsBase")));
-    row(tt("adm.dir.f.groupFilter"), text(() => st.groupFilter, (v) => (st.groupFilter = v), "(&(objectClass=group)(member:1.2.840.113556.1.4.1941:={dn}))"),
-      tt("adm.dir.f.groupFilterHelp"));
-    row(tt("adm.dir.f.required"), text(() => st.requiredGroup, (v) => (st.requiredGroup = v), "OMP-Nutzer"), tt("adm.dir.f.requiredHelp"));
-    const to = document.createElement("input");
-    to.type = "number";
-    to.min = "1";
-    to.max = "120";
-    to.value = String(st.timeoutS || 8);
-    to.style.cssText = "width:80px;";
-    to.addEventListener("input", () => (st.timeoutS = Number(to.value) || 8));
-    row(tt("adm.dir.f.timeout"), to);
-
-    const btns = document.createElement("div");
-    btns.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;";
-    const save = document.createElement("button");
-    save.textContent = tt("adm.b97d23");
-    save.style.cssText = "cursor:pointer;";
-    save.addEventListener("click", () => void this.#saveDirectory());
-    const test = document.createElement("button");
-    test.textContent = tt("adm.dir.test");
-    test.style.cssText = "cursor:pointer;";
-    test.addEventListener("click", () => void this.#testDirectory());
-    const res = document.createElement("span");
-    res.style.cssText = "font-size:var(--omp-font-size-xs);";
-    res.textContent = this.#dirTest;
-    btns.append(save, test, res);
-    form.append(document.createElement("span"), btns);
-    return form;
   }
 
   async #addDirMapping() {
@@ -882,14 +709,6 @@ class AdminView extends HTMLElement {
     state.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);";
     state.textContent = this.#dirEnabled ? tt("adm.dir.enabled") : tt("adm.dir.disabled");
     head.append(title, state);
-    const toggle = document.createElement("button");
-    toggle.textContent = this.#dirOpen ? tt("adm.dir.hideSettings") : tt("adm.dir.showSettings");
-    toggle.style.cssText = "font-size:11px;cursor:pointer;";
-    toggle.addEventListener("click", () => {
-      this.#dirOpen = !this.#dirOpen;
-      this.#render();
-    });
-    head.appendChild(toggle);
     box.appendChild(head);
     if (this.#dirError) {
       const err = document.createElement("div");
@@ -897,11 +716,10 @@ class AdminView extends HTMLElement {
       err.textContent = tt("adm.dir.loadError", { p0: this.#dirError });
       box.appendChild(err);
     }
-    if (this.#dirOpen && this.#dirSettings) box.appendChild(this.#renderDirectorySettings());
 
     const hint = document.createElement("div");
     hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
-    hint.textContent = this.#dirEnabled ? tt("adm.dir.hint") : tt("adm.dir.hintOff");
+    hint.textContent = (this.#dirEnabled ? tt("adm.dir.hint") : tt("adm.dir.hintOff")) + " " + tt("adm.dir.whereSettings");
     box.appendChild(hint);
 
     for (const m of this.#dirMaps) {

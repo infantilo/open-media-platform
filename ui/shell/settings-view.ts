@@ -4,6 +4,7 @@
 
 import { t as tr, t as tt } from "./i18n.ts";
 import "./alert-mail-panel.ts";
+import "./directory-settings-panel.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { apiFetch } from "./connection.ts";
 import {
@@ -59,6 +60,7 @@ class SettingsView extends HTMLElement {
   #tab: SettingsTab = "nodes";
   #query = "";
   #searchInput?: HTMLInputElement;
+  #dirPanel?: HTMLElement;
   #mailPanel?: HTMLElement; // dieselbe Instanz behalten, damit Eingaben beim Neuzeichnen bleiben
 
   connectedCallback() {
@@ -175,7 +177,7 @@ class SettingsView extends HTMLElement {
 
     this.append(this.#renderSearch(), this.#renderTabs());
     this.append(
-      this.#tab === "nodes" ? this.#renderNodes() : this.#tab === "system" ? this.#renderSystem() : (this.#mailPanel ??= document.createElement("omp-alert-mail-panel")),
+      this.#tab === "nodes" ? this.#renderNodes() : this.#tab === "system" ? this.#renderSystem() : this.#tab === "directory" ? (this.#dirPanel ??= document.createElement("omp-directory-settings")) : (this.#mailPanel ??= document.createElement("omp-alert-mail-panel")),
     );
     if (hadFocus && this.#searchInput) {
       this.#searchInput.focus();
@@ -197,10 +199,13 @@ class SettingsView extends HTMLElement {
   #mailMatches(): boolean {
     return matchesQuery(this.#query, tr("amail.title"), tr("amail.intro"), "smtp e-mail email mail alarm alert webhook", tr("amail.to"), tr("amail.routes.title"));
   }
+  #dirMatches(): boolean {
+    return matchesQuery(this.#query, tr("adm.dir.title"), "active directory ldap ldaps windows domain domäne anmeldung dienstkonto");
+  }
   #counts(): Record<SettingsTab, number> {
     let nodes = 0;
     for (const t of this.#types) nodes += t.options.filter((o) => this.#optionMatches(o)).length;
-    return { nodes, system: (this.#system?.items ?? []).filter((i) => this.#itemMatches(i)).length, mail: this.#mailMatches() ? 1 : 0 };
+    return { nodes, system: (this.#system?.items ?? []).filter((i) => this.#itemMatches(i)).length, mail: this.#mailMatches() ? 1 : 0, directory: this.#dirMatches() ? 1 : 0 };
   }
 
   #setQuery(q: string) {
