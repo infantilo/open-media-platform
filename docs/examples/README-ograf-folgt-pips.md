@@ -10,6 +10,9 @@ Einrichtung nach dem Start (steckt im gespeicherten Zustand des Demo-Workflows, 
 2. **Keyer:** Quelle „Grafik“ (Fill) wählen und einschalten (liegt über den PIPs).
 3. **Grafik:** Vorlage „PIP-Wand“ auf Ebene `pip-wall` einblenden.
 4. **Layout-Kopplung** im Grafik-Panel: je Fenster *Fenster folgt PIP-Slot*, Mischer „Bildmischer“, Slot 1–3.
+   Die Vorlage deklariert ihre Fenster im Manifest (Vendor-Feld `v_omp_zones`, OGraf v1 erlaubt Zusatzfelder nur mit Präfix `v_`);
+   das Panel belegt Slot und Art vor (*Fenster folgt PIP-Slot*). Die Zuordnung gilt **je Vorlage**: Wechselt die Ebene zu einer
+   anderen Vorlage, ruht sie und ist beim Zurückwechseln wieder da. Ältere Bindungen ohne Vorlage gelten weiter für jede Vorlage der Ebene.
 5. **Szene „PIP-Wand“** (Szenen-Editor des Mischers): Einfahrt/Ausfahrt je Slot, DSK-Quelle „Grafik“ und Grafik-Ebene `pip-wall` hinterlegen. Das Anwenden der Szene blendet Grafik und PIPs zusammen ein, das Ausschalten fährt beide gemeinsam hinaus.
 6. Im Flow-Editor **Im Workflow speichern** (auch nach jeder Änderung an Szenen), damit der Zustand beim nächsten Start zurückkommt.
 

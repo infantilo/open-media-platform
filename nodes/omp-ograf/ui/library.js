@@ -3185,6 +3185,9 @@ var OmpOgrafLayout = class extends HTMLElement {
   #draft = /* @__PURE__ */ new Map();
   #busy = false;
   #last = "";
+  #layers = [];
+  /** Deklarierte Zonen je Vorlage (aus dem Manifest). */
+  #declared = /* @__PURE__ */ new Map();
   connectedCallback() {
     this.#nodeId = this.getAttribute("node-id") ?? "";
     this.attachShadow({
@@ -3247,10 +3250,16 @@ var OmpOgrafLayout = class extends HTMLElement {
     try {
       const zones = (await get(`nodes/${this.#nodeId}/params/zones`))?.value ?? {};
       const bindings = (await get(`nodes/${this.#nodeId}/params/layout`))?.value ?? [];
+      this.#layers = (await get(`nodes/${this.#nodeId}/params/layers`))?.value ?? [];
+      this.#declared = new Map(((await get(`nodes/${this.#nodeId}/params/templates`))?.value ?? []).map((t) => [
+        t.id,
+        t.zones ?? []
+      ]));
       if (!this.#mixers.length) await this.#loadMixers();
       const sig = JSON.stringify([
         zones,
-        bindings
+        bindings,
+        this.#layers
       ]);
       if (sig === this.#last && this.shadowRoot?.querySelector("select:focus,input:focus")) return;
       for (const m of this.#mixers) if (!this.#sources.has(m.label)) await this.#loadSources(m);
@@ -3284,24 +3293,32 @@ var OmpOgrafLayout = class extends HTMLElement {
     const style = this.#el("style");
     style.textContent = STYLE2;
     root.append(style);
+    const tplOf = (layer) => this.#layers.find((l) => l.id === layer)?.templateId ?? "";
     const keys = /* @__PURE__ */ new Map();
-    for (const [layer, zs] of Object.entries(zones)) for (const z of zs) keys.set(`${layer}/${z.id}`, {
+    for (const [layer, zs] of Object.entries(zones)) for (const z of zs) keys.set(`${layer}/${tplOf(layer)}/${z.id}`, {
       layer,
-      zone: z.id
+      zone: z.id,
+      template: tplOf(layer)
     });
-    for (const b of bindings) keys.set(`${b.layerId}/${b.zone}`, {
-      layer: b.layerId,
-      zone: b.zone
-    });
+    for (const b of bindings) {
+      const t = b.templateId ?? "";
+      if (t && t !== tplOf(b.layerId)) continue;
+      keys.set(`${b.layerId}/${t}/${b.zone}`, {
+        layer: b.layerId,
+        zone: b.zone,
+        template: t
+      });
+    }
     if (!keys.size) {
       root.append(this.#el("div", "dim", tr2("layoutNone")));
       return;
     }
-    for (const [key, { layer, zone }] of keys) {
-      const bound = bindings.find((b) => b.layerId === layer && b.zone === zone);
+    for (const [key, { layer, zone, template }] of keys) {
+      const bound = bindings.find((b) => b.layerId === layer && b.zone === zone && ((b.templateId ?? "") === template || !b.templateId));
       const live = (zones[layer] ?? []).some((z) => z.id === zone);
       const card = this.#el("div", "zone");
-      card.append(this.#el("h4", "", `${layer} \xB7 ${zone}${live ? "" : ` (${tr2("layoutHidden")})`}`));
+      const decl = (this.#declared.get(template) ?? []).find((z) => z.id === zone);
+      card.append(this.#el("h4", "", `${layer} \xB7 ${decl?.name ?? zone}${live ? "" : ` (${tr2("layoutHidden")})`}`));
       if (bound) {
         const what = bound.kind === "window" ? tr2("kindWindow") : bound.kind === "follow" ? `${tr2("kindFollow")} ${bound.slot + 1}` : `${tr2("kindPip")} ${bound.slot + 1}`;
         card.append(this.#el("div", bound.error ? "bad" : "ok", `${what} \u2192 ${bound.mixer}${bound.kind === "window" || bound.kind === "follow" ? "" : ` \xB7 ${bound.senderId === "pst:1" ? tr2("srcPst") : (this.#sources.get(bound.mixer) ?? []).find((x) => x.senderId === bound.senderId)?.label ?? bound.senderId.slice(0, 8)}`}${bound.error ? ` \xB7 ${bound.error}` : bound.enabled ? ` \xB7 ${tr2("layoutOn")}` : ` \xB7 ${tr2("layoutOff")}`}${bound.lagMs !== void 0 && !bound.error ? ` \xB7 ${Math.round(bound.lagMs)} ms` : ""}`));
@@ -3309,7 +3326,8 @@ var OmpOgrafLayout = class extends HTMLElement {
         un.addEventListener("click", async () => {
           await this.#call("layout.unbind", {
             layerId: layer,
-            zone
+            zone,
+            templateId: bound.templateId ?? ""
           });
           this.#last = "";
           void this.#tick();
@@ -3318,11 +3336,12 @@ var OmpOgrafLayout = class extends HTMLElement {
         root.append(card);
         continue;
       }
+      const hint = decl?.slot && decl.slot > 0 ? decl.slot - 1 : -1;
       const d = this.#draft.get(key) ?? {
-        kind: "pip",
+        kind: hint >= 0 ? "follow" : "pip",
         mixer: this.#mixers[0]?.label ?? "",
         sender: "pst:1",
-        slot: 0,
+        slot: Math.max(0, hint),
         level: 0
       };
       this.#draft.set(key, d);
@@ -3393,7 +3412,8 @@ var OmpOgrafLayout = class extends HTMLElement {
           kind: d.kind === "window" || d.kind === "follow" ? d.kind : "",
           senderId: d.kind === "pip" ? d.sender : "",
           slot: d.slot,
-          level: d.level
+          level: d.level,
+          templateId: template
         });
         if (err) card.append(this.#el("div", "bad", err));
         this.#last = "";

@@ -21,9 +21,27 @@ interface Binding {
   slot: number;
   senderId: string;
   kind?: string;
+  /** Vorlage, für die die Bindung gilt (leer = jede Vorlage der Ebene). */
+  templateId?: string;
+  /** Die Ebene zeigt gerade diese Vorlage (sonst ruht die Bindung). */
+  active?: boolean;
   enabled?: boolean;
   error?: string;
   lagMs?: number;
+}
+interface LayerInfo {
+  id: string;
+  templateId: string;
+}
+/** Zone, die das Manifest der Vorlage im Vendor-Feld `v_omp_zones` (OGraf v1: Präfix `v_`) deklariert. */
+interface DeclaredZone {
+  id: string;
+  name?: string;
+  slot?: number;
+}
+interface TemplateInfo {
+  id: string;
+  zones?: DeclaredZone[];
 }
 interface Mixer {
   nodeId: string;
@@ -73,6 +91,9 @@ class OmpOgrafLayout extends HTMLElement {
   #draft = new Map<string, { kind: string; mixer: string; sender: string; slot: number; level: number }>();
   #busy = false;
   #last = "";
+  #layers: LayerInfo[] = [];
+  /** Deklarierte Zonen je Vorlage (aus dem Manifest). */
+  #declared = new Map<string, DeclaredZone[]>();
 
   connectedCallback() {
     this.#nodeId = this.getAttribute("node-id") ?? "";
@@ -115,8 +136,10 @@ class OmpOgrafLayout extends HTMLElement {
     try {
       const zones = (await get<{ value: Record<string, Zone[]> }>(`nodes/${this.#nodeId}/params/zones`))?.value ?? {};
       const bindings = (await get<{ value: Binding[] }>(`nodes/${this.#nodeId}/params/layout`))?.value ?? [];
+      this.#layers = (await get<{ value: LayerInfo[] }>(`nodes/${this.#nodeId}/params/layers`))?.value ?? [];
+      this.#declared = new Map(((await get<{ value: TemplateInfo[] }>(`nodes/${this.#nodeId}/params/templates`))?.value ?? []).map((t) => [t.id, t.zones ?? []]));
       if (!this.#mixers.length) await this.#loadMixers();
-      const sig = JSON.stringify([zones, bindings]);
+      const sig = JSON.stringify([zones, bindings, this.#layers]);
       if (sig === this.#last && this.shadowRoot?.querySelector("select:focus,input:focus")) return;
       for (const m of this.#mixers) if (!this.#sources.has(m.label)) await this.#loadSources(m);
       this.#last = sig;
@@ -151,24 +174,32 @@ class OmpOgrafLayout extends HTMLElement {
     const style = this.#el("style");
     style.textContent = STYLE;
     root.append(style);
-    const keys = new Map<string, { layer: string; zone: string }>();
-    for (const [layer, zs] of Object.entries(zones)) for (const z of zs) keys.set(`${layer}/${z.id}`, { layer, zone: z.id });
-    for (const b of bindings) keys.set(`${b.layerId}/${b.zone}`, { layer: b.layerId, zone: b.zone });
+    // Eine Karte je Ebene + Vorlage + Zone. Die Vorlage ist die, die die Ebene gerade zeigt; Bindungen anderer Vorlagen ruhen
+    // und erscheinen wieder, sobald die Ebene zur Vorlage zurückkehrt.
+    const tplOf = (layer: string) => this.#layers.find((l) => l.id === layer)?.templateId ?? "";
+    const keys = new Map<string, { layer: string; zone: string; template: string }>();
+    for (const [layer, zs] of Object.entries(zones)) for (const z of zs) keys.set(`${layer}/${tplOf(layer)}/${z.id}`, { layer, zone: z.id, template: tplOf(layer) });
+    for (const b of bindings) {
+      const t = b.templateId ?? "";
+      if (t && t !== tplOf(b.layerId)) continue; // ruht
+      keys.set(`${b.layerId}/${t}/${b.zone}`, { layer: b.layerId, zone: b.zone, template: t });
+    }
     if (!keys.size) {
       root.append(this.#el("div", "dim", tr("layoutNone")));
       return;
     }
-    for (const [key, { layer, zone }] of keys) {
-      const bound = bindings.find((b) => b.layerId === layer && b.zone === zone);
+    for (const [key, { layer, zone, template }] of keys) {
+      const bound = bindings.find((b) => b.layerId === layer && b.zone === zone && ((b.templateId ?? "") === template || !b.templateId));
       const live = (zones[layer] ?? []).some((z) => z.id === zone);
       const card = this.#el("div", "zone");
-      card.append(this.#el("h4", "", `${layer} · ${zone}${live ? "" : ` (${tr("layoutHidden")})`}`));
+      const decl = (this.#declared.get(template) ?? []).find((z) => z.id === zone);
+      card.append(this.#el("h4", "", `${layer} · ${decl?.name ?? zone}${live ? "" : ` (${tr("layoutHidden")})`}`));
       if (bound) {
         const what = bound.kind === "window" ? tr("kindWindow") : bound.kind === "follow" ? `${tr("kindFollow")} ${bound.slot + 1}` : `${tr("kindPip")} ${bound.slot + 1}`;
         card.append(this.#el("div", bound.error ? "bad" : "ok", `${what} → ${bound.mixer}${bound.kind === "window" || bound.kind === "follow" ? "" : ` · ${bound.senderId === "pst:1" ? tr("srcPst") : ((this.#sources.get(bound.mixer) ?? []).find((x) => x.senderId === bound.senderId)?.label ?? bound.senderId.slice(0, 8))}`}${bound.error ? ` · ${bound.error}` : bound.enabled ? ` · ${tr("layoutOn")}` : ` · ${tr("layoutOff")}`}${bound.lagMs !== undefined && !bound.error ? ` · ${Math.round(bound.lagMs)} ms` : ""}`));
         const un = this.#el("button", "", tr("layoutUnbind"));
         un.addEventListener("click", async () => {
-          await this.#call("layout.unbind", { layerId: layer, zone });
+          await this.#call("layout.unbind", { layerId: layer, zone, templateId: bound.templateId ?? "" });
           this.#last = "";
           void this.#tick();
         });
@@ -176,7 +207,9 @@ class OmpOgrafLayout extends HTMLElement {
         root.append(card);
         continue;
       }
-      const d = this.#draft.get(key) ?? { kind: "pip", mixer: this.#mixers[0]?.label ?? "", sender: "pst:1", slot: 0, level: 0 };
+      // Schlägt die Vorlage einen Slot vor (`slot` in `v_omp_zones`), ist das die Vorbelegung: Fenster folgt diesem PIP-Slot.
+      const hint = decl?.slot && decl.slot > 0 ? decl.slot - 1 : -1;
+      const d = this.#draft.get(key) ?? { kind: hint >= 0 ? "follow" : "pip", mixer: this.#mixers[0]?.label ?? "", sender: "pst:1", slot: Math.max(0, hint), level: 0 };
       this.#draft.set(key, d);
       const row = (label: string, el: HTMLElement) => {
         const r = this.#el("div", "row");
@@ -202,7 +235,7 @@ class OmpOgrafLayout extends HTMLElement {
       go.disabled = !this.#mixers.length || !live;
       go.title = live ? "" : tr("layoutHiddenHint");
       go.addEventListener("click", async () => {
-        const err = await this.#call("layout.bind", { layerId: layer, zone, mixer: d.mixer, kind: d.kind === "window" || d.kind === "follow" ? d.kind : "", senderId: d.kind === "pip" ? d.sender : "", slot: d.slot, level: d.level });
+        const err = await this.#call("layout.bind", { layerId: layer, zone, mixer: d.mixer, kind: d.kind === "window" || d.kind === "follow" ? d.kind : "", senderId: d.kind === "pip" ? d.sender : "", slot: d.slot, level: d.level, templateId: template });
         if (err) card.append(this.#el("div", "bad", err));
         this.#last = "";
         void this.#tick();

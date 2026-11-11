@@ -28,6 +28,8 @@ pub struct TemplateInfo {
     pub schema: Value,
     /// `customActions` des Manifests (Liste `{id, name, …}`), leer wenn keine.
     pub actions: Value,
+    /// `v_omp_zones` des Manifests (Vendor-Feld nach OGraf v1, Präfix `v_`): Liste `{id, name, slot?}` der Layout-Zonen, leer wenn keine.
+    pub zones: Value,
     /// Verzeichnisname relativ zu `OMP_OGRAF_TEMPLATES` — Teil der
     /// Modul-URL (`/ograf-templates/<dir>/<main>`), nicht Teil des
     /// Descriptor-Werts (der Bildmeister braucht nur `id`/`label`, keine
@@ -45,6 +47,7 @@ impl TemplateInfo {
             step_count,
             schema: Value::Null,
             actions: Value::Array(vec![]),
+            zones: Value::Array(vec![]),
             dir: id.to_string(),
             main: "main.js".to_string(),
         }
@@ -62,6 +65,7 @@ impl TemplateInfo {
             "stepCount": self.step_count,
             "schema": self.schema,
             "actions": self.actions,
+            "zones": self.zones,
         })
     }
 }
@@ -117,12 +121,14 @@ fn load_manifest(path: &Path, dir_name: &str) -> Result<TemplateInfo, String> {
     let step_count = json["stepCount"].as_u64().unwrap_or(1) as u32;
     let schema = json["schema"].clone();
     let actions = if json["customActions"].is_array() { json["customActions"].clone() } else { Value::Array(vec![]) };
+    let zones = if json["v_omp_zones"].is_array() { json["v_omp_zones"].clone() } else { Value::Array(vec![]) };
     Ok(TemplateInfo {
         id,
         label,
         step_count,
         schema,
         actions,
+        zones,
         dir: dir_name.to_string(),
         main,
     })
@@ -249,4 +255,32 @@ pub fn module_url(root: &Path, info: &TemplateInfo) -> (String, String) {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| d.as_millis());
     (info.dir.clone(), format!("{}?v={v}", info.main))
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::*;
+
+    /// Die mitgelieferten Vorlagen deklarieren ihre Zonen im Vendor-Feld `v_omp_zones` und tragen keine unbekannten Felder
+    /// ohne `v_` (OGraf v1: `additionalProperties: false`, Vendor-Felder nur mit Präfix `v_`).
+    #[test]
+    fn builtin_manifests_declare_zones_and_stay_within_the_schema() {
+        let allowed = [
+            "$schema", "$id", "id", "version", "name", "description", "author", "main", "customActions", "actionDurations", "stepCount",
+            "schema", "renderRequirements", "thumbnails", "supportsRealTime", "supportsNonRealTime",
+        ];
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("builtin");
+        let mut zones = std::collections::BTreeMap::new();
+        for dir in std::fs::read_dir(&root).unwrap().flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+            let m = find_manifest(&dir).expect("Manifest");
+            let json: Value = serde_json::from_str(&std::fs::read_to_string(&m).unwrap()).unwrap();
+            for k in json.as_object().unwrap().keys() {
+                assert!(allowed.contains(&k.as_str()) || k.starts_with("v_"), "{}: Feld „{k}“ ist nicht Teil von OGraf v1 (Vendor-Felder: Präfix v_)", m.display());
+            }
+            let info = load_manifest(&m, &dir.file_name().unwrap().to_string_lossy()).unwrap();
+            zones.insert(info.id.clone(), info.zones.as_array().unwrap().iter().map(|z| z["id"].as_str().unwrap().to_string()).collect::<Vec<_>>());
+        }
+        assert_eq!(zones["pip-wall"], vec!["pip1", "pip2", "pip3"]);
+        assert_eq!(zones["paternoster-frame"], vec!["window"]);
+    }
 }

@@ -7,9 +7,12 @@
   "author": {
     "name": "OpenMediaPlatform"
   },
+  "v_omp_zones": [
+    {"id": "pip1", "name": "Fenster 1", "slot": 1},
+    {"id": "pip2", "name": "Fenster 2", "slot": 2},
+    {"id": "pip3", "name": "Fenster 3", "slot": 3}
+  ],
   "main": "pip-wall.js",
-  "designWidth": 1920,
-  "designHeight": 1080,
   "supportsRealTime": true,
   "supportsNonRealTime": false,
   "stepCount": 1,

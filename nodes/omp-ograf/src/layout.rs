@@ -67,6 +67,10 @@ pub struct Binding {
     /// Paternoster-Übergangs (`crosspoint.setTransWindow`, Kapitel 90.3).
     #[serde(default)]
     pub kind: String,
+    /// Vorlage, für die die Bindung gilt (leer = jede Vorlage der Ebene, Altbestand). Gebundene Vorlagen sind nur aktiv, solange
+    /// die Ebene diese Vorlage zeigt; beim Wechsel zurück gilt die Zuordnung wieder.
+    #[serde(rename = "templateId", default)]
+    pub template: String,
 }
 
 impl Binding {
@@ -78,7 +82,7 @@ impl Binding {
         self.kind == "follow"
     }
     fn key(&self) -> String {
-        format!("{}/{}", self.layer, self.zone)
+        format!("{}/{}/{}", self.layer, self.template, self.zone)
     }
     fn method(&self, base: &str) -> String {
         if self.level == 0 { base.to_string() } else { format!("level{}.{base}", self.level) }
@@ -105,6 +109,9 @@ const FOLLOW_RESYNC: Duration = Duration::from_millis(1000);
 const FOLLOW_POLL: Duration = Duration::from_millis(40);
 /// Takt des Arbeitsthreads, solange nur `follow`-Bindungen bestehen.
 const FOLLOW_TICK: Duration = Duration::from_millis(20);
+
+/// Liefert die Vorlage, die eine Ebene gerade zeigt (`None` = Ebene nicht on air).
+pub type TemplateLookup = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// Aktualisiert die Daten einer Grafik-Ebene (Node-intern, gesetzt nach dem Aufbau des Stores). `false` = Ebene nicht on air.
 pub type Updater = Box<dyn Fn(&str, serde_json::Map<String, Value>) -> bool + Send + Sync>;
@@ -242,6 +249,7 @@ struct Entry {
 
 struct Shared {
     updater: Arc<std::sync::OnceLock<Updater>>,
+    lookup: Arc<std::sync::OnceLock<TemplateLookup>>,
     bindings: Mutex<BTreeMap<String, (Binding, Entry)>>,
     wake: Condvar,
 }
@@ -261,7 +269,7 @@ impl Entry {
 impl Layout {
     pub fn new(registry: RegistryClient, zones: ZoneStore) -> Layout {
         let updater = Arc::new(std::sync::OnceLock::new());
-        let shared = Arc::new(Shared { updater: updater.clone(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() });
+        let shared = Arc::new(Shared { updater: updater.clone(), lookup: Default::default(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() });
         let weak = Arc::downgrade(&shared);
         std::thread::Builder::new()
             .name("omp-ograf-layout".into())
@@ -273,6 +281,11 @@ impl Layout {
     /// Setzt den Rückweg in den Grafik-Speicher (nötig für `follow`); einmalig nach dem Aufbau des Stores.
     pub fn set_updater(&self, u: Updater) {
         let _ = self.shared.updater.set(u);
+    }
+
+    /// Setzt die Abfrage „welche Vorlage zeigt Ebene X“ (für Bindungen je Vorlage); einmalig nach dem Aufbau des Stores.
+    pub fn set_template_lookup(&self, l: TemplateLookup) {
+        let _ = self.shared.lookup.set(l);
     }
 
     pub fn bind(&self, b: Binding) -> Result<(), String> {
@@ -296,9 +309,10 @@ impl Layout {
     }
 
     /// Entfernt Bindungen einer Ebene (`zone` leer = alle); der Slot wird beim nächsten Takt ausgeschaltet.
-    pub fn unbind(&self, layer: &str, zone: &str) {
+    /// `template` leer = Bindungen aller Vorlagen der Ebene.
+    pub fn unbind(&self, layer: &str, zone: &str, template: &str) {
         let mut map = self.shared.bindings.lock().expect("lock poisoned");
-        for (_, e) in map.values_mut().filter(|(b, _)| b.layer == layer && (zone.is_empty() || b.zone == zone)) {
+        for (_, e) in map.values_mut().filter(|(b, _)| b.layer == layer && (zone.is_empty() || b.zone == zone) && (template.is_empty() || b.template == template)) {
             e.unbound = true;
         }
         self.shared.wake.notify_all();
@@ -320,6 +334,11 @@ impl Layout {
         }
     }
 
+    /// Eine Bindung je Vorlage gilt nur, solange die Ebene diese Vorlage zeigt; ohne Vorlage gilt sie immer.
+    fn is_active(&self, b: &Binding) -> bool {
+        is_active(&self.shared.lookup, b)
+    }
+
     pub fn to_json(&self) -> Value {
         let map = self.shared.bindings.lock().expect("lock poisoned");
         Value::Array(
@@ -329,6 +348,7 @@ impl Layout {
                     let mut v = serde_json::to_value(b).unwrap_or(Value::Null);
                     // PIP: Slot an; Fenster-Bindung: „aktiv“, solange ein Fenster am Mischer gesetzt ist
                     v["enabled"] = json!(e.applied.enabled || (b.is_window() && e.applied.pose.is_some()) || (b.is_follow() && !e.applied.sig.is_empty()));
+                    v["active"] = json!(self.is_active(b));
                     v["error"] = json!(e.last_error);
                     v["lagMs"] = json!(e.lag_ms);
                     v["lagMaxMs"] = json!(e.lag_max_ms);
@@ -337,6 +357,10 @@ impl Layout {
                 .collect(),
         )
     }
+}
+
+fn is_active(lookup: &std::sync::OnceLock<TemplateLookup>, b: &Binding) -> bool {
+    b.template.is_empty() || lookup.get().is_some_and(|f| f(&b.layer).as_deref() == Some(b.template.as_str()))
 }
 
 struct MixerLink {
@@ -373,6 +397,9 @@ fn worker(weak: std::sync::Weak<Shared>, registry: RegistryClient, zones: ZoneSt
             }
         }
         for (key, b, mut st, unbound, created) in work {
+            if !unbound && !is_active(&shared.lookup, &b) {
+                continue; // Vorlage der Ebene ist eine andere: Bindung ruht, bleibt aber gespeichert
+            }
             let result = run_one(&mut links, &registry, &zones, &updater, &b, &mut st, unbound, created);
             let mut map = shared.bindings.lock().expect("lock poisoned");
             if let Some((cur, e)) = map.get_mut(&key) {
@@ -506,7 +533,7 @@ mod tests {
     use super::*;
 
     fn b() -> Binding {
-        Binding { layer: "L1".into(), zone: "box".into(), mixer: "M".into(), level: 0, slot: 1, sender_id: "S".into(), kind: String::new() }
+        Binding { layer: "L1".into(), zone: "box".into(), mixer: "M".into(), level: 0, slot: 1, sender_id: "S".into(), kind: String::new(), template: String::new() }
     }
     fn z(o: f64) -> Zone {
         Zone { id: "box".into(), x: 0.0625, y: 0.375, w: 0.25, h: 1.0 / 3.0, o }
@@ -546,7 +573,7 @@ mod tests {
         assert!(plan(&w, Some(&z(1.0)), (1920, 1080), &mut st).is_empty());
         assert_eq!(plan(&w, None, (1920, 1080), &mut st), vec![Action::SetWindow(None)]);
         assert!(plan(&w, None, (1920, 1080), &mut st).is_empty());
-        let l = Layout { shared: Arc::new(Shared { updater: Default::default(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
+        let l = Layout { shared: Arc::new(Shared { updater: Default::default(), lookup: Default::default(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
         assert!(l.bind(w).is_ok());
         assert!(l.bind(Binding { kind: "x".into(), ..b() }).is_err());
     }
@@ -565,7 +592,7 @@ mod tests {
         let v1 = slot_view(&slots, 1, (1280, 720)).unwrap();
         assert!(v1.focused && !v1.other_focus);
         assert!(slot_view(&slots, 7, (1280, 720)).is_none());
-        let l = Layout { shared: Arc::new(Shared { updater: Default::default(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
+        let l = Layout { shared: Arc::new(Shared { updater: Default::default(), lookup: Default::default(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
         assert!(l.bind(Binding { kind: "follow".into(), sender_id: String::new(), ..b() }).is_ok());
     }
 
@@ -575,18 +602,38 @@ mod tests {
         assert_eq!(x.method("pip.setPose"), "pip.setPose");
         x.level = 2;
         assert_eq!(x.method("pip.setPose"), "level2.pip.setPose");
-        let l = Layout { shared: Arc::new(Shared { updater: Default::default(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
+        let l = Layout { shared: Arc::new(Shared { updater: Default::default(), lookup: Default::default(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
         assert!(l.bind(Binding { sender_id: String::new(), ..b() }).is_err());
         assert!(l.bind(b()).is_ok());
         assert_eq!(l.to_json().as_array().unwrap().len(), 1);
         let saved = serde_json::json!({"layout": l.export()});
         assert_eq!(saved["layout"][0]["senderId"], "S");
-        l.unbind("L1", "");
+        l.unbind("L1", "", "");
         assert!(l.to_json().as_array().unwrap().is_empty());
         assert!(l.export().is_empty());
         l.restore(&saved);
         assert_eq!(l.export(), vec![b()]);
         l.restore(&serde_json::json!({"layout": [{"nonsense": 1}]})); // ungültig: übersprungen
         assert_eq!(l.export().len(), 1);
+    }
+
+    #[test]
+    fn bindings_per_template_are_separate_and_follow_the_layer() {
+        let l = Layout { shared: Arc::new(Shared { updater: Default::default(), lookup: Default::default(), bindings: Mutex::new(BTreeMap::new()), wake: Condvar::new() }) };
+        let shown = Arc::new(Mutex::new(Some("wand".to_string())));
+        let s2 = shown.clone();
+        l.set_template_lookup(Box::new(move |_| s2.lock().unwrap().clone()));
+        assert!(l.bind(Binding { template: "wand".into(), slot: 1, ..b() }).is_ok());
+        assert!(l.bind(Binding { template: "rahmen".into(), slot: 2, ..b() }).is_ok());
+        assert_eq!(l.export().len(), 2); // gleiche Ebene + Zone, zwei Vorlagen: zwei Bindungen
+        let active = |l: &Layout| l.to_json().as_array().unwrap().iter().filter(|v| v["active"] == true).map(|v| v["templateId"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(active(&l), vec!["wand"]);
+        *shown.lock().unwrap() = Some("rahmen".into());
+        assert_eq!(active(&l), vec!["rahmen"]);
+        *shown.lock().unwrap() = None; // Ebene nicht on air: nichts aktiv
+        assert!(active(&l).is_empty());
+        l.unbind("L1", "box", "wand");
+        assert_eq!(l.export().len(), 1);
+        assert_eq!(l.export()[0].template, "rahmen");
     }
 }

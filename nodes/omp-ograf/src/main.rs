@@ -334,6 +334,8 @@ impl ParamStore for OgrafStore {
                         MethodArg { name: "level".to_string(), kind: ParamType::Number },
                         // `pip` (Standard) oder `window` (Paternoster-Fenster, ohne senderId)
                         MethodArg { name: "kind".to_string(), kind: ParamType::String },
+                        // Vorlage, für die die Bindung gilt (leer = jede Vorlage der Ebene)
+                        MethodArg { name: "templateId".to_string(), kind: ParamType::String },
                     ],
                 },
                 // Kapitel 90.4: Vorlagen-Bibliothek (Editor)
@@ -366,6 +368,7 @@ impl ParamStore for OgrafStore {
                     args: vec![
                         MethodArg { name: "layerId".to_string(), kind: ParamType::String },
                         MethodArg { name: "zone".to_string(), kind: ParamType::String },
+                        MethodArg { name: "templateId".to_string(), kind: ParamType::String },
                     ],
                 },
                 MethodSpec {
@@ -554,6 +557,7 @@ impl ParamStore for OgrafStore {
                     slot: num("slot"),
                     sender_id: text("senderId"),
                     kind: text("kind"),
+                    template: text("templateId"),
                 };
                 self.layout.bind(b).map_err(|e| InvokeError::Message(e))
             }
@@ -565,7 +569,7 @@ impl ParamStore for OgrafStore {
             }
             "layout.unbind" => {
                 let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-                self.layout.unbind(&text("layerId"), &text("zone"));
+                self.layout.unbind(&text("layerId"), &text("zone"), &text("templateId"));
                 Ok(())
             }
             _ if name.starts_with("subtitle.") => self.subtitle_invoke(&name["subtitle.".len()..], args),
@@ -822,6 +826,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
                     None => false,
                 }
+            })
+        }));
+    }
+
+    // Abfrage für Bindungen je Vorlage: welche Vorlage zeigt eine Ebene gerade?
+    {
+        let weak = Arc::downgrade(&concrete);
+        concrete.layout.set_template_lookup(Box::new(move |layer| {
+            weak.upgrade().and_then(|c| {
+                let all = c.layers.lock().expect("lock poisoned").to_json();
+                all.as_array()?.iter().find(|l| l["id"].as_str() == Some(layer)).and_then(|l| l["templateId"].as_str().map(str::to_string))
             })
         }));
     }
