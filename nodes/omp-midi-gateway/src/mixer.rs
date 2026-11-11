@@ -97,6 +97,8 @@ struct LinkShared {
     on_air: Mutex<HashMap<String, bool>>,
     found: AtomicBool,
     error: Mutex<String>,
+    /// Letzter Fehler eines Befehls (die Abfrage löscht ihren eigenen Fehler, nicht diesen).
+    cmd_error: Mutex<String>,
     client: Mutex<Option<ProxyClient>>,
     node_id: Mutex<String>,
     /// Zählt Wechsel des Ziel-Nodes (der Live-Strom beginnt dann neu).
@@ -152,7 +154,8 @@ impl MixerLink {
         self.sh.found.load(Ordering::Relaxed)
     }
     pub fn error(&self) -> String {
-        self.sh.error.lock().expect("lock poisoned").clone()
+        let c = self.sh.cmd_error.lock().expect("lock poisoned").clone();
+        if c.is_empty() { self.sh.error.lock().expect("lock poisoned").clone() } else { c }
     }
 }
 
@@ -213,8 +216,9 @@ fn cmd_loop(sh: Arc<LinkShared>, stop: Arc<AtomicBool>, rx: Receiver<MixerCmd>, 
         let Some(c) = client else { continue };
         for cmd in batch {
             if let Some((name, args)) = cmd_call(&cmd, &master_aux) {
-                if let Err(e) = c.invoke(&name, args) {
-                    *sh.error.lock().expect("lock poisoned") = format!("{name}: {e}");
+                match c.invoke(&name, args) {
+                    Ok(()) => sh.cmd_error.lock().expect("lock poisoned").clear(),
+                    Err(e) => *sh.cmd_error.lock().expect("lock poisoned") = format!("{name}: {e}"),
                 }
             }
         }

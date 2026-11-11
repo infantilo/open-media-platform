@@ -6511,7 +6511,7 @@ Vor jedem Schritt den Originaltext der zitierten Normen lesen (§0 Regel 10). Ve
 - **Offen:** siehe `docs/decisions.md` (2026-11-11 AD/LDAP).
 
 
-## Kapitel 93: MIDI-Pulte — Mackie Control (iCON V1-M/P1-M mit Erweiterung), generisches Profil, Browser und Gateway (Nutzerauftrag 2026-11-11; **umgesetzt, Tests grün, Gateway als Prozess gestartet und im Browser (Panel mit Simulator) geprüft; NICHT an einem echten Pult geprüft**)
+## Kapitel 93: MIDI-Pulte — Mackie Control (iCON V1-M/P1-M mit Erweiterung), generisches Profil, Browser und Gateway (Nutzerauftrag 2026-11-11; **umgesetzt, Tests grün, Gateway über den Launcher gegen einen echten Audiomischer mit Simulator-Pult geprüft (Fader, Mute, Solo, Pan, Rückfahren; Pegel/On-Air mangels Audio nicht), Panel im Browser geprüft; NICHT an einem echten Pult geprüft**)
 
 Vertrag, Quellen und Prüfstatus: `docs/CONTRACT-MIDI.md`. Zwei Wege mit derselben Logik, beide mit Simulator (es gab kein Gerät):
 
