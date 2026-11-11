@@ -30673,3 +30673,14 @@ LDAP-Bind“ aus 2026-07-10).
 - **Offen:** Sitzungen gelöschter AD-Konten laufen bis Token-Ablauf; kein Gruppenabgleich zwischen Anmeldungen
   (kein periodischer Sync); kein Pre-Provisioning von Verzeichnisnutzern; kein Kerberos/SSO (nur Bind mit Passwort);
   OIDC/SAML nicht gebaut.
+
+
+## 2026-11-11 — MIDI-Pulte (Kap. 93)
+
+- **Entscheidung (Nutzer):** iCON V1-M/P1-M (mit -X) über **Mackie Control** bedienen, beide Wege: **Browser (Web MIDI)** und **Gateway-Node** (Server/Netzwerk); ein generisches Profil für andere Geräte. Es standen keine Geräte zur Verfügung → Simulator.
+- **Normen:** RFC 6295 (RTP-MIDI-Nutzlast) und Apples „MIDI Network Driver Protocol“ gelesen; die Mackie-Control-Sprache ist **nicht herstellerseitig veröffentlicht** — Quelle ist eine unabhängige Nachforschung (TouchMCU, gegen MCU Pro FW 3.0.0 geprüft) und eine Messung (rncbc.org); das Emagic-Originaldokument wurde nicht gelesen (siehe `docs/CONTRACT-MIDI.md` §2). Bytebreiten der AppleMIDI-Pakete aus dem Wireshark-Dissector.
+- **Abweichung/Eigenlösung:** Fader-Kennlinie (keine Norm), Pegel-Stufen (Programmsache laut Quelle), Echo-Sperre/Haltewert gegen springende Fader.
+- **Keine neue Bibliothek für MIDI:** ALSA-Rohgeräte sind Zeichengeräte, RTP-MIDI ist UDP (Minimal-Dependency-Regel); nur `ureq` (schon im Baum) für den Live-Strom.
+- **HUI nicht umgesetzt:** eigene Sprache (Ping/Zonen); MCU genügt für die genannten Geräte (laut Händlerangaben beide Modi).
+- **Sicherheit:** Pfad eines Rohgeräts nur `/dev/snd/midiC<n>D<m>` (der Node schreibt dorthin; kein beliebiger Dateipfad); höchstens 4 Einheiten; Konfiguration nur über `setConfig` (prüft, nennt Gründe).
+- **Risiko:** am echten Gerät unbelegt: Erweiterung als eigener USB-Port (angenommen), Anmeldung, Gerätekennung `0x15` für Erweiterungen, RTP-MIDI-Gegenseitigkeit mit fremden Geräten.

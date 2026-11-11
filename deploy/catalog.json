@@ -428,6 +428,17 @@
     "expectedResources": "sehr gering"
   },
   {
+    "type": "omp-midi-gateway",
+    "label": "MIDI-Gateway",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-midi-gateway"],
+    "env": {},
+    "mediaKind": "audio",
+    "description": "MIDI-Pulte am Server: Fahrfader-Pulte mit Mackie-Control-Protokoll (Hauptpult plus Erweiterungen, z. B. iCON V1-M/V1-X und P1-M/P1-X, auch Behringer X-Touch u. a.) steuern den Audiomischer — Fader, Stumm, Solo (PFL), Auswahl, Drehgeber (Pan), Bank/Kanal-Tasten, Anzeige mit Kanalnamen und Pegel, Rec-LED = On-Air, Master-Fader auf einen Aux-Bus. Anschlüsse: USB-Rohgeräte des Kernels (/dev/snd/midiC<n>D<m>), Netzwerk-MIDI (RTP-MIDI nach RFC 6295 mit AppleMIDI-Sitzung, als Hörer oder Einlader) und ein Simulator ohne Gerät. Betriebsart „profile“: beliebige MIDI-Geräte (CC, Note, Pitchbend) lassen sich per JSON-Profil beliebigen Methoden zuordnen, auch relativ (Drehgeber) und als Umschalter. Nicht belegte Pult-Tasten und Reglerbewegungen gehen als NATS-Ereignis `omp.midi.<node>.…` hinaus (Auslöser für Workflows). Läuft ohne Browser; im Browser (Chrome/Edge) bedient dieselbe Logik USB-Pulte direkt (Knopf „MIDI“). Vertrag: docs/CONTRACT-MIDI.md.",
+    "i18n": { "en": {"label": "MIDI gateway", "description": "MIDI surfaces on the server: motorised-fader surfaces speaking the Mackie Control protocol (main unit plus extenders, e.g. iCON V1-M/V1-X and P1-M/P1-X, also Behringer X-Touch and others) control the audio mixer — faders, mute, solo (PFL), select, knobs (pan), bank/channel keys, display with channel names and levels, REC LED = on air, master fader on an aux bus. Ports: kernel USB raw devices (/dev/snd/midiC<n>D<m>), network MIDI (RTP-MIDI per RFC 6295 with AppleMIDI session, as listener or inviter) and a simulator without hardware. Mode “profile”: any MIDI device (CC, note, pitch bend) can be mapped to any method with a JSON profile, also relative (knobs) and as toggle. Unmapped surface keys and control moves are published as NATS event `omp.midi.<node>.…` (workflow triggers). Runs without a browser; in the browser (Chrome/Edge) the same logic drives USB surfaces directly (button “MIDI”). Contract: docs/CONTRACT-MIDI.md.", "expectedResources": "very low"} },
+    "expectedResources": "sehr gering"
+  },
+  {
     "type": "omp-failover",
     "label": "Havarieumschalter",
     "runner": "process",

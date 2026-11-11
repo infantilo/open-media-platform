@@ -1528,6 +1528,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-midi-gateway"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "omp-node-sdk",
+ "omp-playout-core",
+ "serde_json",
+ "tokio",
+ "ureq",
+]
+
+[[package]]
 name = "omp-multiviewer"
 version = "0.1.0"
 dependencies = [

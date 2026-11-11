@@ -1,0 +1,199 @@
+// Bedienfeld von omp-midi-gateway (Kapitel 93): Status der Pulte, Einheiten einrichten (USB-Rohgerät, RTP-MIDI, Simulator), Mischer wählen,
+// Profil (Betriebsart „profile“), Simulator-Bedienung, letzte Ereignisse. Generische Node-Proxy-API; eigenes Mini-t() (Sprache aus <html lang>).
+const T = (() => {
+  const D = {
+    de: {
+      status: "Status", running: "läuft", stopped: "nicht gestartet", mode: "Betriebsart", modeMcu: "Mackie Control (Mischpult)", modeProfile: "Generisches Profil",
+      mixer: "Audiomischer (Anzeigename)", masterAux: "Master-Fader führt Aux-Bus (ID)", mixerFound: "Mischer gefunden", mixerMissing: "Mischer nicht gefunden",
+      bank: "Bank {n} · {c} Kanäle", units: "Einheiten", colUnit: "Nr.", colType: "Art", colName: "Name", colUp: "Anschluss", colOnline: "Pult meldet sich",
+      up: "ja", down: "nein", add: "Einheit hinzufügen", remove: "Entfernen", raw: "USB (Rohgerät)", rtpListen: "Netzwerk: Gerät lädt uns ein (Port)", rtpConnect: "Netzwerk: wir laden ein (Host:Port)", sim: "Simulator",
+      detected: "Erkannte USB-MIDI-Geräte", noneDetected: "Keine Rohgeräte unter /dev/snd gefunden (Gerät eingesteckt? Gruppe „audio“?).", save: "Speichern und neu starten", saved: "Gespeichert.",
+      profile: "Profil (JSON)", events: "Letzte Ereignisse", noEvents: "Noch keine Ereignisse.", sim_title: "Simulator-Pult {n}", strip: "Kanalzug", fader: "Fader setzen", touch: "Berühren", release: "Loslassen",
+      press: "Taste", turn: "Drehgeber +1", turnBack: "Drehgeber −1", linkDrop: "Verbindung trennen/herstellen", fail: "{m} fehlgeschlagen: {d}", lastMidi: "Zuletzt erkannt",
+      hint: "USB-Pulte erscheinen als Rohgerät; Netzwerk-Pulte sprechen RTP-MIDI (AppleMIDI). Ohne Gerät lässt sich alles mit dem Simulator prüfen.",
+    },
+    en: {
+      status: "Status", running: "running", stopped: "not started", mode: "Mode", modeMcu: "Mackie Control (mixing console)", modeProfile: "Generic profile",
+      mixer: "Audio mixer (display name)", masterAux: "Master fader drives aux bus (ID)", mixerFound: "Mixer found", mixerMissing: "Mixer not found",
+      bank: "Bank {n} · {c} channels", units: "Units", colUnit: "No.", colType: "Type", colName: "Name", colUp: "Port", colOnline: "Surface responding",
+      up: "yes", down: "no", add: "Add unit", remove: "Remove", raw: "USB (raw device)", rtpListen: "Network: device invites us (port)", rtpConnect: "Network: we invite (host:port)", sim: "Simulator",
+      detected: "Detected USB MIDI devices", noneDetected: "No raw devices under /dev/snd (device plugged in? group “audio”?).", save: "Save and restart", saved: "Saved.",
+      profile: "Profile (JSON)", events: "Recent events", noEvents: "No events yet.", sim_title: "Simulated surface {n}", strip: "Channel strip", fader: "Set fader", touch: "Touch", release: "Release",
+      press: "Key", turn: "Knob +1", turnBack: "Knob −1", linkDrop: "Drop/restore link", fail: "{m} failed: {d}", lastMidi: "Last seen",
+      hint: "USB surfaces appear as raw devices; network surfaces speak RTP-MIDI (AppleMIDI). Everything can be checked with the simulator when no device is at hand.",
+    },
+  };
+  const lang = document.documentElement.lang === "en" ? "en" : "de";
+  return (k, p) => {
+    let s = (D[lang] && D[lang][k]) ?? D.de[k] ?? k;
+    if (p) for (const x in p) s = s.split("{" + x + "}").join(p[x]);
+    return s;
+  };
+})();
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k === "style") el.style.cssText = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "value") el.value = v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+
+const STYLE = `
+  :host { display: block; position: relative; font-family: system-ui, sans-serif; color: var(--t, #e6e6e6); font-size: 12px;
+    --bg: #1b1b1d; --bg2: #232326; --bg3: #2c2c30; --bd: #3a3a40; --mut: #8a8a92; --acc: #4a90d9; --ok: #3fae4b; --err: #e05050; }
+  * { box-sizing: border-box; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  input, select, textarea { background: var(--bg); border: 1px solid var(--bd); border-radius: 3px; padding: 4px 6px; }
+  button { cursor: pointer; background: var(--bg3); border: 1px solid var(--bd); border-radius: 4px; padding: 4px 9px; -webkit-user-select: none; user-select: none; }
+  button:hover { border-color: var(--acc); }
+  .bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 8px; }
+  .bar label { display: flex; flex-direction: column; gap: 2px; color: var(--mut); }
+  .chip { display: inline-block; padding: 2px 10px; border-radius: 10px; background: var(--ok); color: #fff; font-weight: 600; white-space: nowrap; }
+  .chip.down { background: var(--err); } .chip.idle { background: var(--bg3); color: var(--mut); }
+  .banner { display: none; position: absolute; top: 4px; left: 4px; right: 4px; z-index: 20; padding: 5px 8px; border-radius: 4px; background: var(--err); color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.5); pointer-events: none; }
+  .banner.show { display: block; }
+  details.sec { border: 1px solid var(--bd); border-radius: 6px; margin-bottom: 8px; background: var(--bg2); }
+  details.sec > summary { cursor: pointer; padding: 6px 10px; font-weight: 600; }
+  details.sec > .body { padding: 8px 10px 10px; border-top: 1px solid var(--bd); overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; } th { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--mut); text-align: left; padding: 2px 4px; } td { padding: 2px 4px; }
+  textarea { width: 100%; min-height: 140px; font-family: monospace; font-size: 11px; }
+  .hint, .muted { color: var(--mut); } .ev { font-variant-numeric: tabular-nums; padding: 1px 0; font-family: monospace; }
+  .lcd { font-family: monospace; background: #1b2a1b; color: #9f9; padding: 2px 5px; border-radius: 3px; white-space: pre; margin: 2px 0; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
+`;
+
+class OmpMidiGatewayPanel extends HTMLElement {
+  connectedCallback() {
+    const nodeId = this.getAttribute("node-id");
+    const shadow = this.attachShadow({ mode: "open" });
+    const base = `/api/v1/nodes/${nodeId}`;
+    const banner = h("div", { class: "banner" });
+    let bt = null;
+    const show = (text) => { banner.textContent = text; banner.className = "banner show"; clearTimeout(bt); bt = setTimeout(() => banner.classList.remove("show"), 6000); };
+    const getParam = async (name) => { const r = await fetch(`${base}/params/${name}`); return r.ok ? (await r.json()).value : undefined; };
+    const call = async (method, body) => {
+      const r = await fetch(`${base}/methods/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+      if (r.ok) return true;
+      let d = await r.text().catch(() => ""); try { d = JSON.parse(d).error || d; } catch { /* Klartext */ }
+      show(T("fail", { m: method, d: d || r.status })); return false;
+    };
+
+    let status = { running: false }, cfg = { mixer: "", masterAux: "", mode: "mcu", units: [], profile: null }, ports = [], events = [];
+    let editing = false; // Formular wird gerade bearbeitet → nicht überschreiben
+
+    const chipEl = h("span", { class: "chip idle" });
+    const infoEl = h("span", { class: "muted" });
+    const head = h("div", { class: "bar" }, h("label", {}, T("status"), chipEl), infoEl);
+
+    // Einrichtung
+    const mixerIn = h("input", { type: "text", style: "min-width:180px" });
+    const auxIn = h("input", { type: "text", style: "width:90px" });
+    const modeSel = h("select", {}, h("option", { value: "mcu" }, T("modeMcu")), h("option", { value: "profile" }, T("modeProfile")));
+    const profArea = h("textarea", { spellcheck: "false" });
+    const profLabel = h("div", {}, h("div", { class: "muted" }, T("profile")), profArea);
+    const unitBody = h("tbody");
+    const typeSel = h("select", {}, h("option", { value: "raw" }, T("raw")), h("option", { value: "rtpListen" }, T("rtpListen")), h("option", { value: "rtpConnect" }, T("rtpConnect")), h("option", { value: "sim" }, T("sim")));
+    const valIn = h("input", { type: "text", style: "min-width:200px", placeholder: "/dev/snd/midiC1D0 | 5004 | 192.168.1.20:5004" });
+    const portList = h("div");
+    for (const el of [mixerIn, auxIn, modeSel, profArea, valIn]) el.addEventListener("input", () => { editing = true; });
+    const syncProf = () => { profLabel.style.display = modeSel.value === "profile" ? "" : "none"; };
+    modeSel.addEventListener("change", syncProf);
+
+    const unitCfgOf = () => {
+      const t = typeSel.value, v = valIn.value.trim();
+      if (t === "raw") return { type: "raw", path: v };
+      if (t === "rtpListen") return { type: "rtp", listen: Number(v) };
+      if (t === "rtpConnect") return { type: "rtp", connect: v };
+      return { type: "sim" };
+    };
+    const describeUnit = (u) => (u.type === "raw" ? u.path : u.type === "rtp" ? (u.listen ? `RTP :${u.listen}` : `RTP → ${u.connect}`) : T("sim"));
+    const renderUnits = () => unitBody.replaceChildren(...cfg.units.map((u, i) => h("tr", {}, h("td", {}, i + 1), h("td", {}, describeUnit(u)),
+      h("td", {}, h("button", { onclick: () => { editing = true; cfg.units.splice(i, 1); renderUnits(); } }, T("remove"))))));
+    const add = h("button", { onclick: () => { editing = true; cfg.units.push(unitCfgOf()); valIn.value = ""; renderUnits(); } }, T("add"));
+    const saveBtn = h("button", { onclick: async () => {
+      let profile = null;
+      if (modeSel.value === "profile") { try { profile = JSON.parse(profArea.value); } catch (e) { show(String(e.message)); return; } }
+      const next = { mixer: mixerIn.value.trim(), masterAux: auxIn.value.trim(), mode: modeSel.value, units: cfg.units, profile };
+      if (await call("setConfig", { config: JSON.stringify(next) })) { editing = false; show(T("saved")); poll(true); }
+    } }, T("save"));
+    const setupSec = h("details", { class: "sec", open: true }, h("summary", {}, T("units")), h("div", { class: "body" },
+      h("div", { class: "bar" }, h("label", {}, T("mode"), modeSel), h("label", {}, T("mixer"), mixerIn), h("label", {}, T("masterAux"), auxIn)),
+      h("table", {}, h("thead", {}, h("tr", {}, [T("colUnit"), T("colName"), ""].map((x) => h("th", {}, x)))), unitBody),
+      h("div", { class: "row" }, typeSel, valIn, add), profLabel, h("div", { class: "row" }, saveBtn), h("p", { class: "hint" }, T("hint"))));
+    const detSec = h("details", { class: "sec" }, h("summary", {}, T("detected")), h("div", { class: "body" }, portList));
+
+    // Betrieb
+    const liveBody = h("tbody");
+    const liveSec = h("details", { class: "sec", open: true }, h("summary", {}, T("status")), h("div", { class: "body" },
+      h("table", {}, h("thead", {}, h("tr", {}, [T("colUnit"), T("colType"), T("colName"), T("colUp"), T("colOnline")].map((x) => h("th", {}, x)))), liveBody)));
+    const simBox = h("div");
+    const evEl = h("div");
+    const evSec = h("details", { class: "sec" }, h("summary", {}, T("events")), h("div", { class: "body" }, evEl));
+    shadow.append(h("style", {}, STYLE), banner, head, liveSec, simBox, setupSec, detSec, evSec);
+
+    const simSel = { strip: "1", fader: "12287" }; // überlebt das Neuzeichnen
+    const simUnit = (u) => {
+      const n = u.unit;
+      const stripIn = h("input", { type: "number", min: "1", max: "9", value: simSel.strip, style: "width:60px", oninput: (e) => { simSel.strip = e.target.value; } });
+      const faderIn = h("input", { type: "range", min: "0", max: "16383", value: simSel.fader, style: "width:200px", oninput: (e) => { simSel.fader = e.target.value; } });
+      const strip = () => Math.max(0, Math.min(8, (Number(stripIn.value) || 1) - 1));
+      const keys = ["mute", "solo", "select", "rec"];
+      return h("details", { class: "sec", open: true }, h("summary", {}, T("sim_title", { n })), h("div", { class: "body" },
+        h("div", { class: "lcd" }, u.sim.lcd[0]), h("div", { class: "lcd" }, u.sim.lcd[1]),
+        h("div", { class: "muted" }, "Fader: " + u.sim.faders.map((f) => Math.round((f / 16383) * 100)).join(" ")),
+        h("div", { class: "row" }, h("label", {}, T("strip"), stripIn), faderIn, h("button", { onclick: () => call("simulateFader", { unit: n, strip: strip(), value: Number(faderIn.value) }) }, T("fader")),
+          h("button", { onclick: () => call("simulateTurn", { unit: n, strip: Math.min(7, strip()), steps: 1 }) }, T("turn")), h("button", { onclick: () => call("simulateTurn", { unit: n, strip: Math.min(7, strip()), steps: -1 }) }, T("turnBack"))),
+        h("div", { class: "row" }, ...keys.map((k) => h("button", { onclick: () => call("simulatePress", { unit: n, name: k + (strip() + 1) }) }, `${k} ${T("press")}`)),
+          ...["bankLeft", "bankRight", "channelLeft", "channelRight", "nameValue", "play", "f1"].map((k) => h("button", { onclick: () => call("simulatePress", { unit: n, name: k }) }, k)),
+          h("button", { onclick: () => call("simulateLink", { unit: n, up: !u.up }) }, T("linkDrop")))));
+    };
+
+    const render = () => {
+      chipEl.textContent = status.running ? T("running") : T("stopped");
+      chipEl.className = `chip${status.running ? "" : " idle"}`;
+      const bits = [];
+      if (status.mode === "mcu") bits.push(status.mixerFound ? T("mixerFound") : T("mixerMissing"), T("bank", { n: Math.floor((status.bank || 0) / Math.max(1, status.strips || 8)) + 1, c: status.channels || 0 }));
+      if (status.mode === "profile" && status.lastMidi) bits.push(`${T("lastMidi")}: ${status.lastMidi}`);
+      if (status.error) bits.push(status.error);
+      infoEl.textContent = bits.join(" · ");
+      liveBody.replaceChildren(...(status.units || []).map((u) => h("tr", {}, h("td", {}, u.unit), h("td", {}, u.type), h("td", {}, u.name + (u.version ? ` (${u.version})` : "")),
+        h("td", {}, u.up ? T("up") : T("down")), h("td", {}, u.online ? T("up") : T("down")))));
+      simBox.replaceChildren(...(status.units || []).filter((u) => u.sim).map(simUnit));
+      evEl.replaceChildren(...(events.length ? events.slice().reverse().map((e) => h("div", { class: "ev" }, `#${e.event.seq} ${e.subject} ${JSON.stringify({ name: e.event.name, down: e.event.down, up: e.event.up, value: e.event.value })}`)) : [h("span", { class: "muted" }, T("noEvents"))]));
+      portList.replaceChildren(...(ports.length ? ports.map((p) => h("div", { class: "row" }, h("code", {}, p.path), h("span", { class: "muted" }, p.name),
+        h("button", { onclick: () => { editing = true; cfg.units.push({ type: "raw", path: p.path }); renderUnits(); } }, T("add")))) : [h("span", { class: "muted" }, T("noneDetected"))]));
+    };
+
+    const poll = async (force) => {
+      try {
+        const [s, c, p, r] = await Promise.all(["status", "config", "ports", "recent"].map(getParam));
+        if (s) status = JSON.parse(s);
+        if (p) ports = JSON.parse(p);
+        if (r) events = JSON.parse(r);
+        if (c && (!editing || force)) {
+          cfg = JSON.parse(c);
+          mixerIn.value = cfg.mixer || ""; auxIn.value = cfg.masterAux || ""; modeSel.value = cfg.mode || "mcu";
+          profArea.value = cfg.profile ? JSON.stringify(cfg.profile, null, 2) : "";
+          syncProf(); renderUnits();
+        }
+        // Eingabefelder behalten den Fokus; die Statusanzeige läuft weiter
+        if (!(shadow.activeElement && shadow.activeElement.tagName === "INPUT" && shadow.activeElement.type === "range")) render();
+      } catch { /* nächster Takt */ }
+    };
+    shadow.addEventListener("contextmenu", (e) => { if (e.target && e.target.closest && e.target.closest("button")) e.preventDefault(); });
+    poll(true);
+    this._i = setInterval(poll, 700);
+  }
+  disconnectedCallback() { clearInterval(this._i); }
+}
+if (!customElements.get("omp-midi-gateway-panel")) customElements.define("omp-midi-gateway-panel", OmpMidiGatewayPanel);

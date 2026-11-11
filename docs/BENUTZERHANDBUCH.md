@@ -2587,6 +2587,24 @@ Starttaste, Zahlen mit Bereich werden am „+“ / „+ XL“ zu Dials. Eigene N
 wird nur im geöffneten Browser-Tab bedient (kein Hintergrunddienst). **Noch nicht am echten Gerät geprüft** (nur Simulator und echter Stack): Drehung
 der Bilder beim „+“ und „+ XL“, USB-Dauer, Wiederverbinden, Dial-Drehsinn — Prüfliste am Ende von `UMSETZUNG.md`.
 
+## 10g-2. MIDI-Pulte (Fahrfader-Pult am Audiomischer)
+
+Ein MIDI-Pult mit **Mackie-Control**-Betrieb (z. B. **iCON V1-M** oder **P1-M**, mit Erweiterung **V1-X/P1-X** für 16 Fader) bedient den Audiomischer: **Fader** (mit Motor, folgt dem Bildschirm und anderen Bedienern),
+**Mute**, **Solo** (= Vorhören/PFL), **Select**, **Drehgeber** (= Pan; Druck = Mitte), **Bank/Kanal** links/rechts, die Anzeige zeigt Kanalnamen und Pegel in dB, die **Rec**-Lampe leuchtet, wenn der Kanal **auf Sendung** ist.
+Der **Master-Fader** führt auf Wunsch einen Aux-Bus (der Audiomischer hat keinen Hauptpegel).
+
+**Am Arbeitsplatz (USB):** Chrome oder Edge, Knopf **MIDI** in der App-Leiste (bzw. im Benutzer-Widget): „MIDI-Geräte suchen“, Hauptpult und Erweiterungen wählen, Audiomischer wählen, „Starten“. Der Browser fragt nach der
+SysEx-Erlaubnis. Die Verbindung bleibt beim Wechsel der Ansicht bestehen; beim Schließen der Seite endet sie.
+
+**Am Server oder im Netzwerk:** Node **MIDI-Gateway** starten (läuft ohne Browser). Im Bedienfeld Einheiten hinzufügen — USB-Gerät aus der Liste „Erkannte USB-MIDI-Geräte“, oder **Netzwerk-MIDI** (das Gerät lädt uns ein: Port; wir laden
+ein: Host:Port) —, den Audiomischer (Anzeigename) eintragen, „Speichern und neu starten“. Der Prozess braucht Zugriff auf `/dev/snd/midi…` (Gruppe `audio`). Nicht belegte Pult-Tasten (Play, F1 …) melden sich als Ereignis
+`omp.midi.<node>.button.<name>` und können einen Workflow auslösen.
+
+**Andere MIDI-Geräte:** Betriebsart „Generisches Profil“: ein JSON ordnet Regler und Tasten Methoden zu (absolut, Taste, Umschalter, relativer Drehgeber). Im Browser findet „Lernen“ den nächsten Regler am Gerät.
+
+**Ohne Gerät ausprobieren:** „Simulator starten“ (Browser) bzw. Einheit „Simulator“ (Gateway): ein virtuelles Pult mit Fadern, Tasten und Anzeige. **Hinweis:** getestet ist alles mit dem Simulator; an einem echten Pult ist es noch nicht erprobt
+(Betriebsart am Gerät auf „Mackie Control“ stellen; Auffälligkeiten bitte melden).
+
 ## 10h. ffmpeg-Jobs: wo sie laufen und wie die Sendung geschützt wird
 
 Alle ffmpeg-/ffprobe-Läufe der Plattform — der Workflow-Schritt **Script**, die **File-QC**, **Review-Proxys** und Einzelbilder, die **Nachbearbeitung der Aufnahmen** — laufen als *Jobs*. Unter **Administration → Plattform → ffmpeg-Jobs** sehen Sie Hosts, Jobs und Einstellungen. (Für die Ansicht genügt das Recht „Jobs ansehen“, zum Ändern „Job-Verteilung einstellen“, zum Abbrechen „Jobs starten und abbrechen“.)
