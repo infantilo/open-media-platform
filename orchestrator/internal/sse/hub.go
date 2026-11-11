@@ -5,8 +5,18 @@ package sse
 
 import (
 	"encoding/json"
+	"sort"
 	"sync"
+	"time"
 )
+
+// ClientInfo beschreibt einen verbundenen SSE-Client für die Admin-Ansicht.
+type ClientInfo struct {
+	User      string    `json:"user"`
+	RemoteIP  string    `json:"remoteIp"`
+	UserAgent string    `json:"userAgent"`
+	Since     time.Time `json:"since"`
+}
 
 // Event ist die über den SSE-Stream ausgelieferte Hülle. Type identifiziert
 // den Ereignistyp (NATS-Subject wie "omp.health.<id>" oder synthetische
@@ -51,21 +61,35 @@ type Hub struct {
 	// wird dieser Zähler nie zurückgesetzt, ein monoton wachsender
 	// Prometheus-Counter.
 	totalDrops uint64
+	// info hält je Client die Verbindungsdaten (nur für Clients, die über SubscribeInfo kamen).
+	info map[chan Event]ClientInfo
 }
 
 // NewHub erstellt einen leeren Hub.
 func NewHub() *Hub {
-	return &Hub{clients: make(map[chan Event]struct{}), dropped: make(map[chan Event]bool)}
+	return &Hub{clients: make(map[chan Event]struct{}), dropped: make(map[chan Event]bool), info: make(map[chan Event]ClientInfo)}
 }
 
 // Subscribe registriert einen neuen Client und liefert dessen Event-Kanal
 // sowie eine cancel-Funktion, die beim Verbindungsende aufgerufen werden
 // muss (schließt den Kanal, entfernt den Client aus dem Hub).
 func (h *Hub) Subscribe() (<-chan Event, func()) {
+	return h.SubscribeInfo(ClientInfo{})
+}
+
+// SubscribeInfo wie Subscribe, merkt sich zusätzlich Benutzer/IP/Start des Clients
+// (Since wird gesetzt, falls leer). Ein Client ohne User und IP wird nicht aufgelistet.
+func (h *Hub) SubscribeInfo(ci ClientInfo) (<-chan Event, func()) {
 	ch := make(chan Event, 16)
+	if ci.Since.IsZero() {
+		ci.Since = time.Now()
+	}
 
 	h.mu.Lock()
 	h.clients[ch] = struct{}{}
+	if ci.User != "" || ci.RemoteIP != "" {
+		h.info[ch] = ci
+	}
 	h.mu.Unlock()
 
 	return ch, func() { h.unsubscribe(ch) }
@@ -81,6 +105,7 @@ func (h *Hub) unsubscribe(ch chan Event) {
 	if _, ok := h.clients[ch]; ok {
 		delete(h.clients, ch)
 		delete(h.dropped, ch)
+		delete(h.info, ch)
 		close(ch)
 	}
 }
@@ -119,6 +144,18 @@ func (h *Hub) ClientCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.clients)
+}
+
+// Clients liefert die aktuell verbundenen, identifizierten SSE-Clients (älteste zuerst).
+func (h *Hub) Clients() []ClientInfo {
+	h.mu.Lock()
+	out := make([]ClientInfo, 0, len(h.info))
+	for _, ci := range h.info {
+		out = append(out, ci)
+	}
+	h.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Since.Before(out[j].Since) })
+	return out
 }
 
 // TotalDrops liefert die kumulative Anzahl fehlgeschlagener

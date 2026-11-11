@@ -37,6 +37,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/admin/clients",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/admin/cluster-rollout",
     "auth": "verb:Admin",
     "domain": "core"

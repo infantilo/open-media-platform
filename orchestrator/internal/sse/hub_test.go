@@ -177,3 +177,21 @@ func TestHubBroadcastDoesNotBlockOnFullBuffer(t *testing.T) {
 		t.Fatal("Broadcast blocked on a slow/unread subscriber")
 	}
 }
+
+func TestHubClientsListsIdentifiedOnly(t *testing.T) {
+	h := NewHub()
+	_, c1 := h.SubscribeInfo(ClientInfo{User: "anna", RemoteIP: "10.0.0.1"})
+	_, c2 := h.Subscribe()
+	if h.ClientCount() != 2 {
+		t.Fatalf("count=%d", h.ClientCount())
+	}
+	cl := h.Clients()
+	if len(cl) != 1 || cl[0].User != "anna" || cl[0].Since.IsZero() {
+		t.Fatalf("clients=%+v", cl)
+	}
+	c1()
+	c2()
+	if len(h.Clients()) != 0 {
+		t.Fatal("expected empty after cancel")
+	}
+}

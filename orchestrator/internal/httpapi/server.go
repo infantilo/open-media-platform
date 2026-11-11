@@ -445,6 +445,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/workflows/{id}/interface/inputs/{name}/disconnect", g.requireVerbGlobal(authz.VerbOperate, handleWorkflowInterfaceDisconnect(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}/plan", g.requireAuth(handleWorkflowPlan(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}/drift", g.requireAuth(handleWorkflowDrift(workflowSvc)))
+	mux.HandleFunc("GET /api/v1/admin/clients", g.requireVerbGlobal(authz.VerbAdmin, handleAdminClients(events)))
 	mux.HandleFunc("GET /api/v1/events", g.requireAuth(handleEvents(events)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/descriptor.json", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))
@@ -1010,7 +1011,19 @@ func handleEvents(events EventSubscriber) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 
-		ch, cancel := events.Subscribe()
+		var ch <-chan sse.Event
+		var cancel func()
+		if is, ok := events.(interface {
+			SubscribeInfo(sse.ClientInfo) (<-chan sse.Event, func())
+		}); ok {
+			ci := sse.ClientInfo{RemoteIP: clientIP(r), UserAgent: r.UserAgent()}
+			if p, ok := principalFromContext(r); ok {
+				ci.User = p.Username
+			}
+			ch, cancel = is.SubscribeInfo(ci)
+		} else {
+			ch, cancel = events.Subscribe()
+		}
 		defer cancel()
 
 		for {
@@ -1029,6 +1042,17 @@ func handleEvents(events EventSubscriber) http.HandlerFunc {
 				flusher.Flush()
 			}
 		}
+	}
+}
+
+// handleAdminClients listet die verbundenen Browser-Clients (Event-Streams) mit Benutzer.
+func handleAdminClients(events EventSubscriber) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		list := []sse.ClientInfo{}
+		if l, ok := events.(interface{ Clients() []sse.ClientInfo }); ok {
+			list = l.Clients()
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"total": events.ClientCount(), "clients": list})
 	}
 }
 

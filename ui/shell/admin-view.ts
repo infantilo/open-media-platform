@@ -25,6 +25,7 @@ import type { FeatureDef, FeatureGrant } from "./feature-grants-logic.ts";
 import { AuditPanel } from "./audit-panel.ts";
 import { DiagnosePanel } from "./diagnose-panel.ts";
 import { SupportPanel } from "./support-panel.ts";
+import { ClientsPanel } from "./clients-panel.ts";
 import { TimelinePanel } from "./timeline-panel.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { adminGroups, type AdminModuleGroup } from "./modules-logic.ts";
@@ -284,6 +285,7 @@ const ADMIN_SUB_TAB_GROUPS: { id: string; labelKey: I18nKey; tabs: { id: AdminTa
       { id: "organizations", labelKey: "admin.tab.organizations", clusterKey: "admin.cluster.access" },
       { id: "groups", labelKey: "admin.tab.groups", clusterKey: "admin.cluster.access" },
       { id: "bindings", labelKey: "admin.tab.bindings", clusterKey: "admin.cluster.access" },
+      { id: "clients", labelKey: "admin.tab.clients", clusterKey: "admin.cluster.access" },
       { id: "catalog", labelKey: "admin.tab.catalog", clusterKey: "admin.cluster.operations" },
       { id: "nodeversions", labelKey: "admin.tab.nodeversions", clusterKey: "admin.cluster.operations" },
       { id: "cluster", labelKey: "admin.tab.cluster", clusterKey: "admin.cluster.operations" },
@@ -356,6 +358,7 @@ class AdminView extends HTMLElement {
   // fehlgeschlagener IS-05-Connect trägt seine trace_id im Response-Header.
   #diagnosePanel = new DiagnosePanel();
   #supportPanel = new SupportPanel();
+  #clientsPanel = new ClientsPanel();
   #timelinePanel = new TimelinePanel();
   #logPollHandle: number | undefined;
   #nodes: NodeEntry[] = [];
@@ -2606,6 +2609,10 @@ class AdminView extends HTMLElement {
         this.#timelinePanel.setContext({ nodes: this.#nodes, workflows: this.#workflows, processes: this.#processes, groups: this.#groups });
         this.appendChild(this.#timelinePanel.el);
         this.#timelinePanel.start();
+        break;
+      case "clients":
+        this.appendChild(this.#clientsPanel.el);
+        this.#clientsPanel.start();
         break;
       case "support":
         this.appendChild(this.#supportPanel.el);
