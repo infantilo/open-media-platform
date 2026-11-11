@@ -108,10 +108,12 @@ export default class PipWall extends HTMLElement {
         const u = b.anim.ms <= 0 ? 1 : Math.max(0, Math.min(1, (Date.now() + lead - b.anim.t0) / b.anim.ms));
         const e = u * u * (3 - 2 * u);
         b.cur = b.anim.from.map((f, j) => f + (b.anim.to[j] - f) * e);
+        b.moving = u < 1;
         if (u < 1) moving = true; else { b.cur = b.anim.to.slice(); b.from = b.cur.slice(); b.to = b.cur.slice(); }
       } else {
       const t = this._moveMs <= 0 ? 1 : Math.min(1, (now - b.t0) / this._moveMs);
       b.cur = b.from.map((f, j) => f + (b.to[j] - f) * t);
+      b.moving = t < 1;
       if (t < 1) moving = true;
       }
       const [x, y, w, h] = b.cur;
@@ -126,11 +128,17 @@ export default class PipWall extends HTMLElement {
     }
     // Ein Fenster verschwindet nur, wenn es ganz vom vergrößerten verdeckt ist; ist es teilweise verdeckt, bleibt es stehen und
     // sein Rahmen wird nur dort ausgespart, wo das vergrößerte Fenster darüber liegt.
-    const focused = this._boxes.some((b) => b.dimWant) ? this._boxes.find((b) => !b.dimWant && b.on) : null;
+    let focused = this._boxes.some((b) => b.dimWant) ? this._boxes.find((b) => !b.dimWant && b.on) : null;
+    if (focused) this._lastFocus = focused;
+    // Fokus gerade losgelassen: das Video fährt noch zurück und liegt dabei weiter über den anderen Fenstern — ihre
+    // Beschriftung bleibt bis zum Ende der Fahrt ausgespart (nicht schon am Anfang darüber).
+    const releasing = !focused && this._cover && this._lastFocus && this._lastFocus.moving ? this._lastFocus : null;
+    if (releasing) focused = releasing;
+    else if (!focused) this._lastFocus = null;
     for (const b of this._boxes) {
       let dim = false;
       let clip = "none";
-      if (b.dimWant && focused) {
+      if ((b.dimWant || releasing) && focused && b !== focused) {
         const [x, y, w, h] = b.cur, [fx, fy, fw, fh] = focused.cur, e = 1e-3;
         dim = x >= fx - e && y >= fy - e && x + w <= fx + fw + e && y + h <= fy + fh + e;
         const ox = Math.max(x, fx), oy = Math.max(y, fy), ox2 = Math.min(x + w, fx + fw), oy2 = Math.min(y + h, fy + fh);
