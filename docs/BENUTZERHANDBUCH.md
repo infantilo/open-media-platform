@@ -1143,7 +1143,29 @@ Der Node **Gebärdensprach-Avatar** setzt Untertitel in Deutsche Gebärdensprach
 
 **Radio: Sendebetrieb (Radio-Automation).** Das Bedienfeld der Radio-Automation (Node *Radio-Automation*, Ziel ist der *Segue-Player*) zeigt im Reiter *Sendebetrieb* die Uhr, die geladene Sendung und die **Playlist**: je Zeile Startzeit, Art (Titel, Jingle, Gesprochenes), Dateiname, die Marken *Intro* und *Outro* (Segue-Punkt) und die Dauer; die nächste Zeile ist grün markiert („bereit“). Rechts stehen *Start*, *Stopp*, *Laden*, *Cue*, *Reset*, *Übergang*, die Hilfsfenster *Navigator*, *Bearbeiten*, *Planung*, *Modtext*, *Teleprompter* und *Protokoll* sowie der Vorhörbereich (PFL) und die frei belegbaren *Hotkeys*. Unten laufen die beiden Abspielkarten **M1** und **M2** (jeweils mit Wellenform und Restzeit) und in der Mitte der Zähler „Nächstes in …“. Die weiteren Reiter: *Planung* (Sendungen vorbereiten und importieren), *Playlist*, *Übergänge* (Übergangs-Editor mit Wellenformen und verschiebbaren Marken), *Moderation* (Moderationskarten und Notizen zur Sendung) und *Protokoll* (As-Run). Die Automation plant aus den Marken die Übergänge (Titel→Titel als Kreuzblende am Segue-Punkt, Jingle über dem Ausklang) und schickt die Stimmen mit Vorlauf (Standard 30 s) an den Segue-Player. Eine fertige Vorlage mit allen Radio-Nodes ist der Workflow *Radio-Moderationsplatz* (`docs/examples/workflow-radio-moderationsplatz.json`).
 
-![Radio-Automation, Reiter Sendebetrieb: Playlist mit Marken, Steuerknöpfe, Abspielkarten M1/M2](screenshots/radio-sendebetrieb.png)
+![Radio-Automation, Reiter Sendebetrieb: Playlist mit Marken, feste Zeiten, Werbeblock, Steuerknöpfe, Moderationskarte, Abspielkarten M1/M2](screenshots/radio-sendebetrieb.png)
+
+**Reiter Planung** — Wochenplan mit den Sendungen des Tages und das Formular der Sendung (Titel, Zeitfenster, Moderation, Freigeben, *Auf Sendung laden*, Versionen):
+
+![Radio-Automation, Reiter Planung: Wochenplan und Sendung](screenshots/radio-planung.png)
+
+**Reiter Playlist** — der Log als Tabelle: Intro, Segue-Punkt, Start in der Datei, Pegel, harte Uhrzeitmarken, Werbeblock mit Soll-Länge und Prüfung „passt“. *Log laden* übergibt den Stand an den Segue-Player:
+
+![Radio-Automation, Reiter Playlist](screenshots/radio-playlist.png)
+
+**Reiter Übergänge und Übergangs-Editor** — jedes Titelpaar mit seiner Blende; *Bearbeiten* (oder Doppelklick auf die Zeit in der Playlist) öffnet den Editor mit den Wellenformen beider Titel, verschiebbaren Marken (Segue-Punkt, Einsatz, Ende der Blende, Intro-Ende, Beginn), Kurven, Vorhören des Übergangs und der Sendequalitäts-Prüfung:
+
+![Radio-Automation, Reiter Übergänge](screenshots/radio-uebergaenge.png)
+![Übergangs-Editor mit Wellenformen und Marken](screenshots/radio-segue-editor.png)
+
+**Reiter Moderation** — Karten mit Lesezeit-Schätzung, an einen Titel oder den Sendungsbeginn gehängt, und Notizen zur Sendung:
+
+![Radio-Automation, Reiter Moderation](screenshots/radio-moderation.png)
+
+**Studio-Logik und Kontakte.** Die *Studio-Logik* (Mikrofongruppen mit Sendelampe und Cough-Haltetaste, Studio-Übergabe, Regeln für Rotlicht und Lautsprecher-Stummschaltung) und der *GPIO*-Node (Ein- und Ausgänge, Simulator) haben eigene Bedienfelder:
+
+![Studio-Logik: Mikrofongruppen, Studio-Übergabe, Regeln](screenshots/radio-studio-logik.png)
+![GPIO: Eingänge und Ausgänge mit Namen und Fail-Safe](screenshots/radio-gpio.png)
 
 **Radio: Lautheitsprüfung (Eingang).** Im Eingang (Datei-Prüfung) gibt es zwei mitgelieferte Profile für Tondateien: *Radio Produktion (EBU R 128)* prüft −23,0 LUFS mit ±0,2 LU Toleranz und True Peak bis −0,7 dBTP; *Radio Kurzform (EBU R 128 s1)* gilt für Spots und Jingles und verlangt zusätzlich, dass die höchste Short-term-Lautheit −18,0 LUFS nicht überschreitet. Nach jeder Prüfung steht die gemessene Lautheit am Asset (Integrated, Lautheitsumfang, True Peak, höchster Short-term-Wert); sie dient später der automatischen Pegelanpassung beim Abspielen. Dateien unter 3 Sekunden haben keinen Short-term-Wert.
 

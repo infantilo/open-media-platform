@@ -207,6 +207,22 @@ counters, next to what the writer actually declares about the flow._
 </tr>
 </table>
 
+<table>
+<tr>
+<td width="33%"><img src="docs/screenshots/radio-planung.png" width="260"><br><sub><b>Radio planning:</b> week plan with the shows of the day and the show form (title, time slot, presenters, release, load on air, versions)</sub></td>
+<td width="33%"><img src="docs/screenshots/radio-playlist.png" width="260"><br><sub><b>Radio playlist:</b> the log as a table — intro, segue point, start in file, gain, fixed clock marks, ad block with target length and "fits" check, drag and drop</sub></td>
+<td width="33%"><img src="docs/screenshots/radio-segue-editor.png" width="260"><br><sub><b>Transition editor:</b> waveforms of both items, draggable segue / fade / intro marks, fade curves, audition of the transition and a render check with the segue player's own mixer</sub></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="33%"><img src="docs/screenshots/radio-uebergaenge.png" width="260"><br><sub>Transitions tab: every pair of the playlist with its blend; "Edit" opens the transition editor (also by double-clicking the time cell)</sub></td>
+<td width="33%"><img src="docs/screenshots/radio-moderation.png" width="260"><br><sub>Presenter tab: cards with a reading-time estimate, attached to a playlist item or the start of the show, plus show notes; the next card appears on the on-air screen</sub></td>
+<td width="33%"><img src="docs/screenshots/radio-studio-logik.png" width="260"><br><sub><b>Studio logic:</b> microphone groups with on-air lamp and cough key, studio handover at an exact time, rules editor (on-air light, speaker muting)</sub></td>
+</tr>
+</table>
+
 ### Support and diagnostics
 
 Built so that a non-specialist can tell what is wrong and an expert gets
