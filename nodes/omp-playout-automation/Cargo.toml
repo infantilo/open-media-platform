@@ -34,4 +34,4 @@ tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "tim
 ureq = { version = "3.3.0", features = ["json"] }
 # Kapitel 74: Fremdplaylist-Adapter lesen mehrere MB große, verschachtelte XML-Sendelisten; ein Handparser wäre bei
 # Entitäten/CDATA/Kodierung fehleranfällig. roxmltree: reine Rust-Bibliothek, keine Unsafe-/Build-Abhängigkeit, MIT/Apache-2.0.
-roxmltree = "0.20"
+roxmltree = "0.21"
