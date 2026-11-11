@@ -3,7 +3,9 @@
 
 import { t } from "../i18n.ts";
 import { apiFetch } from "../connection.ts";
-import { EXAMPLE_PROFILE, midiSession } from "./instance.ts";
+import { EXAMPLE_KEYS, EXAMPLE_PROFILE, midiSession } from "./instance.ts";
+import { type KeysConfig, validateKeys } from "./keys.ts";
+import { noteByName } from "./mcu.ts";
 import { type PortChoice, choices, openChoice, requestAccess, type WmAccess } from "./webmidi.ts";
 import { type Profile, validateProfile } from "./profile.ts";
 import { SimSurface } from "./sim-surface.ts";
@@ -40,6 +42,7 @@ interface Saved {
   mixer?: string;
   masterAux?: string;
   profile?: string;
+  keys?: string;
 }
 const load = (): Saved => {
   try {
@@ -100,6 +103,8 @@ export class MidiPanel extends HTMLElement {
         ${mode === "mcu" ? `<label>${t("midi.masterAux")} <input id="aux" size="8" value="${esc(c.masterAux ?? "")}"></label>` : ""}</div>
       ${mode === "profile" ? `<h3>${t("midi.profile.label")}</h3><textarea id="prof" spellcheck="false">${esc(c.profile ?? JSON.stringify(EXAMPLE_PROFILE, null, 2))}</textarea>
         <div class="row"><button id="check">${t("midi.profile.check")}</button><button id="example">${t("midi.profile.example")}</button><button id="learn">${t("midi.learn")}</button><span id="learnout"></span></div>` : ""}
+      ${mode === "mcu" ? `<h3>${t("midi.keys.label")}</h3><p class="hint">${t("midi.keys.hint")}</p><textarea id="keys" spellcheck="false">${esc(c.keys ?? "")}</textarea>
+        <div class="row"><button id="kcheck">${t("midi.keys.check")}</button><button id="kexample">${t("midi.keys.example")}</button></div>` : ""}
       <div class="row"><button id="start">${t("midi.start")}</button><button id="stop">${t("midi.stop")}</button><button id="sim">${t("midi.sim")}</button></div>
       <div class="err" id="err"></div><div id="status"></div><div id="last"></div>
       <div class="sim" id="simview"></div>`;
@@ -110,7 +115,7 @@ export class MidiPanel extends HTMLElement {
 
   #collect(): Saved {
     const v = (id: string) => (this.#root.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null)?.value ?? "";
-    const s: Saved = { mode: (v("mode") || "mcu") as "mcu" | "profile", units: [0, 1, 2, 3].map((i) => v(`u${i}`)), mixer: v("mixer"), masterAux: v("aux"), profile: this.#root.getElementById("prof") ? v("prof") : this.#cfg.profile };
+    const s: Saved = { mode: (v("mode") || "mcu") as "mcu" | "profile", units: [0, 1, 2, 3].map((i) => v(`u${i}`)), mixer: v("mixer"), masterAux: v("aux"), profile: this.#root.getElementById("prof") ? v("prof") : this.#cfg.profile, keys: this.#root.getElementById("keys") ? v("keys") : this.#cfg.keys };
     this.#cfg = s;
     save(s);
     return s;
@@ -122,7 +127,7 @@ export class MidiPanel extends HTMLElement {
       this.#collect();
       this.#build();
     };
-    for (const id of ["mixer", "aux", "prof"]) {
+    for (const id of ["mixer", "aux", "prof", "keys"]) {
       const el = this.#root.getElementById(id);
       if (el) el.onchange = () => this.#collect();
     }
@@ -134,6 +139,18 @@ export class MidiPanel extends HTMLElement {
       this.#renderSim();
     };
     ($("sim") as HTMLButtonElement).onclick = () => void this.#startSim();
+    const kc = this.#root.getElementById("kcheck");
+    if (kc) {
+      kc.onclick = () => {
+        const k = this.#parseKeys();
+        this.#$("err").textContent = typeof k === "string" ? k : "";
+        if (typeof k !== "string") this.#$("last").innerHTML = `<span class="ok">${t("midi.keys.ok")}</span>`;
+      };
+      this.#$("kexample").onclick = () => {
+        (this.#$("keys") as HTMLTextAreaElement).value = JSON.stringify(EXAMPLE_KEYS, null, 2);
+        this.#collect();
+      };
+    }
     const chk = this.#root.getElementById("check");
     if (chk) {
       chk.onclick = () => {
@@ -155,6 +172,20 @@ export class MidiPanel extends HTMLElement {
         r.learn((d) => (this.#$("learnout").textContent = t("midi.learn.got", { type: d.type === "cc" ? "CC" : d.type === "note" ? "Note" : "Pitchbend", num: d.num, ch: d.channel, v: d.value })));
       };
     }
+  }
+
+  /** Tastenbelegung aus dem Eingabefeld: leer = Standard (null), sonst geprüft. */
+  #parseKeys(): KeysConfig | null | string {
+    const txt = ((this.#root.getElementById("keys") as HTMLTextAreaElement | null)?.value ?? this.#cfg.keys ?? "").trim();
+    if (!txt) return null;
+    let k: unknown;
+    try {
+      k = JSON.parse(txt);
+    } catch (e) {
+      return String((e as Error).message);
+    }
+    const errs = validateKeys(k, (n) => noteByName(n) !== null);
+    return errs.length ? errs.join("; ") : (k as KeysConfig);
   }
 
   #parseProfile(): Profile | string {
@@ -197,7 +228,9 @@ export class MidiPanel extends HTMLElement {
       if (typeof p === "string") return void (this.#$("err").textContent = p);
       await midiSession.start({ mode: "profile", ports: ports.slice(0, 1), mixerNodeId: s.mixer ?? "", profile: p });
     } else {
-      await midiSession.start({ mode: "mcu", ports, mixerNodeId: s.mixer ?? "", masterAux: s.masterAux || undefined });
+      const k = this.#parseKeys();
+      if (typeof k === "string") return void (this.#$("err").textContent = k);
+      await midiSession.start({ mode: "mcu", ports, mixerNodeId: s.mixer ?? "", masterAux: s.masterAux || undefined, keys: k });
     }
     this.#renderStatus();
   }
@@ -206,7 +239,9 @@ export class MidiPanel extends HTMLElement {
     const s = this.#collect();
     if (!s.mixer) return void (this.#$("err").textContent = t("midi.err.no-mixer"));
     this.#sims = [new SimSurface("Simulator Pult"), new SimSurface("Simulator Erweiterung")];
-    await midiSession.start({ mode: "mcu", ports: this.#sims, mixerNodeId: s.mixer, masterAux: s.masterAux || undefined });
+    const k = this.#parseKeys();
+    if (typeof k === "string") return void (this.#$("err").textContent = k);
+    await midiSession.start({ mode: "mcu", ports: this.#sims, mixerNodeId: s.mixer, masterAux: s.masterAux || undefined, keys: k });
     this.#renderSim();
     this.#renderStatus();
   }
@@ -292,6 +327,41 @@ export class MidiPanel extends HTMLElement {
       b.onclick = () => sim.press(name);
       bar.appendChild(b);
     }
+    // Funktionstasten, Seiten, Jog, Shift
+    const keysBar = document.createElement("div");
+    keysBar.className = "bar";
+    keysBar.title = t("midi.sim.keys");
+    const kb = (label: string, name: string) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.title = name;
+      b.onclick = () => sim.press(name);
+      parts.push(() => {
+        const st = sim.leds.get(noteByName(name) ?? -1) ?? "off";
+        b.className = st === "on" ? "led-on" : st === "blink" ? "led-blink" : "";
+      });
+      return b;
+    };
+    for (let i = 1; i <= 8; i++) keysBar.appendChild(kb(`F${i}`, `f${i}`));
+    for (const [l, n] of [["1", "midiTracks"], ["2", "inputs"], ["3", "audioTracks"], ["4", "audioInstruments"], ["5", "aux"], ["6", "busses"], ["7", "outputs"], ["8", "user"]] as const) keysBar.appendChild(kb(`P${l}`, n));
+    const jb = (label: string, steps: number) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.onclick = () => sim.jog(steps);
+      return b;
+    };
+    keysBar.append(jb("⟲", -1), jb("⟳", 1), kb("Scrub", "scrub"), kb("Solo✕", "soloGlobal"), kb("◀", "left"), kb("▶", "right"), kb("▲", "up"), kb("▼", "down"), kb("Play", "play"), kb("Stop", "stop"));
+    // Shift bleibt gedrückt, bis man erneut klickt (zwei Hände am echten Pult)
+    const shift = document.createElement("button");
+    shift.textContent = "Shift";
+    let shifted = false;
+    shift.onclick = () => {
+      shifted = !shifted;
+      shift.className = shifted ? "led-on" : "";
+      sim.hold("shift", shifted);
+    };
+    keysBar.appendChild(shift);
+    el.appendChild(keysBar);
     const draw = () => {
       (el.querySelector("[data-l0]") as HTMLElement).textContent = sim.text(0);
       (el.querySelector("[data-l1]") as HTMLElement).textContent = sim.text(1);

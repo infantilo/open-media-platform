@@ -38,3 +38,20 @@ export const EXAMPLE_PROFILE = {
     { id: "knob1", label: "Drehgeber 1", in: { type: "cc", channel: 1, num: 16 }, mode: "relative", to: { method: "channel.<kanal-id>.setGain", arg: "db", readParam: "channel.<kanal-id>.gainDb", step: 0.5, min: -60, max: 12 } },
   ],
 };
+
+/** Beispiel für die Tastenbelegung: zweite Seite mit Aufruf an einen anderen Node, Jog auf einem fremden Parameter. */
+export const EXAMPLE_KEYS = {
+  pages: [
+    {
+      name: "Kanal",
+      keys: {
+        f1: { label: "Mute", action: "toggle", method: "channel.{ch}.setMute", arg: "muted", led: "mute" },
+        f2: { label: "PFL", action: "toggle", method: "channel.{ch}.setPfl", arg: "enabled", led: "pfl" },
+        f3: { label: "Phase", action: "toggle", method: "channel.{ch}.setPhase", arg: "invert", led: "proc.phaseInvert" },
+      },
+    },
+    { name: "Wiedergabe", keys: { f1: { label: "Play", action: "call", node: "Player", method: "play" }, f2: { label: "Stop", action: "call", node: "Player", method: "stop" } } },
+  ],
+  global: { play: { label: "Play", action: "call", node: "Player", method: "play" } },
+  jog: [{ name: "Pegel", kind: "gain" }, { name: "Wahl", kind: "select" }, { name: "Tempo", kind: "nudge", node: "Player", method: "setSpeed", arg: "speed", readParam: "speed", step: 0.05, min: 0, max: 2 }],
+};

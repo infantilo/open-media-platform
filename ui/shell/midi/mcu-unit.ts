@@ -9,6 +9,7 @@ import {
   faderMove,
   hostConnectionReply,
   lcdCells,
+  lcdWrite,
   type LedState,
   ledNote,
   type McuEvent,
@@ -142,9 +143,10 @@ export class McuUnit {
         this.#meters[i] = m;
       }
     });
-    const lcd = JSON.stringify([s.lcdTop, s.lcdBottom]);
+    const lcd = JSON.stringify([s.lcdTop, s.lcdBottom, s.message]);
     if (lcd !== this.#lcd) {
       out.push(...lcdCells(s.lcdTop, s.lcdBottom, this.#id));
+      if (s.message) out.push(lcdWrite(1, 0, s.message.padEnd(56, " ").slice(0, 56), this.#id));
       this.#lcd = lcd;
     }
     if (s.sevenSeg !== this.#seg) {

@@ -115,9 +115,19 @@ export class SimSurface implements MidiPort {
     this.#emit([0x90, n, 0x7f]);
     this.#emit([0x90, n, 0x00]);
   }
+  /** Taste halten bzw. loslassen (Shift). */
+  hold(name: string, down: boolean) {
+    const n = noteByName(name);
+    if (n === null) throw new Error(`unbekannte Taste ${name}`);
+    this.#emit([0x90, n, down ? 0x7f : 0x00]);
+  }
   /** Drehgeber drehen (positiv = im Uhrzeigersinn). */
   turn(strip: number, steps: number) {
     this.#emit([0xb0, 0x10 + strip, (steps < 0 ? 0x40 : 0) | (Math.min(63, Math.abs(steps)) & 0x3f)]);
+  }
+  /** Jog-Rad drehen (positiv = im Uhrzeigersinn). */
+  jog(steps: number) {
+    this.#emit([0xb0, 0x3c, (steps < 0 ? 0x40 : 0) | (Math.min(63, Math.abs(steps)) & 0x3f)]);
   }
   text(line: 0 | 1): string {
     return this.lcd[line];

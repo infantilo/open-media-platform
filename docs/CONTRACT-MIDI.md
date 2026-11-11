@@ -70,7 +70,16 @@ Anmeldung und rechnet auch ohne sie weiter (viele USB-Pulte brauchen sie nicht).
 * **Mute** → `setMute`, **Solo** → `setPfl` (Vorhören), **Select** wählt, **Rec-LED = On-Air** des Kanals (die Taste selbst tut nichts), **Drehgeber** → `setPan` (±5 % je Schritt, Druck = Mitte, Kranz zeigt die Stellung), **Name/Value** schaltet die untere Anzeigezeile zwischen Pegel und Pan.
 * **Bank links/rechts** verschiebt um alle Kanalzüge aller Einheiten, **Kanal links/rechts** um 1. Ein Hauptpult (8 Züge) plus Erweiterungen zeigen aufeinanderfolgende Kanäle (Erweiterung 1 = Kanal 9–16 usw.). 7-Segment: Banknummer.
 * **Master-Fader** (Strip 9 der ersten Einheit) führt – nur wenn gewählt – den Master eines **Aux-Bus** (`aux.<id>.setMaster`). Der Audiomischer hat keinen Hauptmaster-Pegel; ohne Ziel bleibt der Master-Fader ungenutzt.
-* Alles, was die Logik nicht verbraucht (Transport, F-Tasten, Pfeile …), gibt es im Gateway als **NATS-Ereignis** (§6).
+* Alles, was **niemand belegt** (Transport, übrige Tasten …), gibt es im Gateway als **NATS-Ereignis** (§6).
+
+### 3.1 Feste Tasten, Funktionsfeld, Jog (`keys`)
+Der rechte Teil der Pulte (Jog-Rad, Transport, Cursor, Funktionstasten F1–F8, Ansichtstasten) ist im Mackie-Protokoll **gewöhnliche Tasten und CC 60** (§2.1). OMP belegt sie über `keys` (`ui/shell/midi/keys.ts`, `keys.rs`, Szenarien `docs/midi/keys-golden.json`):
+* **Standardbelegung** (Audiomischer-Kontext, ohne Konfiguration): **F1–F8** wirken auf den **gewählten Kanal** (Mute, PFL, Phase, EQ-Bypass, Comp, Gate, Main-Route, F8 = alle Mute aus), die **LED folgt dem Zustand** des Kanals; **←/→** wählen den Kanal (die Bank zieht mit), **↑/↓** Pegel ±1 dB, **Solo** (global) löscht das Vorhören (die Lampe „Rude Solo“ blinkt, solange ein Kanal vorgehört wird), **Cancel** hebt die Wahl auf, **Scrub** schaltet das Jog-Rad um.
+* **Jog-Rad:** Standard-Modi „Gain“ (Pegel des gewählten Kanals, 0,5 dB je Raststufe, **Shift = ×10**) und „Select“ (Kanalwahl). Eigene Modi: `nudge` auf einem beliebigen Parameter (Lesen-Ändern-Schreiben, `step`, `min`, `max`, `node`). Ein **„Shuttle“-Ring** kommt im Mackie-Protokoll nicht vor; was das Gerät dafür sendet, ist am Gerät zu prüfen.
+* **Dynamisch:** `{ch}` in Methode, Argumenten und Parametern steht für den gewählten Kanal; die LED einer Taste folgt einem Punkt-Pfad im Mischer-Eintrag des gewählten Kanals (`led: "proc.phaseInvert"`, optional `equals`); **Seiten** — die acht Ansichtstasten (MIDI Tracks … User) wählen Seite 1–8 des Funktionsfelds, deren LED zeigt die Seite; beim Drücken blendet das Pult kurz Tastenname und Beschriftung in der unteren Anzeigezeile ein (das Mackie-Protokoll hat keine Anzeige je Taste).
+* **Belegung** je Taste: `action` `toggle` (schaltet um, `arg` = Name des an/aus-Arguments), `momentary` (an beim Drücken, aus beim Loslassen), `call` (einmaliger Aufruf), `internal` (`clearPfl`, `clearMute`, `selectPrev`, `selectNext`, `gainUp`, `gainDown`, `deselect`, `jogMode`); `node` = Anzeigename des Ziel-Nodes (leer = Audiomischer). Reihenfolge: Seite > `global` > Standard.
+* Grenze: der LED-Zustand kommt nur aus dem Mischer-Eintrag des gewählten Kanals bzw. der Taste selbst (kein Parameter beliebiger Nodes); die Beschriftung des Funktionsfelds am Gerät (Papier/Display) ist nicht steuerbar.
+**Annahme zur Hardware (ungeprüft):** das „dynamische Tastenfeld“ der iCON-Pulte sendet im Mackie-Modus die Noten der Funktionstasten (F1–F8 bzw. Zuweisungs-/Ansichtstasten); ob das Feld ein eigenes Display hat, das über MCU ansteuerbar ist, ist offen.
 
 ## 4. Generisches Profil
 

@@ -9,10 +9,11 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(ports: Vec<Box<dyn MidiPort>>, master_target: bool) -> Self {
+    pub fn new(ports: Vec<Box<dyn MidiPort>>, master_target: bool, keys: Option<crate::keys::KeysConfig>) -> Self {
         let specs: Vec<UnitSpec> = (0..ports.len()).map(|i| UnitSpec { strips: 8, has_master: i == 0 }).collect();
         let mut o = LogicOptions::new(specs);
         o.master_target = master_target;
+        o.keys = keys;
         Engine { logic: SurfaceLogic::new(o), units: ports.into_iter().map(McuUnit::new).collect() }
     }
 
@@ -55,7 +56,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn ch(n: usize) -> StripInfo {
-        StripInfo { id: format!("c{n}"), label: format!("Mic {n}"), gain_db: Some(0.0), mute: false, pfl: false, on_air: false, level: 0.0, pan: Some(0.0) }
+        StripInfo { id: format!("c{n}"), label: format!("Mic {n}"), gain_db: Some(0.0), mute: false, pfl: false, on_air: false, level: 0.0, pan: Some(0.0), raw: serde_json::json!({"id": format!("c{n}")}) }
     }
 
     struct Rig {
@@ -69,7 +70,7 @@ mod tests {
         fn new(n: usize, units: usize, master: bool) -> Rig {
             let sims: Vec<SimPort> = (0..units).map(|i| SimPort::new(&format!("sim{i}"))).collect();
             let states = sims.iter().map(|s| s.state.clone()).collect();
-            let mut e = Engine::new(sims.into_iter().map(|s| Box::new(s) as Box<dyn MidiPort>).collect(), master);
+            let mut e = Engine::new(sims.into_iter().map(|s| Box::new(s) as Box<dyn MidiPort>).collect(), master, None);
             e.logic.set_model((1..=n).map(ch).collect(), master.then_some(0.0));
             let mut r = Rig { e, sims: states, now: 1000, cmds: vec![] };
             r.e.start(r.now);
@@ -241,11 +242,12 @@ mod tests {
     fn unconsumed_buttons_become_events() {
         let mut r = Rig::new(2, 1, false);
         r.sim(0).press("play").unwrap();
-        r.sim(0).press("f1").unwrap();
+        r.sim(0).press("userSwitch1").unwrap();
+        r.sim(0).press("f1").unwrap(); // belegt (Standardseite) → kein Ereignis
         r.sim(0).press("mute1").unwrap();
         r.step(0);
         let b = r.e.logic.drain_buttons();
-        assert_eq!(b, vec![("play".to_string(), true), ("play".to_string(), false), ("f1".to_string(), true), ("f1".to_string(), false)]);
+        assert_eq!(b, vec![("play".to_string(), true), ("play".to_string(), false), ("userSwitch1".to_string(), true), ("userSwitch1".to_string(), false)]);
     }
 
     #[test]

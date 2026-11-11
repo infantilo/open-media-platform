@@ -31,11 +31,13 @@ pub struct Config {
     pub mode: Mode,
     pub units: Vec<UnitCfg>,
     pub profile: Option<Value>,
+    /// Tastenbelegung (Seiten, feste Tasten, Jog), Betriebsart `mcu`.
+    pub keys: Option<Value>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { mixer: String::new(), master_aux: String::new(), mode: Mode::Mcu, units: vec![], profile: None }
+        Config { mixer: String::new(), master_aux: String::new(), mode: Mode::Mcu, units: vec![], profile: None, keys: None }
     }
 }
 
@@ -102,12 +104,19 @@ pub fn from_value(v: &Value) -> Result<Config, String> {
             }
         }
     }
+    let keys = v.get("keys").filter(|k| !k.is_null()).cloned();
+    if let Some(k) = &keys {
+        if let Err(e) = crate::keys::parse_keys(k) {
+            return Err(format!("Tasten: {}", e.join("; ")));
+        }
+    }
     Ok(Config {
         mixer: v.get("mixer").and_then(Value::as_str).unwrap_or("").trim().to_string(),
         master_aux: v.get("masterAux").and_then(Value::as_str).unwrap_or("").trim().to_string(),
         mode,
         units,
         profile,
+        keys,
     })
 }
 
@@ -128,7 +137,7 @@ pub fn to_value(c: &Config) -> Value {
             o
         })
         .collect();
-    json!({"mixer": c.mixer, "masterAux": c.master_aux, "mode": if c.mode == Mode::Mcu { "mcu" } else { "profile" }, "units": units, "profile": c.profile})
+    json!({"mixer": c.mixer, "masterAux": c.master_aux, "mode": if c.mode == Mode::Mcu { "mcu" } else { "profile" }, "units": units, "profile": c.profile, "keys": c.keys})
 }
 
 #[cfg(test)]

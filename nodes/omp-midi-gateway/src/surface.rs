@@ -1,7 +1,11 @@
 //! Pult-Logik (Kapitel 93) — Rust-Gegenstück zu `ui/shell/midi/surface-logic.ts`, `mcu-unit.ts` und `sim-surface.ts`.
 //! Reine Logik ohne Ein-/Ausgabe: Ereignisse und Modell hinein, Mischer-Befehle und Soll-Zustand je Einheit heraus.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use serde_json::{Map, Value};
+
+use crate::keys::*;
 
 use crate::fader::{db_to_fader, fader_to_db};
 use crate::mcu::*;
@@ -16,10 +20,16 @@ pub struct StripInfo {
     pub on_air: bool,
     pub level: f64,
     pub pan: Option<f64>,
+    /// Der ganze Mischer-Eintrag des Kanals (Tasten-LEDs, `{ch}`-Belegungen).
+    pub raw: Value,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MixerCmd {
+    /// Beliebiger Methodenaufruf der Tastenbelegung; `node` leer = Audiomischer.
+    Call { node: String, method: String, args: Map<String, Value> },
+    /// Lesen-Ändern-Schreiben (Jog-Rad auf einem Parameter).
+    Nudge { node: String, method: String, args: Map<String, Value>, arg: String, delta: f64, min: Option<f64>, max: Option<f64>, read_param: String },
     Gain { id: String, db: f64 },
     Mute { id: String, muted: bool },
     Pfl { id: String, enabled: bool },
@@ -48,6 +58,8 @@ pub struct UnitState {
     pub meters: Vec<i32>,
     pub lcd_top: Vec<String>,
     pub lcd_bottom: Vec<String>,
+    /// Kurzmeldung: ersetzt kurz die untere Anzeigezeile des Hauptpults.
+    pub message: Option<String>,
     pub seven_seg: String,
 }
 
@@ -60,11 +72,12 @@ pub struct LogicOptions {
     pub hold_ms: u64,
     /// Master-Fader hat ein Ziel (Aux-Bus).
     pub master_target: bool,
+    pub keys: Option<KeysConfig>,
 }
 
 impl LogicOptions {
     pub fn new(units: Vec<UnitSpec>) -> Self {
-        LogicOptions { units, gain_interval_ms: 50, echo_guard_ms: 300, pan_step: 0.05, hold_ms: 2000, master_target: false }
+        LogicOptions { units, gain_interval_ms: 50, echo_guard_ms: 300, pan_step: 0.05, hold_ms: 2000, master_target: false, keys: None }
     }
 }
 
@@ -96,6 +109,13 @@ pub struct SurfaceLogic {
     held_master: Option<Held>,
     cmds: Vec<MixerCmd>,
     buttons: Vec<(String, bool)>,
+    keys: Keys,
+    pub page: usize,
+    pub jog_mode: usize,
+    pub shift: bool,
+    message: Option<(String, u64)>,
+    local: HashMap<String, bool>,
+    pressed: HashSet<String>,
 }
 
 pub fn fmt_db(db: Option<f64>) -> String {
@@ -116,7 +136,15 @@ pub fn fmt_pan(pan: Option<f64>) -> String {
 
 impl SurfaceLogic {
     pub fn new(o: LogicOptions) -> Self {
+        let keys = resolve(o.keys.as_ref());
         SurfaceLogic {
+            keys,
+            page: 0,
+            jog_mode: 0,
+            shift: false,
+            message: None,
+            local: HashMap::new(),
+            pressed: HashSet::new(),
             o,
             channels: vec![],
             master: None,
@@ -251,19 +279,8 @@ impl SurfaceLogic {
                 self.pending.insert(id, db);
                 self.flush(now, false);
             }
-            McuEvent::Button { note, name, down } => {
-                if *down {
-                    if !self.press(unit, *note) {
-                        if let Some(n) = name {
-                            self.buttons.push((n.clone(), true));
-                        }
-                    }
-                } else if let Some(n) = name {
-                    if !is_consumed(*note) {
-                        self.buttons.push((n.clone(), false));
-                    }
-                }
-            }
+            McuEvent::Button { note, name, down } => self.button(unit, *note, name.as_deref(), *down, now),
+            McuEvent::Jog { delta } => self.jog(*delta, now),
             McuEvent::Vpot { strip, delta } => {
                 let Some(k) = self.strip_idx(unit, *strip as usize) else { return };
                 let step = self.o.pan_step;
@@ -278,13 +295,226 @@ impl SurfaceLogic {
         }
     }
 
-    /// `true`, wenn die Taste hier verbraucht wurde.
+    fn button(&mut self, unit: usize, note: u8, name: Option<&str>, down: bool, now: u64) {
+        if name == Some("shift") {
+            self.shift = down;
+        }
+        if let Some(n) = name {
+            if !down && self.pressed.contains(n) {
+                return self.release_momentary(n);
+            }
+        }
+        if !down {
+            if let Some(n) = name {
+                if !is_consumed(note) && self.binding(n).is_none() {
+                    self.buttons.push((n.to_string(), false));
+                }
+            }
+            return;
+        }
+        if self.press(unit, note) {
+            return;
+        }
+        let Some(name) = name else { return };
+        if let Some(pi) = PAGE_KEYS.iter().position(|k| *k == name) {
+            if pi < self.keys.pages.len() {
+                self.page = pi;
+                let t = format!("Page {} {}", pi + 1, self.keys.pages[pi].name);
+                self.say(t, now);
+            } else {
+                self.say(format!("No page {}", pi + 1), now);
+            }
+            return;
+        }
+        match self.binding(name) {
+            Some(b) => self.run(name, &b, now),
+            None => self.buttons.push((name.to_string(), true)),
+        }
+    }
+
+    fn binding(&self, name: &str) -> Option<KeyBinding> {
+        self.keys.pages.get(self.page).and_then(|p| p.keys.get(name)).or_else(|| self.keys.global.get(name)).cloned()
+    }
+
+    fn selected_idx(&self) -> Option<usize> {
+        let id = self.selected.as_ref()?;
+        self.channels.iter().position(|c| &c.id == id)
+    }
+
+    fn say(&mut self, text: String, now: u64) {
+        self.message = Some((text, now + 1500));
+    }
+
+    fn run(&mut self, name: &str, b: &KeyBinding, now: u64) {
+        if let Some(l) = &b.label {
+            self.say(format!("{} {}", name.to_uppercase(), l), now);
+        }
+        if b.action == KeyAction::Internal {
+            return self.internal(b.internal.expect("geprüft"), now);
+        }
+        let sel = self.selected_idx();
+        if uses_channel(b) && sel.is_none() {
+            return self.say("No channel selected".to_string(), now);
+        }
+        let ch = sel.map(|i| self.channels[i].id.clone()).unwrap_or_default();
+        let fill = |m: &Map<String, Value>| -> Map<String, Value> { fill_template(&Value::Object(m.clone()), &ch).as_object().cloned().unwrap_or_default() };
+        let method = fill_str(&b.method, &ch);
+        let mut args = fill(&b.args);
+        let key = format!("{}:{}", self.page, name);
+        let on = b.on_value.clone().unwrap_or(Value::Bool(true));
+        let off = b.off_value.clone().unwrap_or(Value::Bool(false));
+        let arg = b.arg.clone().unwrap_or_default();
+        match b.action {
+            KeyAction::Call => self.cmds.push(MixerCmd::Call { node: b.node.clone(), method, args }),
+            KeyAction::Momentary => {
+                self.pressed.insert(name.to_string());
+                self.local.insert(key, true);
+                args.insert(arg, on);
+                self.cmds.push(MixerCmd::Call { node: b.node.clone(), method, args });
+            }
+            _ => {
+                let cur = match (&b.led, sel) {
+                    (Some((p, eq)), Some(i)) => led_value(&self.channels[i].raw, p, eq.as_ref()),
+                    _ => self.local.get(&key).copied().unwrap_or(false),
+                };
+                let next = !cur;
+                self.local.insert(key, next);
+                if let (Some((p, None)), Some(i)) = (&b.led, sel) {
+                    set_path(&mut self.channels[i].raw, p, Value::Bool(next));
+                }
+                args.insert(arg, if next { on } else { off });
+                self.cmds.push(MixerCmd::Call { node: b.node.clone(), method, args });
+            }
+        }
+    }
+
+    fn release_momentary(&mut self, name: &str) {
+        self.pressed.remove(name);
+        let Some(b) = self.binding(name) else { return };
+        self.local.insert(format!("{}:{}", self.page, name), false);
+        if b.action != KeyAction::Momentary {
+            return;
+        }
+        let sel = self.selected_idx();
+        if uses_channel(&b) && sel.is_none() {
+            return;
+        }
+        let ch = sel.map(|i| self.channels[i].id.clone()).unwrap_or_default();
+        let mut args = fill_template(&Value::Object(b.args.clone()), &ch).as_object().cloned().unwrap_or_default();
+        args.insert(b.arg.clone().unwrap_or_default(), b.off_value.clone().unwrap_or(Value::Bool(false)));
+        self.cmds.push(MixerCmd::Call { node: b.node.clone(), method: fill_str(&b.method, &ch), args });
+    }
+
+    fn internal(&mut self, a: Internal, now: u64) {
+        let sel = self.selected_idx();
+        match a {
+            Internal::ClearPfl => {
+                for c in &mut self.channels {
+                    if c.pfl {
+                        c.pfl = false;
+                        set_path(&mut c.raw, "pfl", Value::Bool(false));
+                        self.cmds.push(MixerCmd::Pfl { id: c.id.clone(), enabled: false });
+                    }
+                }
+            }
+            Internal::ClearMute => {
+                for c in &mut self.channels {
+                    if c.mute {
+                        c.mute = false;
+                        set_path(&mut c.raw, "mute", Value::Bool(false));
+                        self.cmds.push(MixerCmd::Mute { id: c.id.clone(), muted: false });
+                    }
+                }
+            }
+            Internal::SelectPrev | Internal::SelectNext => {
+                if self.channels.is_empty() {
+                    return;
+                }
+                let last = self.channels.len() - 1;
+                let n = if a == Internal::SelectNext { sel.map_or(0, |i| (i + 1).min(last)) } else { sel.unwrap_or(self.channels.len()).saturating_sub(1) };
+                self.select_index(n);
+            }
+            Internal::GainUp | Internal::GainDown => {
+                if let Some(i) = sel {
+                    self.gain_by(i, if a == Internal::GainUp { 1.0 } else { -1.0 }, now);
+                }
+            }
+            Internal::Deselect => self.selected = None,
+            Internal::JogMode => {
+                self.jog_mode = (self.jog_mode + 1) % self.keys.jog.len();
+                let t = format!("Jog: {}", self.keys.jog[self.jog_mode].label());
+                self.say(t, now);
+            }
+        }
+    }
+
+    /// Kanal wählen und die Bank so schieben, dass er sichtbar ist.
+    fn select_index(&mut self, i: usize) {
+        let Some(c) = self.channels.get(i) else { return };
+        self.selected = Some(c.id.clone());
+        let total = self.total_strips();
+        if i < self.bank {
+            self.bank = self.clamp_bank(i as i64);
+        } else if i >= self.bank + total {
+            self.bank = self.clamp_bank(i as i64 - total as i64 + 1);
+        }
+    }
+
+    fn gain_by(&mut self, i: usize, db: f64, now: u64) {
+        let id = self.channels[i].id.clone();
+        let Some(cur) = self.held.get(&id).map(|h| h.db).or(self.channels[i].gain_db) else { return };
+        let next = ((cur + db).clamp(-60.0, 12.0) * 10.0).round() / 10.0;
+        self.held.insert(id.clone(), Held { db: next, at: now });
+        self.pending.insert(id, next);
+        self.flush(now, false);
+    }
+
+    fn jog(&mut self, delta: i32, now: u64) {
+        let mode = self.keys.jog.get(self.jog_mode).cloned().unwrap_or_else(|| self.keys.jog[0].clone());
+        let fine = if self.shift { 10.0 } else { 1.0 };
+        let sel = self.selected_idx();
+        match mode {
+            JogMode::Gain { .. } => {
+                if let Some(i) = sel {
+                    self.gain_by(i, delta as f64 * 0.5 * fine, now);
+                }
+            }
+            JogMode::Select { .. } => {
+                if self.channels.is_empty() {
+                    return;
+                }
+                let i = sel.map(|i| i as i64).unwrap_or(if delta > 0 { -1 } else { self.channels.len() as i64 });
+                let n = (i + delta.signum() as i64).clamp(0, self.channels.len() as i64 - 1);
+                self.select_index(n as usize);
+            }
+            JogMode::Nudge { node, method, args, arg, read_param, step, min, max, .. } => {
+                let needs = method.contains("{ch}") || read_param.contains("{ch}") || Value::Object(args.clone()).to_string().contains("{ch}");
+                if needs && sel.is_none() {
+                    return;
+                }
+                let ch = sel.map(|i| self.channels[i].id.clone()).unwrap_or_default();
+                self.cmds.push(MixerCmd::Nudge {
+                    node,
+                    method: fill_str(&method, &ch),
+                    args: fill_template(&Value::Object(args), &ch).as_object().cloned().unwrap_or_default(),
+                    arg,
+                    delta: delta as f64 * step * fine,
+                    min,
+                    max,
+                    read_param: fill_str(&read_param, &ch),
+                });
+            }
+        }
+    }
+
+    /// `true`, wenn die Taste hier verbraucht wurde (Kanalzug-Tasten, Bank, Anzeige).
     fn press(&mut self, unit: usize, note: u8) -> bool {
         let within = |base: u8| if (base..base + 8).contains(&note) { Some((note - base) as usize) } else { None };
         if let Some(i) = within(NOTE_MUTE) {
             if let Some(k) = self.strip_idx(unit, i) {
                 let c = &mut self.channels[k];
                 c.mute = !c.mute;
+                set_path(&mut c.raw, "mute", Value::Bool(c.mute));
                 let (id, muted) = (c.id.clone(), c.mute);
                 self.cmds.push(MixerCmd::Mute { id, muted });
             }
@@ -294,6 +524,7 @@ impl SurfaceLogic {
             if let Some(k) = self.strip_idx(unit, i) {
                 let c = &mut self.channels[k];
                 c.pfl = !c.pfl;
+                set_path(&mut c.raw, "pfl", Value::Bool(c.pfl));
                 let (id, enabled) = (c.id.clone(), c.pfl);
                 self.cmds.push(MixerCmd::Pfl { id, enabled });
             }
@@ -326,6 +557,7 @@ impl SurfaceLogic {
             CHANNEL_LEFT => self.set_bank_delta(-1),
             CHANNEL_RIGHT => self.set_bank_delta(1),
             NAME_VALUE => self.lcd_mode = if self.lcd_mode == LcdMode::Gain { LcdMode::Pan } else { LcdMode::Gain },
+            n if n == note_shift() => {}
             _ => return false,
         }
         true
@@ -355,6 +587,39 @@ impl SurfaceLogic {
             }
         }
         any
+    }
+
+    /// LEDs der belegten Tasten (nur Hauptpult): Zustand des gewählten Kanals bzw. der Taste selbst.
+    fn key_leds(&self, leds: &mut BTreeMap<u8, Led>) {
+        let sel = self.selected_idx().map(|i| &self.channels[i]);
+        let mut names: Vec<String> = self.keys.global.keys().cloned().collect();
+        if let Some(p) = self.keys.pages.get(self.page) {
+            names.extend(p.keys.keys().cloned());
+        }
+        for name in names {
+            let (Some(note), Some(b)) = (note_by_name(&name), self.binding(&name)) else { continue };
+            let on = match b.action {
+                KeyAction::Internal => match b.internal {
+                    Some(Internal::ClearPfl) => self.channels.iter().any(|c| c.pfl),
+                    Some(Internal::ClearMute) => self.channels.iter().any(|c| c.mute),
+                    Some(Internal::JogMode) => self.jog_mode > 0,
+                    _ => false,
+                },
+                KeyAction::Momentary => self.pressed.contains(&name),
+                KeyAction::Toggle => match &b.led {
+                    Some((p, eq)) => sel.is_some_and(|c| led_value(&c.raw, p, eq.as_ref())),
+                    None => self.local.get(&format!("{}:{}", self.page, name)).copied().unwrap_or(false),
+                },
+                KeyAction::Call => false,
+            };
+            leds.insert(note, if on { Led::On } else { Led::Off });
+        }
+        for (i, k) in PAGE_KEYS.iter().enumerate() {
+            if i < self.keys.pages.len() {
+                leds.insert(note_by_name(k).expect("bekannte Taste"), if i == self.page { Led::On } else { Led::Off });
+            }
+        }
+        leds.insert(LED_RUDE, if self.channels.iter().any(|c| c.pfl) { Led::Blink } else { Led::Off });
     }
 
     pub fn view(&mut self, unit: usize, now: u64) -> UnitState {
@@ -399,13 +664,35 @@ impl SurfaceLogic {
             faders[8] = if self.o.master_target && !self.is_touched(unit, 8) { m.map(db_to_fader) } else { None };
         }
         let n = format!("{:02}", (self.bank / self.total_strips().max(1) + 1) % 100);
-        UnitState { faders, leds, rings, meters, lcd_top: top, lcd_bottom: bottom, seven_seg: n + "          " }
+        if unit == 0 {
+            self.key_leds(&mut leds);
+        }
+        let message = if unit == 0 { self.message.as_ref().filter(|(_, until)| now < *until).map(|(t, _)| t.clone()) } else { None };
+        UnitState { faders, leds, rings, meters, lcd_top: top, lcd_bottom: bottom, message, seven_seg: n + "          " }
     }
 }
 
-fn is_consumed(note: u8) -> bool {
-    (NOTE_REC..NOTE_SELECT + 8).contains(&note) || (NOTE_VPOT_PUSH..NOTE_VPOT_PUSH + 8).contains(&note) || matches!(note, BANK_LEFT | BANK_RIGHT | CHANNEL_LEFT | CHANNEL_RIGHT | NAME_VALUE)
+fn note_shift() -> u8 {
+    crate::mcu::note_by_name("shift").expect("bekannte Taste")
 }
+
+fn is_consumed(note: u8) -> bool {
+    (NOTE_REC..NOTE_SELECT + 8).contains(&note)
+        || (NOTE_VPOT_PUSH..NOTE_VPOT_PUSH + 8).contains(&note)
+        || matches!(note, BANK_LEFT | BANK_RIGHT | CHANNEL_LEFT | CHANNEL_RIGHT | NAME_VALUE)
+        || note == note_shift()
+        || crate::mcu::note_name(note).is_some_and(|n| PAGE_KEYS.contains(&n.as_str()))
+}
+
+fn led_value(raw: &Value, path: &str, equals: Option<&Value>) -> bool {
+    match (get_path(raw, path), equals) {
+        (Some(v), Some(e)) => v == e,
+        (Some(v), None) => v == &Value::Bool(true),
+        _ => false,
+    }
+}
+
+const LED_RUDE: u8 = 115; // „Rude Solo“-Lampe: blinkt, solange irgendein Kanal im Vorhören steht
 
 // ───────── Anschluss ─────────
 
@@ -551,9 +838,12 @@ impl McuUnit {
                 self.meters[i] = *m;
             }
         }
-        let lcd = format!("{:?}{:?}", s.lcd_top, s.lcd_bottom);
+        let lcd = format!("{:?}{:?}{:?}", s.lcd_top, s.lcd_bottom, s.message);
         if lcd != self.lcd {
             out.extend(lcd_cells(&s.lcd_top, &s.lcd_bottom, DEVICE_ID_MCU));
+            if let Some(m) = &s.message {
+                out.push(lcd_write(1, 0, &format!("{m:<56}").chars().take(56).collect::<String>(), DEVICE_ID_MCU));
+            }
             self.lcd = lcd;
         }
         if s.seven_seg != self.seg {
@@ -686,6 +976,10 @@ impl SimState {
         self.outbox.push(vec![0x90, n, 0x7f]);
         self.outbox.push(vec![0x90, n, 0x00]);
         Ok(())
+    }
+    /// Jog-Rad drehen (positiv = im Uhrzeigersinn).
+    pub fn jog_wheel(&mut self, steps: i32) {
+        self.outbox.push(vec![0xb0, 0x3c, (if steps < 0 { 0x40 } else { 0 }) | (steps.unsigned_abs().min(63) as u8)]);
     }
     pub fn turn(&mut self, strip: usize, steps: i32) {
         self.outbox.push(vec![0xb0, 0x10 + strip as u8, (if steps < 0 { 0x40 } else { 0 }) | (steps.unsigned_abs().min(63) as u8)]);

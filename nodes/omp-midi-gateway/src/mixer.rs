@@ -43,6 +43,7 @@ pub fn parse_mix_state(raw: &Value) -> Snapshot {
                         on_air: false,
                         level: 0.0,
                         pan: c.pointer("/proc/pan").and_then(Value::as_f64),
+                        raw: c.clone(),
                         id,
                     })
                 })
@@ -76,6 +77,7 @@ pub fn apply_live(m: &Value, levels: &mut HashMap<String, f64>, on_air: &mut Has
 
 pub fn cmd_call(c: &MixerCmd, master_aux: &str) -> Option<(String, Value)> {
     Some(match c {
+        MixerCmd::Call { .. } | MixerCmd::Nudge { .. } => return None, // gehen über den Aktions-Hilfsthread (beliebige Nodes)
         MixerCmd::Gain { id, db } => (format!("channel.{id}.setGain"), json!({"db": db})),
         MixerCmd::Mute { id, muted } => (format!("channel.{id}.setMute"), json!({"muted": muted})),
         MixerCmd::Pfl { id, enabled } => (format!("channel.{id}.setPfl"), json!({"enabled": enabled})),
@@ -274,7 +276,7 @@ mod tests {
     fn mix_state_parsed_also_as_string() {
         for raw in [doc(), Value::String(doc().to_string())] {
             let s = parse_mix_state(&raw);
-            assert_eq!(s.channels[0], StripInfo { id: "a".into(), label: "Mic 1".into(), gain_db: Some(-3.0), mute: false, pfl: true, on_air: false, level: 0.0, pan: Some(-0.5) });
+            assert_eq!(s.channels[0], StripInfo { id: "a".into(), label: "Mic 1".into(), gain_db: Some(-3.0), mute: false, pfl: true, on_air: false, level: 0.0, pan: Some(-0.5), raw: doc()["channels"][0].clone() });
             assert_eq!(s.channels[1].label, "b");
             assert_eq!(s.channels[1].pan, None);
             assert_eq!(s.aux, vec![("x".to_string(), -6.0)]);

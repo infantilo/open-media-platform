@@ -13,8 +13,9 @@ Deno.test("mixState → Pult-Modell (auch als String)", () => {
   const live = new Map([["a", { level: 0.4, onAir: true }]]);
   for (const raw of [doc, JSON.stringify(doc)]) {
     const p = parseMixState(raw, live);
-    assertEquals(p.channels[0], { id: "a", label: "Mic 1", gainDb: -3, mute: false, pfl: true, onAir: true, level: 0.4, pan: -0.5 });
-    assertEquals(p.channels[1], { id: "b", label: "b", gainDb: 0, mute: true, pfl: false, onAir: false, level: 0, pan: null });
+    assertEquals(p.channels[0].raw?.id, "a", "ganzer Mischer-Eintrag bleibt für Tasten-LEDs erhalten");
+    assertEquals({ ...p.channels[0], raw: undefined }, { id: "a", label: "Mic 1", gainDb: -3, mute: false, pfl: true, onAir: true, level: 0.4, pan: -0.5, raw: undefined });
+    assertEquals({ ...p.channels[1], raw: undefined }, { id: "b", label: "b", gainDb: 0, mute: true, pfl: false, onAir: false, level: 0, pan: null, raw: undefined });
     assertEquals(p.aux, [{ id: "x", label: "Studio", masterDb: -6 }]);
   }
   assertEquals(parseMixState(null).channels, []);

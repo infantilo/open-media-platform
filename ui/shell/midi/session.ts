@@ -4,6 +4,7 @@
 import { AudioMixerBackend, applyLiveMessage, type MixerIO } from "./audio-backend.ts";
 import { McuUnit } from "./mcu-unit.ts";
 import type { MidiPort } from "./midi-port.ts";
+import type { KeysConfig } from "./keys.ts";
 import { type Profile, ProfileEngine } from "./profile.ts";
 import { type NodeCaller, ProfileRunner } from "./profile-runner.ts";
 import { SurfaceController } from "./surface-controller.ts";
@@ -30,6 +31,8 @@ export interface StartOptions {
   masterAux?: string;
   /** Nur Modus „profile“. */
   profile?: Profile;
+  /** Nur Modus „mcu“: Tastenbelegung (Seiten, feste Tasten, Jog). */
+  keys?: KeysConfig | null;
 }
 
 export class MidiSession {
@@ -86,11 +89,7 @@ export class MidiSession {
         this.#emit();
         return;
       }
-      const cache = new Map<string, MixerIO>();
-      const caller: NodeCaller = {
-        call: async (node, method, args) => (await this.#ioOf(node, o.mixerNodeId, cache)).call(method, args),
-        read: async (node, param) => (await this.#ioOf(node, o.mixerNodeId, cache)).getParam(param),
-      };
+      const caller = this.#callerFor(o.mixerNodeId);
       this.#runner = new ProfileRunner(o.ports[0], new ProfileEngine(o.profile, ""), caller);
       this.#runner.onActivity = () => this.#emit();
       this.#runner.onError = (e) => {
@@ -108,7 +107,8 @@ export class MidiSession {
       this.error = String((e as Error)?.message ?? e);
       this.#emit();
     });
-    const logic = new SurfaceLogic(backend, { units: o.ports.map((_, i) => ({ strips: 8, hasMaster: i === 0 })) });
+    backend.external = this.#callerFor(o.mixerNodeId);
+    const logic = new SurfaceLogic(backend, { units: o.ports.map((_, i) => ({ strips: 8, hasMaster: i === 0 })), keys: o.keys });
     const ctl = new SurfaceController(o.ports.map((p) => new McuUnit(p)), logic, this.#deps.now);
     this.#backend = backend;
     this.#ctl = ctl;
@@ -129,6 +129,15 @@ export class MidiSession {
     );
     this.running = true;
     this.#emit();
+  }
+
+  /** Aufrufe an andere Nodes nach Anzeigename (leer = der gewählte Mischer). */
+  #callerFor(mixerNodeId: string): NodeCaller {
+    const cache = new Map<string, MixerIO>();
+    return {
+      call: async (node, method, args) => (await this.#ioOf(node, mixerNodeId, cache)).call(method, args),
+      read: async (node, param) => (await this.#ioOf(node, mixerNodeId, cache)).getParam(param),
+    };
   }
 
   async #ioOf(label: string, fallbackId: string, cache: Map<string, MixerIO>): Promise<MixerIO> {

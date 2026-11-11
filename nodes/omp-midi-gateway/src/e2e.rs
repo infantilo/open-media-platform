@@ -137,6 +137,13 @@ fn surface_to_mixer_and_back() {
     s0.state.lock().unwrap().drag(8, db_to_fader(-6.0));
     s0.state.lock().unwrap().release(8);
     assert!(wait(|| fake.calls.lock().unwrap().iter().any(|(m, b)| m == "aux.x.setMaster" && b["db"] == json!(-6.0)), 5));
+    // 3a. Tastenfeld und Jog: Kanal wählen, F2 = PFL (Vorlage {ch}), Jog = Pegel des gewählten Kanals
+    s0.state.lock().unwrap().press("select2").unwrap();
+    s0.state.lock().unwrap().press("f2").unwrap();
+    assert!(wait(|| fake.calls.lock().unwrap().iter().any(|(m, b)| m == "channel.b.setPfl" && b["enabled"] == json!(true)), 5), "F2 wirkt auf den gewählten Kanal");
+    let before = fake.calls.lock().unwrap().iter().filter(|(m, _)| m == "channel.b.setGain").count();
+    s0.state.lock().unwrap().jog_wheel(4);
+    assert!(wait(|| fake.calls.lock().unwrap().iter().filter(|(m, _)| m == "channel.b.setGain").count() > before, 5), "Jog ändert den Pegel");
     // Erweiterung zeigt hier keinen Kanal (nur zwei vorhanden): ihre Taste löst nichts am Mischer aus
     let n_before = fake.calls.lock().unwrap().len();
     s1.state.lock().unwrap().press("solo1").unwrap();

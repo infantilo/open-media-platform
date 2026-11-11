@@ -1,7 +1,7 @@
 // Anbindung an den Audiomischer (Kap. 93): liest `mixState` (eine Abfrage für alle Kanäle), die Live-Meldungen (Pegel, On-Air) und
 // schreibt über die `channel.<id>.set*`-Methoden — dieselben Aufrufe wie die Bildschirmoberfläche (Range-Prüfung im Node).
 
-import type { MixerActions, StripInfo } from "./surface-logic.ts";
+import type { MixerActions, NudgeAction, StripInfo } from "./surface-logic.ts";
 
 export interface MixerIO {
   getParam(name: string): Promise<unknown>;
@@ -39,6 +39,7 @@ export function parseMixState(raw: unknown, live: Map<string, { level: number; o
     onAir: live.get(c.id)?.onAir ?? false,
     level: live.get(c.id)?.level ?? 0,
     pan: typeof c.proc?.pan === "number" ? c.proc.pan : null,
+    raw: c as unknown as Record<string, unknown>,
   }));
   const aux = (doc?.auxBuses ?? []).map((a) => ({ id: a.id, label: a.label ?? a.id, masterDb: typeof a.masterDb === "number" ? a.masterDb : 0 }));
   return { channels, aux };
@@ -63,6 +64,8 @@ export class AudioMixerBackend implements MixerActions {
   /** Aux-Bus, dessen Master-Fader der Master-Fader des Pults führt (leer = keiner). */
   masterAux = "";
   setMaster?: (db: number) => void;
+  /** Zugriff auf andere Nodes (Tastenbelegung mit `node`). */
+  external: { call(node: string, method: string, args: Record<string, unknown>): Promise<void>; read(node: string, param: string): Promise<unknown> } | null = null;
 
   constructor(private io: MixerIO, masterAux = "") {
     this.setMasterTarget(masterAux);
@@ -97,4 +100,24 @@ export class AudioMixerBackend implements MixerActions {
   setPan(id: string, pan: number) {
     this.#call(`channel.${id}.setPan`, { pan });
   }
+  /** Tastenbelegung: ohne Node-Name am Audiomischer, sonst über `external` (Auflösung nach Anzeigename). */
+  call(node: string, method: string, args: Record<string, unknown>) {
+    if (!node) return this.#call(method, args);
+    this.external?.call(node, method, args).catch((e) => this.errors.forEach((l) => l(e)));
+  }
+  nudge(a: NudgeAction) {
+    const caller = a.node ? this.external : { call: (_n: string, m: string, x: Record<string, unknown>) => this.io.call(m, x), read: (_n: string, p: string) => this.io.getParam(p) };
+    if (!caller) return;
+    void runNudge(caller, a).catch((e) => this.errors.forEach((l) => l(e)));
+  }
+}
+
+/** Lesen-Ändern-Schreiben: Parameter lesen, `delta` addieren, auf min/max klemmen, über die Methode zurückschreiben. */
+export async function runNudge(c: { call(node: string, method: string, args: Record<string, unknown>): Promise<void>; read(node: string, param: string): Promise<unknown> }, a: NudgeAction): Promise<void> {
+  const cur = await c.read(a.node, a.readParam);
+  if (typeof cur !== "number") return;
+  let v = cur + a.delta;
+  if (a.min !== undefined) v = Math.max(a.min, v);
+  if (a.max !== undefined) v = Math.min(a.max, v);
+  await c.call(a.node, a.method, { ...a.args, [a.arg]: Math.round(v * 10000) / 10000 });
 }

@@ -19,7 +19,7 @@ use crate::mcu::MidiParser;
 use crate::profile::{Action, ProfileEngine, describe, parse_profile};
 use crate::raw::RawPort;
 use crate::rtp::{Role, RtpPort};
-use crate::surface::{MidiPort, SimPort};
+use crate::surface::{MidiPort, MixerCmd, SimPort};
 
 /// Nachricht an den Veröffentlichungstask: Betreff-Endung (nach `omp.midi.<node>.`) und Inhalt.
 pub struct Msg {
@@ -223,7 +223,10 @@ fn mode_str(c: &Config) -> &'static str {
 #[allow(clippy::too_many_arguments)]
 fn run_mcu(sh: &Arc<Mutex<Shared>>, tx: &UnboundedSender<Msg>, cfg: &Config, ports: Vec<Box<dyn MidiPort>>, kinds: Vec<&'static str>, url: &str, auth: &OrchestratorAuth, reg: &RegistryClient, hb: &Arc<AtomicU64>, start: Instant, generation_id: u64) {
     let link = MixerLink::start(cfg.mixer.clone(), cfg.master_aux.clone(), url.to_string(), auth.clone(), reg.clone());
-    let mut engine = Engine::new(ports, !cfg.master_aux.is_empty());
+    let keys = cfg.keys.as_ref().and_then(|k| crate::keys::parse_keys(k).ok());
+    let mut engine = Engine::new(ports, !cfg.master_aux.is_empty(), keys);
+    // Tastenbelegung und Jog: Aufrufe an beliebige Nodes (leer = Mischer) laufen im Hilfsthread, HTTP blockiert
+    let actions = spawn_action_worker(url.to_string(), auth.clone(), reg.clone(), cfg.mixer.clone(), sh.clone());
     engine.start(start.elapsed().as_millis() as u64);
     let mut online = vec![false; engine.units.len()];
     let mut last_status = Instant::now() - Duration::from_secs(1);
@@ -255,7 +258,15 @@ fn run_mcu(sh: &Arc<Mutex<Shared>>, tx: &UnboundedSender<Msg>, cfg: &Config, por
             engine.logic.set_on_air(&link.on_air());
         }
         for c in engine.tick(now) {
-            link.send(c);
+            match c {
+                MixerCmd::Call { node, method, args } => {
+                    let _ = actions.send(Action::Call { node, method, args, control_id: "key".to_string() });
+                }
+                MixerCmd::Nudge { node, method, args, arg, delta, min, max, read_param } => {
+                    let _ = actions.send(Action::Nudge { node, method, args, arg, delta, min, max, read_param, control_id: "jog".to_string() });
+                }
+                other => link.send(other),
+            }
         }
         for (name, down) in engine.logic.drain_buttons() {
             emit(sh, tx, format!("button.{name}"), json!({"kind": "button", "name": name, "down": down}));

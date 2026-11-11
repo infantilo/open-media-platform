@@ -10,6 +10,7 @@ const T = (() => {
       detected: "Erkannte USB-MIDI-Geräte", noneDetected: "Keine Rohgeräte unter /dev/snd gefunden (Gerät eingesteckt? Gruppe „audio“?).", save: "Speichern und neu starten", saved: "Gespeichert.",
       profile: "Profil (JSON)", events: "Letzte Ereignisse", noEvents: "Noch keine Ereignisse.", sim_title: "Simulator-Pult {n}", strip: "Kanalzug", fader: "Fader setzen", touch: "Berühren", release: "Loslassen",
       press: "Taste", turn: "Drehgeber +1", turnBack: "Drehgeber −1", linkDrop: "Verbindung trennen/herstellen", fail: "{m} fehlgeschlagen: {d}", lastMidi: "Zuletzt erkannt",
+      keys: "Tasten, Funktionsfeld und Jog (JSON, leer = Standardbelegung)", keysHint: "Standard: F1–F8 wirken auf den gewählten Kanal (Mute, PFL, Phase, EQ-Bypass, Comp, Gate, Main, Alle Mute aus), Pfeile wählen Kanal / ±1 dB, „Solo“ löscht das Vorhören, Scrub schaltet das Jog-Rad, die acht Ansichtstasten wählen Seiten. Nicht belegte Tasten (Play, Stop …) kommen als Ereignis „button.<Name>“.", fkeys: "Funktionstasten, Seiten, Jog", example: "Beispiel einfügen",
       hint: "USB-Pulte erscheinen als Rohgerät; Netzwerk-Pulte sprechen RTP-MIDI (AppleMIDI). Ohne Gerät lässt sich alles mit dem Simulator prüfen.",
     },
     en: {
@@ -20,6 +21,7 @@ const T = (() => {
       detected: "Detected USB MIDI devices", noneDetected: "No raw devices under /dev/snd (device plugged in? group “audio”?).", save: "Save and restart", saved: "Saved.",
       profile: "Profile (JSON)", events: "Recent events", noEvents: "No events yet.", sim_title: "Simulated surface {n}", strip: "Channel strip", fader: "Set fader", touch: "Touch", release: "Release",
       press: "Key", turn: "Knob +1", turnBack: "Knob −1", linkDrop: "Drop/restore link", fail: "{m} failed: {d}", lastMidi: "Last seen",
+      keys: "Keys, function field and jog (JSON, empty = default mapping)", keysHint: "Default: F1–F8 act on the selected channel (mute, PFL, phase, EQ bypass, comp, gate, main, clear mutes), arrows select channel / ±1 dB, “Solo” clears listening, Scrub switches the jog wheel, the eight view keys choose pages. Unmapped keys (play, stop …) arrive as event “button.<name>”.", fkeys: "Function keys, pages, jog", example: "Insert example",
       hint: "USB surfaces appear as raw devices; network surfaces speak RTP-MIDI (AppleMIDI). Everything can be checked with the simulator when no device is at hand.",
     },
   };
@@ -101,12 +103,15 @@ class OmpMidiGatewayPanel extends HTMLElement {
     const modeSel = h("select", {}, h("option", { value: "mcu" }, T("modeMcu")), h("option", { value: "profile" }, T("modeProfile")));
     const profArea = h("textarea", { spellcheck: "false" });
     const profLabel = h("div", {}, h("div", { class: "muted" }, T("profile")), profArea);
+    const keysArea = h("textarea", { spellcheck: "false", style: "min-height:110px" });
+    const EXAMPLE_KEYS = { pages: [{ name: "Kanal", keys: { f1: { label: "Mute", action: "toggle", method: "channel.{ch}.setMute", arg: "muted", led: "mute" }, f3: { label: "Phase", action: "toggle", method: "channel.{ch}.setPhase", arg: "invert", led: "proc.phaseInvert" } } }, { name: "Wiedergabe", keys: { f1: { label: "Play", action: "call", node: "Player", method: "play" } } }], global: { play: { label: "Play", action: "call", node: "Player", method: "play" } }, jog: [{ name: "Pegel", kind: "gain" }, { name: "Wahl", kind: "select" }] };
+    const keysLabel = h("div", {}, h("div", { class: "muted" }, T("keys")), keysArea, h("div", { class: "row" }, h("button", { onclick: () => { editing = true; keysArea.value = JSON.stringify(EXAMPLE_KEYS, null, 2); } }, T("example"))), h("p", { class: "hint" }, T("keysHint")));
     const unitBody = h("tbody");
     const typeSel = h("select", {}, h("option", { value: "raw" }, T("raw")), h("option", { value: "rtpListen" }, T("rtpListen")), h("option", { value: "rtpConnect" }, T("rtpConnect")), h("option", { value: "sim" }, T("sim")));
     const valIn = h("input", { type: "text", style: "min-width:200px", placeholder: "/dev/snd/midiC1D0 | 5004 | 192.168.1.20:5004" });
     const portList = h("div");
-    for (const el of [mixerIn, auxIn, modeSel, profArea, valIn]) el.addEventListener("input", () => { editing = true; });
-    const syncProf = () => { profLabel.style.display = modeSel.value === "profile" ? "" : "none"; };
+    for (const el of [mixerIn, auxIn, modeSel, profArea, keysArea, valIn]) el.addEventListener("input", () => { editing = true; });
+    const syncProf = () => { profLabel.style.display = modeSel.value === "profile" ? "" : "none"; keysLabel.style.display = modeSel.value === "profile" ? "none" : ""; };
     modeSel.addEventListener("change", syncProf);
 
     const unitCfgOf = () => {
@@ -123,13 +128,15 @@ class OmpMidiGatewayPanel extends HTMLElement {
     const saveBtn = h("button", { onclick: async () => {
       let profile = null;
       if (modeSel.value === "profile") { try { profile = JSON.parse(profArea.value); } catch (e) { show(String(e.message)); return; } }
-      const next = { mixer: mixerIn.value.trim(), masterAux: auxIn.value.trim(), mode: modeSel.value, units: cfg.units, profile };
+      let keys = null;
+      if (modeSel.value === "mcu" && keysArea.value.trim()) { try { keys = JSON.parse(keysArea.value); } catch (e) { show(String(e.message)); return; } }
+      const next = { mixer: mixerIn.value.trim(), masterAux: auxIn.value.trim(), mode: modeSel.value, units: cfg.units, profile, keys };
       if (await call("setConfig", { config: JSON.stringify(next) })) { editing = false; show(T("saved")); poll(true); }
     } }, T("save"));
     const setupSec = h("details", { class: "sec", open: true }, h("summary", {}, T("units")), h("div", { class: "body" },
       h("div", { class: "bar" }, h("label", {}, T("mode"), modeSel), h("label", {}, T("mixer"), mixerIn), h("label", {}, T("masterAux"), auxIn)),
       h("table", {}, h("thead", {}, h("tr", {}, [T("colUnit"), T("colName"), ""].map((x) => h("th", {}, x)))), unitBody),
-      h("div", { class: "row" }, typeSel, valIn, add), profLabel, h("div", { class: "row" }, saveBtn), h("p", { class: "hint" }, T("hint"))));
+      h("div", { class: "row" }, typeSel, valIn, add), profLabel, keysLabel, h("div", { class: "row" }, saveBtn), h("p", { class: "hint" }, T("hint"))));
     const detSec = h("details", { class: "sec" }, h("summary", {}, T("detected")), h("div", { class: "body" }, portList));
 
     // Betrieb
@@ -155,7 +162,12 @@ class OmpMidiGatewayPanel extends HTMLElement {
           h("button", { onclick: () => call("simulateTurn", { unit: n, strip: Math.min(7, strip()), steps: 1 }) }, T("turn")), h("button", { onclick: () => call("simulateTurn", { unit: n, strip: Math.min(7, strip()), steps: -1 }) }, T("turnBack"))),
         h("div", { class: "row" }, ...keys.map((k) => h("button", { onclick: () => call("simulatePress", { unit: n, name: k + (strip() + 1) }) }, `${k} ${T("press")}`)),
           ...["bankLeft", "bankRight", "channelLeft", "channelRight", "nameValue", "play", "f1"].map((k) => h("button", { onclick: () => call("simulatePress", { unit: n, name: k }) }, k)),
-          h("button", { onclick: () => call("simulateLink", { unit: n, up: !u.up }) }, T("linkDrop")))));
+          h("button", { onclick: () => call("simulateLink", { unit: n, up: !u.up }) }, T("linkDrop"))),
+        h("div", { class: "muted" }, T("fkeys")),
+        h("div", { class: "row" }, ...[1, 2, 3, 4, 5, 6, 7, 8].map((i) => h("button", { onclick: () => call("simulatePress", { unit: n, name: "f" + i }) }, "F" + i)),
+          ...["midiTracks", "inputs", "audioTracks", "audioInstruments", "aux", "busses", "outputs", "user"].map((k, i) => h("button", { title: k, onclick: () => call("simulatePress", { unit: n, name: k }) }, "P" + (i + 1)))),
+        h("div", { class: "row" }, h("button", { onclick: () => call("simulateJog", { unit: n, steps: -1 }) }, "Jog ⟲"), h("button", { onclick: () => call("simulateJog", { unit: n, steps: 1 }) }, "Jog ⟳"),
+          ...["scrub", "soloGlobal", "left", "right", "up", "down", "play", "stop"].map((k) => h("button", { onclick: () => call("simulatePress", { unit: n, name: k }) }, k)))));
     };
 
     const render = () => {
@@ -184,6 +196,7 @@ class OmpMidiGatewayPanel extends HTMLElement {
           cfg = JSON.parse(c);
           mixerIn.value = cfg.mixer || ""; auxIn.value = cfg.masterAux || ""; modeSel.value = cfg.mode || "mcu";
           profArea.value = cfg.profile ? JSON.stringify(cfg.profile, null, 2) : "";
+          keysArea.value = cfg.keys ? JSON.stringify(cfg.keys, null, 2) : "";
           syncProf(); renderUnits();
         }
         // Eingabefelder behalten den Fokus; die Statusanzeige läuft weiter

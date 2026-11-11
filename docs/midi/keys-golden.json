@@ -1,0 +1,114 @@
+{
+  "_comment": "Gemeinsame Szenarien für die Tastenbelegung (TypeScript: ui/shell/midi/keys_test.ts, Rust: nodes/omp-midi-gateway/src/keys.rs). Von Hand gerechnet. Nach jedem Schritt vergeht `ms` (Standard 100) Zeit und gedrosselte Befehle werden freigegeben. `expect` = erwartete Ausgaben dieses Schritts (c: gain|mute|pfl|call|nudge|unbound), `state` = geprüfte Zustände (page, jogMode, selected, bank, leds je Tastenname, message).",
+  "scenarios": [
+    {
+      "name": "F-Tasten wirken auf den gewählten Kanal, LED folgt dem Zustand",
+      "channels": [
+        {"id": "a", "label": "A", "gainDb": -6, "mute": false, "pfl": false, "proc": {"eqBypass": false}},
+        {"id": "b", "label": "B", "gainDb": 0, "mute": false, "pfl": false, "proc": {"eqBypass": false}}
+      ],
+      "steps": [
+        {"do": "press", "key": "f1", "expect": [], "state": {"message": "No channel selected"}},
+        {"do": "press", "key": "select2", "expect": [], "state": {"selected": "b"}},
+        {"do": "press", "key": "f1", "expect": [{"c": "call", "node": "", "method": "channel.b.setMute", "args": {"muted": true}}], "state": {"leds": {"f1": "on", "f4": "off"}, "message": "F1 Mute"}},
+        {"do": "press", "key": "f1", "expect": [{"c": "call", "node": "", "method": "channel.b.setMute", "args": {"muted": false}}], "state": {"leds": {"f1": "off"}}},
+        {"do": "press", "key": "f4", "expect": [{"c": "call", "node": "", "method": "channel.b.setEqBypass", "args": {"bypass": true}}], "state": {"leds": {"f4": "on"}}},
+        {"do": "press", "key": "select1", "expect": [], "state": {"selected": "a", "leds": {"f4": "off"}}}
+      ]
+    },
+    {
+      "name": "Seiten über die Ansichtstasten, Momentan-Taste, Ziel-Node",
+      "keys": {"pages": [
+        {"name": "A", "keys": {"f1": {"action": "call", "node": "Player", "method": "play", "label": "Play"}}},
+        {"name": "B", "keys": {"f1": {"action": "momentary", "method": "x.hold", "arg": "on", "label": "Hold"}}}
+      ]},
+      "channels": [{"id": "a", "label": "A", "gainDb": 0, "mute": false, "pfl": false}],
+      "steps": [
+        {"do": "press", "key": "f1", "expect": [{"c": "call", "node": "Player", "method": "play", "args": {}}], "state": {"page": 0, "leds": {"midiTracks": "on", "inputs": "off"}}},
+        {"do": "press", "key": "inputs", "expect": [], "state": {"page": 1, "message": "Page 2 B", "leds": {"midiTracks": "off", "inputs": "on"}}},
+        {"do": "press", "key": "f1", "expect": [{"c": "call", "node": "", "method": "x.hold", "args": {"on": true}}], "state": {"leds": {"f1": "on"}}},
+        {"do": "release", "key": "f1", "expect": [{"c": "call", "node": "", "method": "x.hold", "args": {"on": false}}], "state": {"leds": {"f1": "off"}}},
+        {"do": "press", "key": "audioTracks", "expect": [], "state": {"page": 1, "message": "No page 3"}},
+        {"do": "press", "key": "midiTracks", "expect": [], "state": {"page": 0}}
+      ]
+    },
+    {
+      "name": "Jog: Pegel des gewählten Kanals, Shift = grob, Klemmung, Modus per Scrub-Taste",
+      "channels": [
+        {"id": "a", "label": "A", "gainDb": -6, "mute": false, "pfl": false},
+        {"id": "b", "label": "B", "gainDb": 0, "mute": false, "pfl": false}
+      ],
+      "steps": [
+        {"do": "jog", "delta": 3, "expect": [], "state": {"selected": null}},
+        {"do": "press", "key": "select1", "expect": []},
+        {"do": "jog", "delta": 3, "expect": [{"c": "gain", "id": "a", "db": -4.5}]},
+        {"do": "jog", "delta": -1, "expect": [{"c": "gain", "id": "a", "db": -5}]},
+        {"do": "press", "key": "shift", "expect": []},
+        {"do": "jog", "delta": 2, "expect": [{"c": "gain", "id": "a", "db": 5}]},
+        {"do": "jog", "delta": 100, "expect": [{"c": "gain", "id": "a", "db": 12}]},
+        {"do": "release", "key": "shift", "expect": []},
+        {"do": "press", "key": "scrub", "expect": [], "state": {"jogMode": 1, "message": "Jog: Select", "leds": {"scrub": "on"}}},
+        {"do": "jog", "delta": 1, "expect": [], "state": {"selected": "b"}},
+        {"do": "jog", "delta": -5, "expect": [], "state": {"selected": "a"}},
+        {"do": "press", "key": "scrub", "expect": [], "state": {"jogMode": 0, "leds": {"scrub": "off"}}}
+      ]
+    },
+    {
+      "name": "Feste Tasten: Cursor, Pegel ±1 dB, Vorhören löschen mit Rude-Solo-Lampe",
+      "channels": [
+        {"id": "a", "label": "A", "gainDb": -6, "mute": false, "pfl": true},
+        {"id": "b", "label": "B", "gainDb": 0, "mute": true, "pfl": true},
+        {"id": "c", "label": "C", "gainDb": 0, "mute": false, "pfl": false}
+      ],
+      "steps": [
+        {"do": "press", "key": "right", "expect": [], "state": {"selected": "a"}},
+        {"do": "press", "key": "right", "expect": [], "state": {"selected": "b"}},
+        {"do": "press", "key": "up", "expect": [{"c": "gain", "id": "b", "db": 1}]},
+        {"do": "press", "key": "left", "expect": [], "state": {"selected": "a"}},
+        {"do": "press", "key": "down", "expect": [{"c": "gain", "id": "a", "db": -7}]},
+        {"do": "press", "key": "soloGlobal", "expect": [{"c": "pfl", "id": "a", "enabled": false}, {"c": "pfl", "id": "b", "enabled": false}], "state": {"leds": {"soloGlobal": "off"}}},
+        {"do": "press", "key": "f8", "expect": [{"c": "mute", "id": "b", "muted": false}]},
+        {"do": "press", "key": "cancel", "expect": [], "state": {"selected": null}}
+      ]
+    },
+    {
+      "name": "Auswahl schiebt die Bank mit (10 Kanäle, 8 Züge)",
+      "channels": [
+        {"id": "c1", "label": "1"}, {"id": "c2", "label": "2"}, {"id": "c3", "label": "3"}, {"id": "c4", "label": "4"}, {"id": "c5", "label": "5"},
+        {"id": "c6", "label": "6"}, {"id": "c7", "label": "7"}, {"id": "c8", "label": "8"}, {"id": "c9", "label": "9"}, {"id": "c10", "label": "10"}
+      ],
+      "steps": [
+        {"do": "press", "key": "select8", "expect": [], "state": {"selected": "c8", "bank": 0}},
+        {"do": "press", "key": "right", "expect": [], "state": {"selected": "c9", "bank": 1}},
+        {"do": "press", "key": "right", "expect": [], "state": {"selected": "c10", "bank": 2}},
+        {"do": "press", "key": "right", "expect": [], "state": {"selected": "c10", "bank": 2}},
+        {"do": "press", "key": "channelLeft", "expect": [], "state": {"bank": 1}},
+        {"do": "press", "key": "left", "expect": [], "state": {"selected": "c9", "bank": 1}}
+      ]
+    },
+    {
+      "name": "Unbelegte Tasten gehen nach außen, belegte nicht",
+      "channels": [{"id": "a", "label": "A", "gainDb": 0, "mute": false, "pfl": false}],
+      "steps": [
+        {"do": "press", "key": "play", "expect": [{"c": "unbound", "name": "play", "down": true}]},
+        {"do": "release", "key": "play", "expect": [{"c": "unbound", "name": "play", "down": false}]},
+        {"do": "press", "key": "userSwitch1", "expect": [{"c": "unbound", "name": "userSwitch1", "down": true}]},
+        {"do": "release", "key": "left", "expect": []},
+        {"do": "press", "key": "mute1", "expect": [{"c": "mute", "id": "a", "muted": true}]},
+        {"do": "release", "key": "mute1", "expect": []}
+      ]
+    },
+    {
+      "name": "Jog auf fremdem Parameter (Lesen-Ändern-Schreiben), Kanal-Vorlage",
+      "keys": {"jog": [{"name": "Speed", "kind": "nudge", "node": "Player", "method": "setSpeed", "arg": "speed", "readParam": "speed", "step": 0.25, "min": 0, "max": 2}, {"kind": "nudge", "method": "channel.{ch}.setPan", "arg": "pan", "readParam": "channel.{ch}.pan", "step": 0.5}]},
+      "channels": [{"id": "a", "label": "A", "gainDb": 0, "mute": false, "pfl": false}],
+      "steps": [
+        {"do": "jog", "delta": 3, "expect": [{"c": "nudge", "node": "Player", "method": "setSpeed", "args": {}, "arg": "speed", "delta": 0.75, "min": 0, "max": 2, "readParam": "speed"}]},
+        {"do": "press", "key": "scrub", "expect": [], "state": {"jogMode": 1, "message": "Jog: nudge"}},
+        {"do": "jog", "delta": 1, "expect": []},
+        {"do": "press", "key": "select1", "expect": []},
+        {"do": "jog", "delta": -2, "expect": [{"c": "nudge", "node": "", "method": "channel.a.setPan", "args": {}, "arg": "pan", "delta": -1, "readParam": "channel.a.pan"}]}
+      ]
+    }
+  ]
+}
