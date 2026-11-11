@@ -591,6 +591,14 @@
     "method": "GET",
     "path": "/api/v1/auth/directory",
     "auth": "verb:Admin",
+    "when": "options.dirAdmin != nil",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/auth/directory",
+    "auth": "verb:Admin",
+    "when": "options.dirAdmin != nil",
     "domain": "core"
   },
   {
@@ -618,6 +626,7 @@
     "method": "POST",
     "path": "/api/v1/auth/directory/test",
     "auth": "verb:Admin",
+    "when": "options.dirAdmin != nil",
     "domain": "core"
   },
   {

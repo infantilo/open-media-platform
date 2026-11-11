@@ -30,7 +30,7 @@ type AlarmAckStore interface {
 type HandlerOption func(*handlerOptions)
 
 type handlerOptions struct {
-	dirPinger           DirectoryPinger
+	dirAdmin            DirectoryAdmin
 	dirMaps             DirectoryMapService
 	alarmAcks           AlarmAckStore
 	scriptCommands      []string

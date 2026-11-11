@@ -2,6 +2,7 @@ package directory
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/dbtest"
@@ -73,5 +74,81 @@ func TestMapStoreSync(t *testing.T) {
 	_ = m.Remove(ctx, "Chefs", "g-ton")
 	if list, _ = m.List(ctx); len(list) != 2 {
 		t.Fatalf("Remove: %v", list)
+	}
+}
+
+func TestManagerSaveReloadTest(t *testing.T) {
+	db := dbtest.Open(t)
+	ctx := context.Background()
+	if _, err := db.Exec(`DELETE FROM directory_config`); err != nil {
+		t.Fatal(err)
+	}
+	f := seeded(t)
+	key := "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=" // 32 Byte, nur Test
+	env := Settings{Enabled: false}
+	m, err := NewManager(db, key, env, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reload(ctx); err != nil || m.Enabled() {
+		t.Fatalf("ohne Einstellungen: %v %v", err, m.Enabled())
+	}
+	if _, err := m.Authenticate(ctx, "hans", "geheim-1234"); err == nil {
+		t.Fatal("Anmeldung ohne Verzeichnis")
+	}
+	set := Settings{Enabled: true, URLs: []string{f.url()}, AllowPlain: true, BaseDN: "DC=t", BindDN: "CN=svc,DC=t", BindPassword: "svcpw", TimeoutS: 3}
+	// Test mit Formularwerten, vor dem Speichern
+	if err := m.Test(ctx, &set); err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+	bad := set
+	bad.BindPassword = "falsch"
+	if err := m.Test(ctx, &bad); err == nil {
+		t.Fatal("falsches Dienstkonto-Kennwort ging durch")
+	}
+	// Ungültig wird nicht gespeichert
+	inv := set
+	inv.URLs = []string{"ldap://dc"}
+	inv.AllowPlain = false
+	if err := m.Save(ctx, inv); err == nil {
+		t.Fatal("Klartext ohne Freigabe gespeichert")
+	}
+	if err := m.Save(ctx, set); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Enabled() {
+		t.Fatalf("nicht aktiv: %s", m.LastError())
+	}
+	if _, err := m.Authenticate(ctx, "hans", "geheim-1234"); err != nil {
+		t.Fatal(err)
+	}
+	// Kennwort liegt verschlüsselt, wird nie zurückgegeben
+	var enc []byte
+	_ = db.QueryRow(`SELECT password_enc FROM directory_config`).Scan(&enc)
+	if len(enc) == 0 || strings.Contains(string(enc), "svcpw") {
+		t.Fatal("Kennwort nicht verschlüsselt")
+	}
+	got, _ := m.Settings(ctx)
+	if got.BindPassword != "" || !got.HasPassword || got.Source != "ui" {
+		t.Fatalf("Settings: %+v", got)
+	}
+	// Leeres Kennwort beim Speichern behält das alte
+	set.BindPassword, set.RequiredGroup = "", "Regie1"
+	if err := m.Save(ctx, set); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Authenticate(ctx, "hans", "geheim-1234"); err != nil {
+		t.Fatalf("Kennwort verloren: %v", err)
+	}
+	// Ausschalten wirkt sofort
+	set.Enabled = false
+	if err := m.Save(ctx, set); err != nil || m.Enabled() {
+		t.Fatalf("aus: %v %v", err, m.Enabled())
+	}
+	// Ohne Schlüssel kein Kennwort speichern
+	m2, _ := NewManager(db, "", env, "")
+	set.Enabled, set.BindPassword = true, "x"
+	if err := m2.Save(ctx, set); err != ErrNoSecretKey {
+		t.Fatalf("ohne Schlüssel: %v", err)
 	}
 }

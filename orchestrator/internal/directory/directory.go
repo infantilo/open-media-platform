@@ -46,6 +46,8 @@ type Config struct {
 	AllowPlain bool
 	// CAFile: PEM mit der Zertifizierungsstelle des Verzeichnisses (leer = Systemzertifikate).
 	CAFile string
+	// CAPEM: dasselbe als PEM-Text (in der Oberfläche eingefügt); zusätzlich zu CAFile.
+	CAPEM string
 	// BaseDN: Suchbasis für Nutzer, z. B. "DC=example,DC=org".
 	BaseDN string
 	// BindDN/BindPassword: Dienstkonto für die Suche (leer = anonym; AD erlaubt das meist nicht).
@@ -128,14 +130,19 @@ func New(cfg Config) (*Client, error) {
 		}
 	}
 	c := &Client{cfg: cfg, tlsC: &tls.Config{MinVersion: tls.VersionTLS12}}
-	if cfg.CAFile != "" {
-		pem, err := os.ReadFile(cfg.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("directory: CA-Datei: %w", err)
-		}
+	if cfg.CAFile != "" || strings.TrimSpace(cfg.CAPEM) != "" {
 		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, errors.New("directory: CA-Datei enthält kein Zertifikat")
+		if cfg.CAFile != "" {
+			pem, err := os.ReadFile(cfg.CAFile)
+			if err != nil {
+				return nil, fmt.Errorf("directory: CA-Datei: %w", err)
+			}
+			if !pool.AppendCertsFromPEM(pem) {
+				return nil, errors.New("directory: CA-Datei enthält kein Zertifikat")
+			}
+		}
+		if strings.TrimSpace(cfg.CAPEM) != "" && !pool.AppendCertsFromPEM([]byte(cfg.CAPEM)) {
+			return nil, errors.New("directory: CA-Zertifikat (PEM) ist ungültig")
 		}
 		c.tlsC.RootCAs = pool
 	}

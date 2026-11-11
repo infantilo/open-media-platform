@@ -723,30 +723,32 @@ func main() {
 	}
 	authSvc := auth.NewService(auth.NewStore(database), jwtSecret)
 	authzStore := authz.NewStore(database)
-	// Active-Directory-/LDAP-Anmeldung (internal/directory) — nur mit OMP_LDAP_URL; Fehlkonfiguration beendet den Start nicht,
-	// lokale Konten bleiben als Notzugang nutzbar.
+	// Active-Directory-/LDAP-Anmeldung (internal/directory): Einstellungen in der Oberfläche (Tabelle directory_config),
+	// Rückfall auf OMP_LDAP_*; Änderungen wirken sofort. Fehlkonfiguration beendet den Start nicht (lokale Konten bleiben).
 	dirMap := directory.NewMapStore(database)
 	dirMap.OnChange = authzStore.Invalidate
-	var dirClient *directory.Client
-	if cfg.LDAPURL != "" {
-		var urls []string
-		for _, u := range strings.Split(cfg.LDAPURL, ",") {
-			if u = strings.TrimSpace(u); u != "" {
-				urls = append(urls, u)
-			}
-		}
-		c, err := directory.New(directory.Config{URLs: urls, StartTLS: cfg.LDAPStartTLS, AllowPlain: cfg.LDAPAllowPlain, CAFile: cfg.LDAPCAFile,
-			BaseDN: cfg.LDAPBaseDN, BindDN: cfg.LDAPBindDN, BindPassword: cfg.LDAPBindPassword, UserFilter: cfg.LDAPUserFilter,
-			UserAttr: cfg.LDAPUserAttr, GroupBaseDN: cfg.LDAPGroupBaseDN, GroupFilter: cfg.LDAPGroupFilter,
-			RequiredGroup: cfg.LDAPRequiredGroup, Timeout: time.Duration(cfg.LDAPTimeoutS) * time.Second})
-		if err != nil {
-			slog.Error("LDAP/Active Directory: Konfiguration unbrauchbar, Verzeichnis-Anmeldung bleibt aus", "err", err)
-		} else {
-			dirClient = c
-			authSvc.SetDirectory(c, dirMap)
-			slog.Info("LDAP/Active Directory: Anmeldung aktiv", "urls", urls, "baseDN", cfg.LDAPBaseDN)
+	var envUrls []string
+	for _, u := range strings.Split(cfg.LDAPURL, ",") {
+		if u = strings.TrimSpace(u); u != "" {
+			envUrls = append(envUrls, u)
 		}
 	}
+	dirMgr, derr := directory.NewManager(database, cfg.StorageSecretKey, directory.Settings{
+		Enabled: len(envUrls) > 0, URLs: envUrls, StartTLS: cfg.LDAPStartTLS, AllowPlain: cfg.LDAPAllowPlain, CAFile: cfg.LDAPCAFile,
+		BaseDN: cfg.LDAPBaseDN, BindDN: cfg.LDAPBindDN, UserFilter: cfg.LDAPUserFilter, UserAttr: cfg.LDAPUserAttr,
+		GroupBaseDN: cfg.LDAPGroupBaseDN, GroupFilter: cfg.LDAPGroupFilter, RequiredGroup: cfg.LDAPRequiredGroup, TimeoutS: cfg.LDAPTimeoutS,
+	}, cfg.LDAPBindPassword)
+	if derr != nil {
+		slog.Error("LDAP/Active Directory: OMP_STORAGE_SECRET_KEY ungültig, Verzeichnis-Anmeldung bleibt aus", "err", derr)
+		os.Exit(1)
+	}
+	if err := dirMgr.Reload(ctx); err != nil {
+		slog.Error("LDAP/Active Directory: Konfiguration unbrauchbar, Verzeichnis-Anmeldung bleibt aus", "err", err)
+	} else if dirMgr.Enabled() {
+		slog.Info("LDAP/Active Directory: Anmeldung aktiv")
+	}
+	authSvc.SetDirectory(dirMgr, dirMap)
+	go dirMgr.Watch(ctx, 20*time.Second)
 	// Kapitel 21 B14 (Nachtrag 283) — s. internal/organizations-Paketdoku.
 	orgStore := organizations.NewStore(database)
 	// Nutzerauftrag 2026-09-24: gruppenbasierte Rechteverwaltung — s.
@@ -1723,7 +1725,7 @@ func main() {
 	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
 	go timelineRec.Run(ctx, hub, timelineSink)
 	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithDirectory(dirClient, dirMap), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithHostSoftware(hostSoftwareSvc), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithAlertStatus(alertStatusFn), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithDirectory(dirMgr, dirMap), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithHostSoftware(hostSoftwareSvc), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithAlertStatus(alertStatusFn), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
 		h, err := housekeeping.CheckHealth(ctx, database)
 		housekeeping.AddVolume(&h, os.Getenv("OMP_DB_VOLUME_PATH"))
 		return h, err

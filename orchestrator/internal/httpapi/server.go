@@ -913,8 +913,11 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	}
 
 	// Active-Directory-/LDAP-Anbindung (Nutzerauftrag 2026-11-11): Status, Verbindungstest, Gruppenabbildung (nur Administratoren).
-	mux.HandleFunc("GET /api/v1/auth/directory", g.requireVerbGlobal(authz.VerbAdmin, handleDirectoryStatus(options.dirPinger)))
-	mux.HandleFunc("POST /api/v1/auth/directory/test", g.requireVerbGlobal(authz.VerbAdmin, handleDirectoryTest(options.dirPinger)))
+	if options.dirAdmin != nil {
+		mux.HandleFunc("GET /api/v1/auth/directory", g.requireVerbGlobal(authz.VerbAdmin, handleDirectoryStatus(options.dirAdmin)))
+		mux.HandleFunc("PUT /api/v1/auth/directory", g.requireVerbGlobal(authz.VerbAdmin, handleDirectorySave(options.dirAdmin, options.domainAudit)))
+		mux.HandleFunc("POST /api/v1/auth/directory/test", g.requireVerbGlobal(authz.VerbAdmin, handleDirectoryTest(options.dirAdmin)))
+	}
 	if options.dirMaps != nil {
 		mux.HandleFunc("GET /api/v1/auth/directory/mappings", g.requireVerbGlobal(authz.VerbAdmin, handleDirectoryMappings(options.dirMaps)))
 		mux.HandleFunc("POST /api/v1/auth/directory/mappings", g.requireVerbGlobal(authz.VerbAdmin, handleDirectoryAddMapping(options.dirMaps, options.domainAudit)))
