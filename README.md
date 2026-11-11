@@ -76,7 +76,7 @@ Although the project is still in its early stages, the current version is alread
 
 I'm excited to see how this approach evolves and look forward to exchanging ideas with everyone involved in software-defined broadcast systems, open standards, or modern media architectures.
 
-**Contents:** [Quickstart](#quickstart) · [Demo](#demo) ·
+**Contents:** [Quickstart](#quickstart) ·
 [Screenshots](#screenshots) · [What's in the box](#whats-in-the-box)
 (standard-based core, flow editor & workflows, business process engine
 & asset catalog, microservices, reliability & operations) · [What
@@ -112,13 +112,6 @@ script — [`docs/OFFLINE-INSTALLATION.md`](docs/OFFLINE-INSTALLATION.md)
 screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
 (The docs are in German — this README is the only English-language
 entry point so far.)
-
-## Demo
-
-https://github.com/user-attachments/assets/f347147b-6052-4a5c-af90-4a5c946592a1
-
-_~5 min walkthrough of the UI in action — node catalog, Flow Editor
-wiring, multi-host operation, workflows._
 
 ## Screenshots
 
