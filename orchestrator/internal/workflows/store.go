@@ -19,7 +19,15 @@ type Store struct {
 
 	idxMu sync.Mutex
 	idx   *roleIndex
+
+	listMu    sync.Mutex
+	listCache []Workflow
+	listAt    time.Time
 }
+
+// listCacheTTL begrenzt die Gültigkeit der geteilten Nur-Lese-Liste (ListShared);
+// eigene Schreibzugriffe verwerfen sie sofort, die TTL fängt andere Orchestratoren ab.
+const listCacheTTL = time.Second
 
 // roleIndexTTL begrenzt, wie lange der Rollen-Index ohne eigenen Schreibzugriff
 // gilt (Schreibzugriffe dieses Prozesses verwerfen ihn sofort; die TTL fängt
@@ -62,6 +70,27 @@ func (s *Store) invalidateRoleIndex() {
 	s.idxMu.Lock()
 	s.idx = nil
 	s.idxMu.Unlock()
+	s.listMu.Lock()
+	s.listCache = nil
+	s.listMu.Unlock()
+}
+
+// ListShared liefert wie List alle Workflows, aber aus einem kurzlebigen
+// gemeinsamen Cache (Lastfund 2026-11-12: GET /workflows dekodierte pro Aufruf
+// alle Blobs = 43 % der Orchestrator-CPU bei 100 Clients). Das Ergebnis darf
+// NICHT verändert werden — nur zum Lesen/Serialisieren; wer ändert, nimmt List.
+func (s *Store) ListShared() ([]Workflow, error) {
+	s.listMu.Lock()
+	defer s.listMu.Unlock()
+	if s.listCache != nil && time.Since(s.listAt) < listCacheTTL {
+		return s.listCache, nil
+	}
+	l, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	s.listCache, s.listAt = l, time.Now()
+	return l, nil
 }
 
 // roleIndex liefert den (ggf. neu aufgebauten) Index. Der Index wird unter
@@ -206,6 +235,7 @@ func (s *Store) UpdateRuntime(wf Workflow) error {
 // ging). jsonb_set ändert nur den einen Unterpfad und kollidiert daher
 // nie mit einem parallelen Put(), das status/runtime/error schreibt.
 func (s *Store) UpdateSchedules(id string, schedules []Schedule) error {
+	defer s.invalidateRoleIndex()
 	if schedules == nil {
 		schedules = []Schedule{}
 	}

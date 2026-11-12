@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/tracing"
@@ -140,6 +141,7 @@ func handleNodeStreamProxy(nodes NodeLister, client *http.Client) http.HandlerFu
 	if client == nil {
 		client = http.DefaultClient
 	}
+	cache := newStreamCache()
 	return func(w http.ResponseWriter, r *http.Request) {
 		node, ok := nodes.Get(r.PathValue("id"))
 		if !ok {
@@ -151,53 +153,100 @@ func handleNodeStreamProxy(nodes NodeLister, client *http.Client) http.HandlerFu
 			return
 		}
 		name := r.PathValue("name")
+		key := r.PathValue("id") + "\x00" + node.APIBaseURL + "\x00" + name
 
-		paramReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, node.APIBaseURL+"/params/"+name, nil)
-		if err != nil {
-			http.Error(w, "failed to build param request", http.StatusInternalServerError)
-			return
+		// Einzelbild-Streams: gleichzeitige/zeitnahe Anfragen teilen sich einen Abruf (s. previewcache.go).
+		fe := cache.frame(key)
+		shared := fe.isImage.Load()
+		if shared {
+			fe.mu.Lock()
+			defer fe.mu.Unlock()
+			if fe.body != nil && time.Since(fe.at) < frameShareTTL {
+				w.Header().Set("Content-Type", fe.ct)
+				w.Header().Set("Cache-Control", "no-cache")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(fe.body)
+				return
+			}
 		}
-		paramResp, err := client.Do(paramReq)
-		if err != nil {
-			http.Error(w, "node unreachable: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-		var parsed struct {
-			Value string `json:"value"`
-		}
-		decodeErr := json.NewDecoder(paramResp.Body).Decode(&parsed)
-		paramResp.Body.Close()
-		if paramResp.StatusCode != http.StatusOK {
-			http.Error(w, "unknown stream", http.StatusNotFound)
-			return
-		}
-		if decodeErr != nil || parsed.Value == "" {
-			http.Error(w, "stream not available", http.StatusNotFound)
-			return
+
+		streamURL, cached := cache.url(key)
+		if !cached {
+			paramReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, node.APIBaseURL+"/params/"+name, nil)
+			if err != nil {
+				http.Error(w, "failed to build param request", http.StatusInternalServerError)
+				return
+			}
+			paramResp, err := client.Do(paramReq)
+			if err != nil {
+				http.Error(w, "node unreachable: "+err.Error(), http.StatusBadGateway)
+				return
+			}
+			var parsed struct {
+				Value string `json:"value"`
+			}
+			decodeErr := json.NewDecoder(paramResp.Body).Decode(&parsed)
+			paramResp.Body.Close()
+			if paramResp.StatusCode != http.StatusOK {
+				http.Error(w, "unknown stream", http.StatusNotFound)
+				return
+			}
+			if decodeErr != nil || parsed.Value == "" {
+				http.Error(w, "stream not available", http.StatusNotFound)
+				return
+			}
+			streamURL = parsed.Value
 		}
 
 		// Audit 2026-10-23 H1 (SSRF): die URL kommt vom Node. Ein kompromittierter oder fehlerhafter Node durfte den
 		// Orchestrator so beliebige interne Adressen abrufen lassen. Erlaubt ist nur ein Stream auf dem Host des Nodes selbst.
-		if !streamURLAllowed(node.APIBaseURL, parsed.Value) {
+		if !streamURLAllowed(node.APIBaseURL, streamURL) {
 			http.Error(w, "stream url not on the node's own host", http.StatusBadGateway)
 			return
 		}
-		streamReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, parsed.Value, nil)
+		streamReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, streamURL, nil)
 		if err != nil {
 			http.Error(w, "failed to build stream request", http.StatusInternalServerError)
 			return
 		}
 		streamResp, err := client.Do(streamReq)
 		if err != nil {
+			cache.dropURL(key)
 			http.Error(w, "stream unreachable: "+err.Error(), http.StatusBadGateway)
 			return
 		}
 		defer streamResp.Body.Close()
+		if !cached {
+			cache.setURL(key, streamURL)
+		}
 
-		if ct := streamResp.Header.Get("Content-Type"); ct != "" {
+		ct := streamResp.Header.Get("Content-Type")
+		if ct != "" {
 			w.Header().Set("Content-Type", ct)
 		}
 		w.Header().Set("Cache-Control", "no-cache")
+
+		// Einzelbild mit bekannter Laenge: vollstaendig lesen, teilen.
+		if streamResp.StatusCode == http.StatusOK && strings.HasPrefix(ct, "image/") &&
+			streamResp.ContentLength >= 0 && streamResp.ContentLength <= frameMaxBytes {
+			body, rerr := io.ReadAll(io.LimitReader(streamResp.Body, frameMaxBytes+1))
+			if rerr != nil {
+				http.Error(w, "stream read failed", http.StatusBadGateway)
+				return
+			}
+			if !shared {
+				fe.mu.Lock()
+				defer fe.mu.Unlock()
+				fe.isImage.Store(true)
+			}
+			fe.body, fe.ct, fe.at = body, ct, time.Now()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(body)
+			return
+		}
+		if shared && streamResp.StatusCode != http.StatusOK {
+			fe.body = nil // z. B. "no frame yet": nichts Veraltetes weiterreichen
+		}
 		w.WriteHeader(streamResp.StatusCode)
 
 		// Sofort flushen statt implizit auf den ersten Read()-Erfolg

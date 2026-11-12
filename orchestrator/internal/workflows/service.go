@@ -443,6 +443,14 @@ func (s *Service) List() ([]Workflow, error) {
 	return s.store.List()
 }
 
+// ListShared: wie List, aber gecacht und nur lesend zu verwenden (s. Store.ListShared).
+func (s *Service) ListShared() ([]Workflow, error) {
+	if st, ok := s.store.(interface{ ListShared() ([]Workflow, error) }); ok {
+		return st.ListShared()
+	}
+	return s.store.List()
+}
+
 // Get liefert einen einzelnen Workflow.
 func (s *Service) Get(id string) (Workflow, error) {
 	return s.store.Get(id)

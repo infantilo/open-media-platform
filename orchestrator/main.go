@@ -514,7 +514,7 @@ func main() {
 		// Viele Operatoren/Proxy-Aufrufe pro Node: Go-Default wäre 2 Idle-
 		// Verbindungen pro Host (ständiger Neuaufbau unter Last).
 		MaxIdleConns:        512,
-		MaxIdleConnsPerHost: 32,
+		MaxIdleConnsPerHost: 128,
 		IdleConnTimeout:     90 * time.Second,
 	}
 	nodeHTTPClient := &http.Client{Transport: nodeauth.Wrap(nodeTransport)}

@@ -12,7 +12,14 @@ import (
 // §6.2, UMSETZUNG.md D7 Teil 1).
 func handleListWorkflows(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		list, err := svc.List()
+		// Nur lesend + serialisiert -> geteilter Cache genügt (Lastfund 2026-11-12).
+		lister := svc.List
+		if sh, ok := svc.(interface {
+			ListShared() ([]workflows.Workflow, error)
+		}); ok {
+			lister = sh.ListShared
+		}
+		list, err := lister()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
