@@ -30684,3 +30684,19 @@ LDAP-Bind“ aus 2026-07-10).
 - **HUI nicht umgesetzt:** eigene Sprache (Ping/Zonen); MCU genügt für die genannten Geräte (laut Händlerangaben beide Modi).
 - **Sicherheit:** Pfad eines Rohgeräts nur `/dev/snd/midiC<n>D<m>` (der Node schreibt dorthin; kein beliebiger Dateipfad); höchstens 4 Einheiten; Konfiguration nur über `setConfig` (prüft, nennt Gründe).
 - **Risiko:** am echten Gerät unbelegt: Erweiterung als eigener USB-Port (angenommen), Anmeldung, Gerätekennung `0x15` für Erweiterungen, RTP-MIDI-Gegenseitigkeit mit fremden Geräten.
+
+## 2026-11-12 — Härtung Schritt 98.0: Messgrundlage Schreiben→Lesen (HAERTUNG-PLAN.md)
+
+- **Neu:** `nodes/omp-mediaio/examples/write_read_latency_probe.rs`. Misst die Zeit zwischen Grain-Commit des Schreibers und Aufwachen eines blockierenden Lesers. Der Schreiber setzt `lastWriteTime` (TAI) unmittelbar vor `wakeAll` (`PosixDiscreteFlowWriter::commit`); der Leser nimmt direkt nach `get_complete_grain` die TAI-Zeit. Werte über einer Bildperiode zählen als „behind“ und fließen nicht in die Perzentile ein. Dazu `PROC`-Zeile (CPU-Ticks, Kontextwechsel aus `/proc/self`).
+- **Zwei Arten:** `--self` (eigener Flow in privater Domain unter `/dev/shm/omp-probe-<pid>`, wird gelöscht; Schreiber- und Leser-Thread mit je eigener MXL-Instanz, zusätzlich Stempel vor `commit`) und `<flow-id>` (reiner Leser an einem Live-Flow). Der Live-Modus ist gebaut, aber **nicht gelaufen**: Ein zusätzlicher Leser kann das Leser-Gate öffnen (Ausgänge schreiben erst bei Leser), das wollte ich am Live-Stack des Nutzers nicht auslösen.
+- **Ausgangswerte (Entwicklungsrechner, VM, 8 Kerne, `nice 10`, 1920×1080 v210 25 fps, 3 × 10 s, `--self`):**
+
+  | Lauf | Median µs | p95 µs | p99 µs | max µs | behind | CPU-Ticks | frw./unfrw. Kontextwechsel |
+  |---|---|---|---|---|---|---|---|
+  | 1 | 207,7 | 2134 | 10274 | 12359 | 0 | 21 | 254 / 3 |
+  | 2 | 217,5 | 2281 | 18322 | 24387 | 0 | 32 | 254 / 2 |
+  | 3 | 223,6 | 2236 | 12352 | 13382 | 0 | 24 | 253 / 3 |
+
+- **Bewertung:** Streuung des Medians 7,4 % (< 10 %, Kriterium aus 98.0 erfüllt). Der **p99 streut stark** (10–18 ms) und ist auf dieser VM **nicht belastbar**; das Plan-Kriterium „p99 +0,5 ms“ ist hier nicht prüfbar. Verbindliche p95/p99-Werte nur von einem echten Host (.60/.61), und nur Vorher/Nachher im selben Lauf. Der Median ist als Abbruchkriterium (+0,1 ms = 100 µs) hier nutzbar: Die Streuung beträgt nur etwa ±8 µs.
+- **Nicht erhoben:** Ausgangswerte „Player→Mischer→Leser“ und Zeitcode-/A-V-Versatz (`tc-offset`, `av-marker`). Beides braucht eigene Testinstanzen über den laufenden Orchestrator, der echte Flows des Nutzers fährt; dort ist erst nach Absprache zu messen (CPU schonen).
+- **Offen aus dem Plan:** E1 (Abbruchgrenzen) nach echter Hostmessung anpassen.
