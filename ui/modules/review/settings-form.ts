@@ -8,6 +8,9 @@ import { APPROVAL_MODES, type Cfg, FIELD_TYPES, idFrom, moveItem, validateReview
 export interface ReviewSettingsOptions {
   config: Cfg;
   save: (c: Cfg) => Promise<{ ok: boolean; message: string }>;
+  /** Statt als Dialog in diesen Behälter zeichnen (Administration → Plattform → Eingangskontrolle); „Verwerfen“ ruft `onDiscard`. */
+  container?: HTMLElement;
+  onDiscard?: () => void;
 }
 
 export function openReviewSettingsForm(o: ReviewSettingsOptions): void {
@@ -18,8 +21,9 @@ export function openReviewSettingsForm(o: ReviewSettingsOptions): void {
   const overlay = el("div");
   overlay.className = "omp-modal-overlay";
   overlay.style.zIndex = "3000";
-  const m = el("div", "max-width:860px;max-height:92vh;overflow:auto;");
-  m.className = "omp-modal";
+  const embedded = !!o.container;
+  const m = el("div", embedded ? "max-width:900px;" : "max-width:860px;max-height:92vh;overflow:auto;");
+  if (!embedded) m.className = "omp-modal";
   m.dataset.role = "review-settings";
   const h1 = el("div", "margin-bottom:4px;", tt("rv.settings"));
   h1.className = "omp-h1";
@@ -141,11 +145,11 @@ export function openReviewSettingsForm(o: ReviewSettingsOptions): void {
 
   // ---- Fuß ----
   const row = el("div", "display:flex;gap:8px;justify-content:flex-end;margin-top:4px;");
-  const cancel = el("button", "", tt("rv.cancel"));
+  const cancel = el("button", "", embedded ? tt("rv.discard") : tt("rv.cancel"));
   const save = el("button", "", tt("rv.save"));
   save.className = "omp-btn-primary";
   save.dataset.role = "settings-save";
-  cancel.addEventListener("click", () => overlay.remove());
+  cancel.addEventListener("click", () => (embedded ? o.onDiscard?.() : overlay.remove()));
   save.addEventListener("click", async () => {
     const problems = validateReviewConfig(c);
     if (problems.length) {
@@ -160,12 +164,16 @@ export function openReviewSettingsForm(o: ReviewSettingsOptions): void {
       err.textContent = r.message;
       return;
     }
-    overlay.remove();
+    if (!embedded) overlay.remove();
   });
   row.append(cancel, save);
   const body = el("div", "display:flex;flex-direction:column;gap:10px;");
   body.append(apr.box, seg.box, qc.box, prx.box, meta.box, imp.box);
   m.append(h1, el("div", "font-size:12px;color:var(--omp-text-dim);margin-bottom:8px;", tt("rv.settings.hint")), body, err, row);
+  if (o.container) {
+    o.container.replaceChildren(m);
+    return;
+  }
   overlay.addEventListener("keydown", (e) => e.key === "Escape" && overlay.remove());
   overlay.append(m);
   document.body.append(overlay);

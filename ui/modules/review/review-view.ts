@@ -3,7 +3,6 @@ import { dateLocale, directory, features, showToast, t as tt, whoami } from "../
 import { type Directory, groupName, hasFeature } from "../../kit/features.ts";
 import { call, errText } from "./api.ts";
 import { type Config, type Me, ReviewDetail } from "./detail.ts";
-import { openReviewSettingsForm } from "./settings-form.ts";
 import { assignmentLabel, formatBytes, isOverdue, type Item, qcBadge, stateBadge } from "./review-logic.ts";
 import { timecodeOf } from "./timecode.ts";
 
@@ -120,9 +119,6 @@ class ReviewView extends HTMLElement {
       this.#rmBtn.addEventListener("click", () => void this.#removeDialog());
       bar.append(this.#rmBtn, this.#rmInfo);
       this.#syncPicked();
-      const cfg = el("button", "padding:3px 10px;", tt("rv.settings"));
-      cfg.addEventListener("click", () => void this.#settingsDialog());
-      bar.append(cfg);
     }
     this.append(bar);
     if (this.#error) this.append(el("div", "color:var(--omp-error);", this.#error));
@@ -354,21 +350,6 @@ class ReviewView extends HTMLElement {
     m.append(h1, sel, title, row);
     overlay.append(m);
     document.body.append(overlay);
-  }
-
-  async #settingsDialog() {
-    const r = await call<Config>("GET", "/config");
-    if (!r.ok) return;
-    openReviewSettingsForm({
-      config: r.data as unknown as Record<string, unknown>,
-      save: async (c) => {
-        const res = await call("PUT", "/config", c);
-        if (!res.ok) return { ok: false, message: errText(res.data) || tt("rv.err.generic") };
-        this.#cfg = res.data as unknown as Config;
-        showToast(tt("rv.saved"));
-        return { ok: true, message: "" };
-      },
-    });
   }
 }
 

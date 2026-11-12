@@ -2,4 +2,5 @@
 // anhand des Manifests (GET /api/v1/modules) und zeigt den Tab „Eingang“ in der Hauptleiste.
 import "./register.ts"; // zuerst: Texte anmelden, bevor View/Logik laden
 import "./review-view.ts";
+import "./settings-view.ts"; // Admin-Untertab „Eingangskontrolle“ (Einstellungen, im selben Bundle)
 import "./qc-profiles-view.ts"; // Admin-Untertab „QC-Profile“ (im selben Bundle)

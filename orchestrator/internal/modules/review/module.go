@@ -173,7 +173,7 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	return nil
 }
 
-// UI: Tab „Eingang“ in der Hauptleiste, nach „Assets“; dazu der Editor der QC-Profile in der Administration (Plattform → Betrieb).
+// UI: Tab „Eingang“ in der Hauptleiste, nach „Assets“; dazu in der Administration (Plattform → Betrieb) die Einstellungen des Eingangs und der Editor der QC-Profile.
 func (*Module) UI() []module.UITab {
 	return []module.UITab{{
 		ID: "review", Placement: "main", After: "assets",
@@ -184,6 +184,12 @@ func (*Module) UI() []module.UITab {
 		Label: map[string]string{"de": "QC-Profile", "en": "QC profiles"},
 		Group: map[string]string{"de": "Plattform", "en": "Platform"}, Cluster: "operations",
 		Element: "omp-qc-profiles-view", Bundle: "/dist/modules/review.js",
+	}, {
+		// Einstellungen des Eingangs gehören in die Administration (Nutzerwunsch 2026-11-12), nicht in den Arbeits-Tab.
+		ID: "review-settings", Placement: "admin:platform", After: "qc-profiles",
+		Label: map[string]string{"de": "Eingangskontrolle", "en": "Intake control"},
+		Group: map[string]string{"de": "Plattform", "en": "Platform"}, Cluster: "operations",
+		Element: "omp-review-settings-view", Bundle: "/dist/modules/review.js",
 	}}
 }
 
