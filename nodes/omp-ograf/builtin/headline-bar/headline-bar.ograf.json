@@ -1,0 +1,66 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "headline-bar",
+  "version": "1.0.0",
+  "name": "Schlagzeile / Eilmeldung",
+  "description": "Balken unten mit farbigem Label (z. B. EILMELDUNG) und Schlagzeile; fährt von unten ein.",
+  "author": {
+    "name": "OpenMediaPlatform"
+  },
+  "main": "headline-bar.js",
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 1,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "label": {
+        "type": "string",
+        "title": "Label",
+        "default": "EILMELDUNG"
+      },
+      "text": {
+        "type": "string",
+        "title": "Schlagzeile",
+        "default": "Schlagzeile"
+      },
+      "labelColor": {
+        "type": "string",
+        "title": "Labelfarbe",
+        "default": "#d90012",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      },
+      "bgColor": {
+        "type": "string",
+        "title": "Hintergrund",
+        "default": "#101826",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      },
+      "textColor": {
+        "type": "string",
+        "title": "Textfarbe",
+        "default": "#ffffff",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      }
+    }
+  },
+  "renderRequirements": [
+    {
+      "resolution": {
+        "width": {
+          "ideal": 1920
+        },
+        "height": {
+          "ideal": 1080
+        }
+      },
+      "frameRate": {
+        "ideal": 25
+      }
+    }
+  ]
+}

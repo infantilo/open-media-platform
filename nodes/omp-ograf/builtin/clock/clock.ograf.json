@@ -1,0 +1,111 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "clock",
+  "version": "1.0.0",
+  "name": "Uhr / Countdown",
+  "description": "Uhrzeit, Countdown (bis Zeitpunkt oder für n Sekunden ab Einblenden) oder Stoppuhr in einer Bildecke.",
+  "author": {
+    "name": "OpenMediaPlatform"
+  },
+  "main": "clock.js",
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 1,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "title": "Art",
+        "default": "Uhrzeit",
+        "enum": [
+          "Uhrzeit",
+          "Countdown",
+          "Stoppuhr"
+        ],
+        "gddType": "select",
+        "gddOptions": {
+          "labels": [
+            "Uhrzeit",
+            "Countdown",
+            "Stoppuhr"
+          ]
+        }
+      },
+      "seconds": {
+        "type": "integer",
+        "title": "Countdown-Dauer (s) ab Einblenden",
+        "default": 60,
+        "minimum": 1,
+        "maximum": 86400
+      },
+      "until": {
+        "type": "string",
+        "title": "Countdown bis (ISO-Zeit, leer = Dauer)",
+        "default": ""
+      },
+      "label": {
+        "type": "string",
+        "title": "Beschriftung",
+        "default": ""
+      },
+      "corner": {
+        "type": "string",
+        "title": "Ecke",
+        "default": "oben links",
+        "enum": [
+          "oben rechts",
+          "oben links",
+          "unten rechts",
+          "unten links"
+        ],
+        "gddType": "select",
+        "gddOptions": {
+          "labels": [
+            "oben rechts",
+            "oben links",
+            "unten rechts",
+            "unten links"
+          ]
+        }
+      },
+      "bgColor": {
+        "type": "string",
+        "title": "Hintergrund",
+        "default": "#101826",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      },
+      "textColor": {
+        "type": "string",
+        "title": "Textfarbe",
+        "default": "#ffffff",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      },
+      "accentColor": {
+        "type": "string",
+        "title": "Akzent",
+        "default": "#d90012",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      }
+    }
+  },
+  "renderRequirements": [
+    {
+      "resolution": {
+        "width": {
+          "ideal": 1920
+        },
+        "height": {
+          "ideal": 1080
+        }
+      },
+      "frameRate": {
+        "ideal": 25
+      }
+    }
+  ]
+}

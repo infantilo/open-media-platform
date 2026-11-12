@@ -228,6 +228,35 @@ pub fn ensure_builtin_pip_wall(templates_root: &Path) {
     }
 }
 
+/// Mitgelieferte Sendevorlagen (Bauchbinde, Schlagzeile, Ticker, Logo, Uhr, Ergebnis, Titelkarte, Danach, Ortsmarke, Zitat,
+/// Trenner „Wipe“, Abspann). Werden wie die anderen mitgelieferten Vorlagen installiert und bei höherer `version` ersetzt.
+const BUILTIN_SET: &[(&str, &str, &str)] = &[
+    ("lower-third", include_str!("../builtin/lower-third/lower-third.ograf.json"), include_str!("../builtin/lower-third/lower-third.js")),
+    ("headline-bar", include_str!("../builtin/headline-bar/headline-bar.ograf.json"), include_str!("../builtin/headline-bar/headline-bar.js")),
+    ("ticker", include_str!("../builtin/ticker/ticker.ograf.json"), include_str!("../builtin/ticker/ticker.js")),
+    ("channel-bug", include_str!("../builtin/channel-bug/channel-bug.ograf.json"), include_str!("../builtin/channel-bug/channel-bug.js")),
+    ("clock", include_str!("../builtin/clock/clock.ograf.json"), include_str!("../builtin/clock/clock.js")),
+    ("scoreboard", include_str!("../builtin/scoreboard/scoreboard.ograf.json"), include_str!("../builtin/scoreboard/scoreboard.js")),
+    ("title-card", include_str!("../builtin/title-card/title-card.ograf.json"), include_str!("../builtin/title-card/title-card.js")),
+    ("next-up", include_str!("../builtin/next-up/next-up.ograf.json"), include_str!("../builtin/next-up/next-up.js")),
+    ("location-strap", include_str!("../builtin/location-strap/location-strap.ograf.json"), include_str!("../builtin/location-strap/location-strap.js")),
+    ("quote", include_str!("../builtin/quote/quote.ograf.json"), include_str!("../builtin/quote/quote.js")),
+    ("wipe-divider", include_str!("../builtin/wipe-divider/wipe-divider.ograf.json"), include_str!("../builtin/wipe-divider/wipe-divider.js")),
+    ("credits", include_str!("../builtin/credits/credits.ograf.json"), include_str!("../builtin/credits/credits.js")),
+];
+
+pub fn ensure_builtin_broadcast_set(templates_root: &Path) {
+    for (id, manifest, module) in BUILTIN_SET {
+        let dir = templates_root.join(id);
+        if dir.join(format!("{id}.ograf.json")).exists() {
+            upgrade_builtin(&dir, id, manifest, module);
+        } else if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::write(dir.join(format!("{id}.ograf.json")), manifest);
+            let _ = std::fs::write(dir.join(format!("{id}.js")), module);
+        }
+    }
+}
+
 const HARNESS_HTML: &str = include_str!("../ui/harness.html");
 
 /// `ParamStore::extra_route`-Implementierung für die Harness-Seite
@@ -304,6 +333,8 @@ mod zone_tests {
         }
         assert_eq!(zones["pip-wall"], vec!["pip1", "pip2", "pip3"]);
         assert_eq!(zones["paternoster-frame"], vec!["window"]);
+        assert_eq!(zones["credits"], vec!["video"]);
+        assert!(zones["wipe-divider"].is_empty() && zones["lower-third"].is_empty());
     }
 }
 

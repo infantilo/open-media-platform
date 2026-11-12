@@ -715,6 +715,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     subtitles::ensure_builtin_template(&templates_root);
     templates::ensure_builtin_paternoster_frame(&templates_root);
     templates::ensure_builtin_pip_wall(&templates_root);
+    templates::ensure_builtin_broadcast_set(&templates_root);
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
     let templates = templates::scan_templates(&templates_root);
