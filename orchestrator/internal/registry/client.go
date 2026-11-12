@@ -232,8 +232,26 @@ func (c *Client) getJSON(ctx context.Context, resource string, dst any) error {
 	}
 	url := fmt.Sprintf("%s/x-nmos/query/v1.3/%s%spaging.limit=100", c.baseURL, resource, sep)
 	var all []json.RawMessage
+	prev := ""
 	for page := 0; url != "" && page < 1000; page++ {
-		items, next, err := c.getPage(ctx, url)
+		items, next, pv, err := c.getPage(ctx, url)
+		if err != nil {
+			return err
+		}
+		if page == 0 {
+			prev = pv
+		}
+		if len(items) == 0 {
+			break
+		}
+		all = append(all, items...)
+		url = next
+	}
+	// Lastfund 2026-11-12 (tools/loadtest/fakenodes.go): nmos-cpp liefert ohne paging.since die JUENGSTEN 100 Ressourcen; der
+	// next-Link zeigt dahinter ins Leere. Bei mehr als 100 Nodes/Sendern/Flows blieben so alle aelteren unsichtbar. Deshalb
+	// zusaetzlich den rel="prev"-Links der ersten Seite rueckwaerts bis zur leeren Seite folgen.
+	for page := 0; prev != "" && page < 1000; page++ {
+		items, _, pv, err := c.getPage(ctx, prev)
 		if err != nil {
 			return err
 		}
@@ -241,7 +259,13 @@ func (c *Client) getJSON(ctx context.Context, resource string, dst any) error {
 			break
 		}
 		all = append(all, items...)
-		url = next
+		if pv == prev {
+			break // Schutz gegen eine Registry, die immer denselben prev-Link liefert
+		}
+		prev = pv
+	}
+	if prev != "" || len(all) > 100 {
+		all = dedupeByID(all)
 	}
 	// Seiten direkt zu einem JSON-Array zusammensetzen (statt die RawMessages
 	// erst neu zu marshalen).
@@ -258,29 +282,101 @@ func (c *Client) getJSON(ctx context.Context, resource string, dst any) error {
 }
 
 var linkNextRe = regexp.MustCompile(`<([^>]+)>\s*;\s*rel="next"`)
+var linkPrevRe = regexp.MustCompile(`<([^>]+)>\s*;\s*rel="prev"`)
 
-func (c *Client) getPage(ctx context.Context, url string) ([]json.RawMessage, string, error) {
+// dedupeByID entfernt doppelte Ressourcen (eine waehrend des Seitenwechsels aktualisierte Ressource kann auf zwei Seiten
+// auftauchen); die erste Fundstelle gewinnt. Die ID wird per Byte-Scan ohne vollstaendiges Dekodieren gelesen
+// (Lastfund 2026-11-12: Unmarshal je Eintrag kostete bei 500 Nodes 11 % der Orchestrator-CPU).
+func dedupeByID(in []json.RawMessage) []json.RawMessage {
+	seen := make(map[string]struct{}, len(in))
+	out := in[:0:0]
+	for _, it := range in {
+		id, ok := topLevelID(it)
+		if !ok {
+			out = append(out, it)
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, it)
+	}
+	return out
+}
+
+// topLevelID liest den String-Wert des Schluessels "id" auf oberster Ebene eines JSON-Objekts.
+func topLevelID(b []byte) (string, bool) {
+	depth := 0
+	for i := 0; i < len(b); i++ {
+		switch b[i] {
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+		case '"':
+			j := i + 1
+			for j < len(b) && b[j] != '"' {
+				if b[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j >= len(b) {
+				return "", false
+			}
+			if depth == 1 && j+1 < len(b) && b[j+1] == ':' && string(b[i+1:j]) == "id" {
+				k := j + 2
+				for k < len(b) && (b[k] == ' ' || b[k] == '\n' || b[k] == '\t') {
+					k++
+				}
+				if k >= len(b) || b[k] != '"' {
+					return "", false
+				}
+				e := k + 1
+				for e < len(b) && b[e] != '"' {
+					if b[e] == '\\' {
+						e++
+					}
+					e++
+				}
+				if e >= len(b) {
+					return "", false
+				}
+				return string(b[k+1 : e]), true
+			}
+			i = j
+		}
+	}
+	return "", false
+}
+
+func (c *Client) getPage(ctx context.Context, url string) ([]json.RawMessage, string, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
+		return nil, "", "", fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
 	}
 	var items []json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	next := ""
 	if m := linkNextRe.FindStringSubmatch(resp.Header.Get("Link")); m != nil {
 		next = m[1]
 	}
-	return items, next, nil
+	prev := ""
+	if m := linkPrevRe.FindStringSubmatch(resp.Header.Get("Link")); m != nil {
+		prev = m[1]
+	}
+	return items, next, prev, nil
 }
 
 // buildSnapshot ordnet die flachen IS-04-Listen den jeweiligen Nodes zu.

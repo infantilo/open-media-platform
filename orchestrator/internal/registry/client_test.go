@@ -290,3 +290,47 @@ func TestBuildInfoFromTag(t *testing.T) {
 		t.Fatalf("%+v", b)
 	}
 }
+
+// TestGetJSONFollowsPrevLinks: nmos-cpp liefert ohne paging.since die juengsten Eintraege, der next-Link ist leer; aeltere
+// stehen hinter rel="prev" (Lastfund 2026-11-12: bei >100 Nodes fehlten sonst alle aelteren).
+func TestGetJSONFollowsPrevLinks(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("paging.until") {
+		case "":
+			w.Header().Set("Link", `<`+srv.URL+`/x-nmos/query/v1.3/senders?paging.limit=100&paging.since=9>; rel="next", <`+srv.URL+`/x-nmos/query/v1.3/senders?paging.limit=100&paging.until=1>; rel="prev"`)
+			_, _ = w.Write([]byte(`[{"id":"c"},{"id":"d"}]`))
+		case "1":
+			w.Header().Set("Link", `<`+srv.URL+`/x-nmos/query/v1.3/senders?paging.limit=100&paging.until=2>; rel="prev"`)
+			_, _ = w.Write([]byte(`[{"id":"b"},{"id":"c"}]`))
+		default:
+			_, _ = w.Write([]byte(`[]`))
+		}
+	}))
+	defer srv.Close()
+	var got []struct {
+		ID string `json:"id"`
+	}
+	if err := NewClient(srv.URL, nil).getJSON(context.Background(), "senders", &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("erwartet b,c,d (dedupliziert), bekam %v", got)
+	}
+}
+
+func TestTopLevelID(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"a":{"id":"inner"},"id":"outer","x":1}`: "outer",
+		`{"id":"a\"b"}`: `a\"b`,
+		`{"tags":{"id":["z"]},"label":"id","id":"q"}`: "q",
+	} {
+		got, ok := topLevelID([]byte(in))
+		if !ok || got != want {
+			t.Errorf("%s: %q %v, erwartet %q", in, got, ok, want)
+		}
+	}
+	if _, ok := topLevelID([]byte(`{"a":{"id":"inner"}}`)); ok {
+		t.Error("verschachtelte id darf nicht gelten")
+	}
+}

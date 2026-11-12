@@ -70,14 +70,18 @@ func NewPoller(client *Client, store *Store) *Poller {
 func (p *Poller) Run(ctx context.Context) {
 	p.pollOnce(ctx)
 
-	ticker := time.NewTicker(PollInterval)
-	defer ticker.Stop()
-
+	// Adaptiver Takt (Lastfund 2026-11-12): bei grossen Installationen dauert ein Poll fast so lange wie das Intervall
+	// (500 Nodes ~0,9 s, 1000 ~2 s); dann wuerde der Orchestrator dauerhaft nur noch pollen. Pause = max(Intervall, 2 x letzte
+	// Dauer) begrenzt die Poll-Last auf ein Drittel eines Kerns.
 	for {
+		wait := PollInterval
+		if d := 2 * p.store.PollDuration(); d > wait {
+			wait = d
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(wait):
 			p.pollOnce(ctx)
 		}
 	}

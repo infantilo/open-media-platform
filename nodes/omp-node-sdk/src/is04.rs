@@ -848,17 +848,20 @@ impl RegistryClient {
             self.base_url
         );
         let mut all: Vec<T> = Vec::new();
-        for _ in 0..1000 {
+        // nmos-cpp liefert ohne paging.since die JÜNGSTEN 100 Ressourcen; ältere stehen hinter rel="prev" (Lastfund
+        // 2026-11-12: bei >100 Ressourcen blieben sonst alle älteren unsichtbar). Nach der Vorwärtsrunde rückwärts folgen.
+        let mut prev: Option<String> = None;
+        for page in 0..1000 {
             let mut resp = match ureq::get(&url).call() {
                 Ok(r) => r,
                 Err(ureq::Error::StatusCode(code)) => return Err(QueryError::Status(code)),
                 Err(e) => return Err(QueryError::Request(e.to_string())),
             };
-            let next = resp
-                .headers()
-                .get("Link")
-                .and_then(|v| v.to_str().ok())
-                .and_then(next_link);
+            let link = resp.headers().get("Link").and_then(|v| v.to_str().ok()).map(str::to_string);
+            let next = link.as_deref().and_then(next_link);
+            if page == 0 {
+                prev = link.as_deref().and_then(prev_link);
+            }
             let page: Vec<T> = resp
                 .body_mut()
                 .read_json()
@@ -871,6 +874,32 @@ impl RegistryClient {
                 Some(n) => url = n,
                 None => break,
             }
+        }
+        let mut last_prev = String::new();
+        for _ in 0..1000 {
+            let Some(p) = prev.take() else { break };
+            if p == last_prev {
+                break;
+            }
+            last_prev = p.clone();
+            let mut resp = match ureq::get(&p).call() {
+                Ok(r) => r,
+                Err(ureq::Error::StatusCode(code)) => return Err(QueryError::Status(code)),
+                Err(e) => return Err(QueryError::Request(e.to_string())),
+            };
+            prev = resp
+                .headers()
+                .get("Link")
+                .and_then(|v| v.to_str().ok())
+                .and_then(prev_link);
+            let page: Vec<T> = resp
+                .body_mut()
+                .read_json()
+                .map_err(|e| QueryError::Request(e.to_string()))?;
+            if page.is_empty() {
+                break;
+            }
+            all.extend(page);
         }
         Ok(all)
     }
@@ -969,9 +998,18 @@ impl RegistryClient {
 
 /// Zieht die `rel="next"`-URL aus einem HTTP-`Link`-Header.
 fn next_link(header: &str) -> Option<String> {
+    rel_link(header, "next")
+}
+
+/// Zieht die `rel="prev"`-URL (ältere Seite) aus einem HTTP-`Link`-Header.
+fn prev_link(header: &str) -> Option<String> {
+    rel_link(header, "prev")
+}
+
+fn rel_link(header: &str, want: &str) -> Option<String> {
     header.split(',').find_map(|part| {
         let (url, rel) = part.split_once(';')?;
-        if rel.trim().trim_start_matches("rel=").trim_matches('"') != "next" {
+        if rel.trim().trim_start_matches("rel=").trim_matches('"') != want {
             return None;
         }
         Some(
@@ -985,7 +1023,14 @@ fn next_link(header: &str) -> Option<String> {
 
 #[cfg(test)]
 mod next_link_tests {
-    use super::next_link;
+    use super::{next_link, prev_link};
+
+    #[test]
+    fn picks_prev_among_several_rels() {
+        let h = r#"<http://r/q?until=5>; rel="prev", <http://r/q?since=9>; rel="next""#;
+        assert_eq!(prev_link(h).as_deref(), Some("http://r/q?until=5"));
+        assert_eq!(prev_link(r#"<http://r/q>; rel="first""#), None);
+    }
 
     #[test]
     fn picks_next_among_several_rels() {
