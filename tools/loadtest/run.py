@@ -1,6 +1,8 @@
 from common import *
 import threading, statistics, sys, os, http.client, urllib.parse
 DUR=float(sys.argv[1]) if len(sys.argv)>1 else 20
+N=int(sys.argv[2]) if len(sys.argv)>2 else 0  # N>0: N Bediener mit Denkpause + N SSE-Clients (Stufenlast)
+THINK=float(os.environ.get('OMP_LT_THINK','0.3'))
 st=json.load(open(".state.json"))
 op=login(*TEST_USER); adm=login(*ADMIN)
 pid=int(open(os.environ.get("OMP_PID_FILE",os.path.join(os.path.dirname(os.path.abspath(__file__)),"../../.run/orchestrator.pid"))).read())
@@ -31,10 +33,11 @@ def sse():
             l=r.fp.readline()
             if l.startswith(b"data:"): sse_events[0]+=1
         except Exception: break
-jobs=[("PATCH param (operator, auth+authz+audit)",f"/nodes/{st['node']}/params/pattern",op,0,"PATCH",json.dumps({"value":"smpte"}))]*20
+jobs=[] if N else [("PATCH param (operator, auth+authz+audit)",f"/nodes/{st['node']}/params/pattern",op,0,"PATCH",json.dumps({"value":"smpte"}))]*20
+if N: jobs=[("PATCH param (operator, auth+authz+audit)",f"/nodes/{st['node']}/params/pattern",op,THINK,"PATCH",json.dumps({"value":"smpte"}))]*N
 jobs+=[("me/consoles (operator)","/me/consoles",op,0.05)]*5
 jobs+=[("GET /workflows",  "/workflows",adm,0.05)]*3+[("GET /nodes","/nodes",adm,0.05)]*3+[("GET /graph","/graph",adm,0.05)]*3
-ths=[threading.Thread(target=worker,args=j) for j in jobs]+[threading.Thread(target=sse) for _ in range(40)]
+ths=[threading.Thread(target=worker,args=j) for j in jobs]+[threading.Thread(target=sse) for _ in range(N or 40)]
 c0=cpu(); t0=time.time()
 for t in ths: t.start()
 for t in ths: t.join()
