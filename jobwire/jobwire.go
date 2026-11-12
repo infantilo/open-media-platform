@@ -88,6 +88,8 @@ type ToolInfo struct {
 	Encoders []string `json:"encoders,omitempty"`
 	Decoders []string `json:"decoders,omitempty"`
 	Hwaccels []string `json:"hwaccels,omitempty"`
+	// Sandbox: das Programm läuft in einem rootless Container (ohne Netz, ohne Geräte — also ohne Hardwarebeschleunigung).
+	Sandbox bool `json:"sandbox,omitempty"`
 }
 
 // JobInfo beschreibt einen laufenden Job (exec-list).

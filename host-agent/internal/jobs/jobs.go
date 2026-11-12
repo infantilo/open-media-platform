@@ -31,6 +31,9 @@ type ToolConfig struct {
 	MaxJobs int    `json:"maxJobs,omitempty"` // 0 = Gesamtgrenze
 	Nice    int    `json:"nice,omitempty"`    // Standard 10
 	Threads int    `json:"threads,omitempty"` // >0: -threads N bei ffmpeg, falls der Job keinen setzt
+	// Sandbox: "" oder "none" = Programm direkt starten (Standard), "container" = im rootless Container, "namespace" = in einer
+	// bubblewrap-Hülle (schneller Start, ohne Image) — sandbox.go.
+	Sandbox string `json:"sandbox,omitempty"`
 }
 
 // Config ist der Inhalt von tools.json.
@@ -39,8 +42,12 @@ type Config struct {
 	JobRoots []string              `json:"jobRoots"`
 	AllowNet bool                  `json:"allowNet,omitempty"`
 	MaxJobs  int                   `json:"maxJobs,omitempty"` // Gesamtgrenze, Standard 2
-	// CPUQuota: z. B. "200%" — nur wirksam, wenn systemd-run vorhanden ist.
+	// CPUQuota: z. B. "200%" — nur wirksam, wenn systemd-run vorhanden ist (bei der Sandbox: `--cpus`).
 	CPUQuota string `json:"cpuQuota,omitempty"`
+	// Sandbox-Image und -Grenzen (nur für Programme mit "sandbox": "container"); Image z. B. localhost/omp-ffmpeg-sandbox:<Version>.
+	SandboxImage    string `json:"sandboxImage,omitempty"`
+	SandboxMemoryMB int    `json:"sandboxMemoryMB,omitempty"` // je Job, Standard 8192
+	SandboxPids     int    `json:"sandboxPids,omitempty"`     // je Job, Standard 512
 }
 
 // LoadFile liest und prüft tools.json.
@@ -59,6 +66,15 @@ func LoadFile(path string) (Config, error) {
 	for name, t := range c.Tools {
 		if !filepath.IsAbs(t.Path) {
 			return Config{}, fmt.Errorf("tools.json: %s: Pfad muss absolut sein", name)
+		}
+		switch t.Sandbox {
+		case "", "none", "namespace":
+		case "container":
+			if strings.TrimSpace(c.SandboxImage) == "" {
+				return Config{}, fmt.Errorf("tools.json: %s: sandbox \"container\" braucht sandboxImage", name)
+			}
+		default:
+			return Config{}, fmt.Errorf("tools.json: %s: sandbox muss \"none\", \"namespace\" oder \"container\" sein, nicht %q", name, t.Sandbox)
 		}
 	}
 	for i, r := range c.JobRoots {
@@ -99,6 +115,7 @@ type (
 
 type running struct {
 	cmd       *exec.Cmd
+	container string // Name des Job-Containers (leer = Programm läuft direkt)
 	tool      string
 	paused    bool
 	cancelled bool
@@ -274,7 +291,21 @@ func (r *Runner) Exec(req Request) (pid int, err error) {
 	if err := os.MkdirAll(workDir, 0o750); err != nil {
 		return 0, err
 	}
-	argv := r.wrap(tc.Path, args, nice)
+	var argv []string
+	container := ""
+	if tc.sandboxed() {
+		container = containerName(req.JobID)
+		argv = append([]string{PodmanBinary}, r.sandboxArgs(req.JobID, req.Tool, args, nice, workDir, os.Getuid(), os.Getgid())...)
+	} else if tc.namespaced() {
+		bw, err := exec.LookPath(BwrapBinary)
+		if err != nil {
+			_ = os.RemoveAll(workDir)
+			return 0, errors.New("Sandbox „namespace“ braucht bubblewrap (bwrap), das auf diesem Host fehlt")
+		}
+		argv = r.wrap(bw, r.bwrapArgs(req.Tool, tc, args, workDir), nice)
+	} else {
+		argv = r.wrap(tc.Path, args, nice)
+	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = workDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -292,7 +323,7 @@ func (r *Runner) Exec(req Request) (pid int, err error) {
 	}
 	// PID-Datei: nach einem harten Absturz des Agents findet CleanupStale die verwaisten Prozesse wieder
 	_ = os.WriteFile(filepath.Join(workDir, "pid"), []byte(fmt.Sprint(cmd.Process.Pid)), 0o640)
-	run := &running{cmd: cmd, tool: req.Tool}
+	run := &running{cmd: cmd, tool: req.Tool, container: container}
 	r.mu.Lock()
 	r.jobs[req.JobID] = run
 	r.mu.Unlock()
@@ -433,9 +464,17 @@ func splitCRLF(data []byte, atEOF bool) (int, []byte, error) {
 
 func (r *Runner) kill(run *running) {
 	pgid := -run.cmd.Process.Pid
+	if run.container != "" {
+		_ = exec.Command(PodmanBinary, "unpause", run.container).Run() // ein pausierter Container stellt kein Signal zu
+	}
 	_ = syscall.Kill(pgid, syscall.SIGCONT) // ein pausierter Job muss das Signal zustellen können
-	_ = syscall.Kill(pgid, syscall.SIGTERM)
-	time.AfterFunc(3*time.Second, func() { _ = syscall.Kill(pgid, syscall.SIGKILL) })
+	_ = syscall.Kill(pgid, syscall.SIGTERM) // `podman run` reicht SIGTERM an das Programm im Container weiter
+	time.AfterFunc(3*time.Second, func() {
+		_ = syscall.Kill(pgid, syscall.SIGKILL)
+		if run.container != "" {
+			removeContainer(run.container) // das Programm im Container hängt nicht am Prozessbaum des Agents
+		}
+	})
 }
 
 // Cancel bricht einen Job ab (SIGTERM, nach 3 s SIGKILL).
@@ -464,6 +503,16 @@ func (r *Runner) Pause(jobID string, on bool) error {
 	if !ok {
 		return errors.New("Job unbekannt")
 	}
+	if run.container != "" { // SIGSTOP träfe nur den Podman-Client, nicht das Programm im Container
+		verb := "unpause"
+		if on {
+			verb = "pause"
+		}
+		if out, err := exec.Command(PodmanBinary, verb, run.container).CombinedOutput(); err != nil {
+			return fmt.Errorf("podman %s: %v: %s", verb, err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
 	sig := syscall.SIGCONT
 	if on {
 		sig = syscall.SIGSTOP
@@ -481,6 +530,9 @@ func (r *Runner) Renice(jobID string, nice int) error {
 	r.mu.Unlock()
 	if !ok {
 		return errors.New("Job unbekannt")
+	}
+	if run.container != "" {
+		return errors.New("Priorität lässt sich bei einem Sandbox-Job nicht nachträglich ändern (nice wird beim Start gesetzt)")
 	}
 	return syscall.Setpriority(syscall.PRIO_PGRP, run.cmd.Process.Pid, nice)
 }
@@ -502,8 +554,10 @@ func (r *Runner) Info() *Info {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	tools := make(map[string]ToolInfo, len(r.cfg.Tools))
-	for n := range r.cfg.Tools {
-		tools[n] = r.info[n]
+	for n, tc := range r.cfg.Tools {
+		ti := r.info[n]
+		ti.Sandbox = tc.sandboxed() || tc.namespaced()
+		tools[n] = ti
 	}
 	return &Info{Tools: tools, JobRoots: r.cfg.JobRoots, MaxJobs: r.cfg.MaxJobs, JobsRunning: len(r.jobs), AllowNet: r.cfg.AllowNet}
 }
@@ -515,15 +569,17 @@ func (r *Runner) Probe() {
 			continue
 		}
 		ti := ToolInfo{}
-		if out, err := exec.Command(tc.Path, "-hide_banner", "-version").Output(); err == nil {
+		if out, err := r.toolCmd(name, tc, "-hide_banner", "-version").Output(); err == nil {
 			if i := bytes.IndexByte(out, '\n'); i > 0 {
 				ti.Version = strings.TrimSpace(string(out[:i]))
 			}
 		}
 		if name == "ffmpeg" {
-			ti.Encoders = listNames(tc.Path, "-encoders")
-			ti.Decoders = listNames(tc.Path, "-decoders")
-			ti.Hwaccels = hwaccels(tc.Path)
+			ti.Encoders = listNames(r.toolCmd(name, tc, "-hide_banner", "-encoders"))
+			ti.Decoders = listNames(r.toolCmd(name, tc, "-hide_banner", "-decoders"))
+			if !tc.sandboxed() && !tc.namespaced() { // die Sandbox reicht keine Geräte durch: Hardwarebeschleunigung steht dort nicht zur Verfügung
+				ti.Hwaccels = hwaccels(r.toolCmd(name, tc, "-hide_banner", "-hwaccels"))
+			}
 		}
 		r.mu.Lock()
 		r.info[name] = ti
@@ -531,8 +587,8 @@ func (r *Runner) Probe() {
 	}
 }
 
-func listNames(bin, flag string) []string {
-	out, err := exec.Command(bin, "-hide_banner", flag).Output()
+func listNames(cmd *exec.Cmd) []string {
+	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
@@ -554,8 +610,8 @@ func listNames(bin, flag string) []string {
 	return names
 }
 
-func hwaccels(bin string) []string {
-	out, err := exec.Command(bin, "-hide_banner", "-hwaccels").Output()
+func hwaccels(cmd *exec.Cmd) []string {
+	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
@@ -599,11 +655,14 @@ func (r *Runner) Shutdown(wait time.Duration) {
 // lässt Kindprozesse weiterlaufen), und räumt deren Arbeitsverzeichnisse auf. Es werden nur Prozesse beendet, deren Kommandozeile
 // ein freigegebenes Programm enthält — eine wiederverwendete PID trifft so kein fremdes Programm. Liefert die Anzahl beendeter Jobs.
 func (r *Runner) CleanupStale() int {
+	killed := 0
+	if r.cfg.anySandbox() {
+		killed += cleanupContainers()
+	}
 	entries, err := os.ReadDir(r.dir)
 	if err != nil {
-		return 0
+		return killed
 	}
-	killed := 0
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -630,6 +689,9 @@ func (r *Runner) isJobProcess(pid int) bool {
 		return false
 	}
 	cmd := string(b)
+	if strings.Contains(cmd, "\x00"+sandboxLabel+"\x00") { // Podman-Client eines Sandbox-Jobs
+		return true
+	}
 	for _, t := range r.cfg.Tools {
 		if strings.Contains(cmd, t.Path) {
 			return true

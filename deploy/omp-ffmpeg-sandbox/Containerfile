@@ -1,0 +1,12 @@
+# ffmpeg/ffprobe-Sandbox für den Host-Agent (HAERTUNG-PLAN.md 98.3): nur das Programm und seine Bibliotheken, sonst nichts —
+# kein Node, kein MXL, keine Plattform-Dateien. Der Agent startet es je Job rootless mit `--network=none`, `--read-only`,
+# `--cap-drop=all`, `no-new-privileges` und den Job-Verzeichnissen als Bind-Mount (host-agent/internal/jobs/sandbox.go).
+# Gleiche Debian-Bookworm-Basis wie der Host (ffmpeg 5.1), damit sich Ergebnisse nicht je nach Ausführungsort unterscheiden.
+FROM docker.io/library/debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="omp-ffmpeg-sandbox" org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.description="OpenMediaPlatform: ffmpeg/ffprobe fuer Jobs des Host-Agents (Sandbox)"
+# Kein ENTRYPOINT: der Agent gibt das Programm (nice … ffmpeg …) vor.

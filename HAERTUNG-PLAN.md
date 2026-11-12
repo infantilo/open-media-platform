@@ -332,7 +332,10 @@ Basis-Images der `-pkg`-Containerfiles.
 *Verifikation:* CI-Lauf grün; SBOM-Datei im Update-Bündel; Bibliotheksliste für drei Node-Typen plausibel.
 *Latenz:* nicht berührt.
 
-**98.3 Pilot: ffmpeg-Job in der Sandbox (M4)** — siehe §5.
+**98.3 Pilot: ffmpeg-Job in der Sandbox (M4)** — siehe §5. **Ergebnis 2026-11-12:** Container-Variante gebaut und geprüft, aber mit rund
+3,5–4 s Aufschlag je Aufruf unbrauchbar (Abbruchkriterium §5 erfüllt); die Ausweichvariante „Namensraum-Hülle“ (bubblewrap,
+`"sandbox": "namespace"`) kostet im Rahmen der Messstreuung nichts und ist die empfohlene Stufe. Einzelheiten: `docs/decisions.md`
+„Härtung Schritt 98.3“.
 
 **98.4 Sandbox auf die übrigen ffmpeg/ffprobe-Aufrufe ausdehnen (M4, M5).** File-QC, Vergleich, Ingest-Prüfung,
 lokale Jobs; danach die Hilfsaufrufe in `omp-scte35`, `omp-radio-automation`, `omp-subtitle-asr`. Dazu Format-/Codec-Liste.
