@@ -2613,6 +2613,10 @@ Gate-Schwelle gestrichelt). Die Kurve folgt den Werten live.
 ![EQ-Seite am + XL: Kurve über 4×3 Tasten und zusätzlich auf dem Touch-Streifen mit den Dial-Werten](screenshots/streamdeck-plusxl-audio-eq.png)
 ![EQ-Seite am „+“: Kurve hinter den vier Dial-Anzeigen](screenshots/streamdeck-plus-audio-eq.png)
 
+### Studio-Mischer (niedrige Latenz)
+
+Mix-Seite wie beim Audio-Mixer, aber mit den Zeilen **MUTE**, **SEND** (schaltet den Streifen auf den gewählten Bus: an = 0 dB, aus = −∞; die Taste nennt den Bus) und **SELECT** (Pegel; **ein Druck** öffnet die Detailseiten, „◀ Mix“ führt zurück). Die Detailseiten **EQ** (vier Band-Pegel, Bypass, Hochpass), **Dynamik** (Kompressor-Schwelle/-Verhältnis/Makeup, Gate-Schwelle, Schalter) und **Bus** zeigen wie beim Audio-Mixer die Kurven rechts neben den Tasten bzw. auf dem Touch-Streifen. Die **Bus-Seite**: erste Taste wählt den Bus (weiter), danach *Send* des Streifens zu diesem Bus, *Bus Pegel*, *Limiter*-Obergrenze, Schalter *Bus Mute* und *Limiter an* sowie **Mix-minus** (der Bus bekommt alle Streifen außer dem gewählten). Dials: Pegel bzw. Detail-Parameter, Drücken = Mute bzw. Schalter. Schreibweg ist die Methode `setParam` des Nodes.
+
 ### Grafik (OGraf)
 
 Die Vorlagen („Presets“) stehen als Tasten oben — Drücken wählt die Vorlage (grün); **on air stehende Grafiken sind rot** und tragen „ON AIR“
@@ -2722,13 +2726,17 @@ Alle ffmpeg-/ffprobe-Läufe der Plattform — der Workflow-Schritt **Script**, d
 
 ## 10i. Studio-Mischer mit niedriger Latenz (Moderation, Konferenz, In-Ear)
 
-Der **Studio-Mischer** (`omp-lowlat-mixer`) ist für Wege gedacht, bei denen jede Millisekunde zählt: die eigene Stimme im Kopfhörer des Moderators, Rückwege für Gäste (Mix-minus), In-Ear-Mischungen. Er ist **kein Ersatz** für den Audiomischer: er kann Pegel, Mute und Sends, aber keinen EQ und keine Dynamik — jede zusätzliche Stufe kostet Zeit.
+Der **Studio-Mischer** (`omp-lowlat-mixer`) ist für Wege gedacht, bei denen jede Millisekunde zählt: die eigene Stimme im Kopfhörer des Moderators, Rückwege für Gäste (Mix-minus), In-Ear-Mischungen. Er ist **kein Ersatz** für den Audiomischer (keine Aux-/Gruppen-Logik, kein AutoMix, keine Szenen), bringt aber die Klangbearbeitung mit, die Moderations- und Konferenzwege brauchen — und zwar **ohne zusätzliche Latenz**: Alle Stufen arbeiten ohne Vorausschau.
 
 **Aufbau:** Eingangsstreifen (Standard 8) → Sends → Busse (Standard 4, Bus 1 = Hauptmix). Jeder Bus wird auch als MXL-Ton-Flow bereitgestellt; für die übrige Plattform gelten dort die normalen Latenzen.
 
 **Quellen eines Streifens** (Feld *Quelle*): `mxl` (über den NMOS-Empfänger des Streifens oder `strip.N.setFlow`), `alsa:3` (Kartenkanal 3) bzw. `alsa:3-4` (Paar), `aes:1` / `aes:1-2` (AES67-Strom), `off`.
 
 **Ausgänge:** MXL-Flow je Bus; ALSA: im Busfeld den ersten Kanal des Paares eintragen; AES67: Bus *N* liegt auf den Kanälen 2*N*−1/2*N*, die SDP-Beschreibung steht im Parameter `aesTxSdp`.
+
+**EQ und Dynamik (je Streifen):** Taste *EQ / Dynamik* am Streifen öffnet unter den Streifen den Detailbereich: **Phase drehen**, **Hochpass** (20–400 Hz) und **4-Band-EQ** (Tief-Regal, zwei Glocken, Hoch-Regal; Frequenz, Güte, Pegel; Bypass) mit Frequenzgang-Kurve, **Kompressor** (Schwelle, Verhältnis, Attack, Release, Knie, Makeup, RMS/Spitze) mit Kennlinie und **Gate/Expander** (Schwelle, Bereich, Verhältnis, Attack, Halten, Release, Hysterese). Die Streifenanzeige nennt die aktuelle Absenkung von Gate/Kompressor.
+
+**Limiter (je Bus):** Taste *Limiter* und Obergrenze im Busfeld (Standard −3 dBFS, Release 100 ms). Er greift im selben Rahmen mit sofortigem Anstieg der Absenkung und hält den Ausgang sicher unter der Obergrenze — gedacht als **Gehörschutz** für In-Ear- und Kopfhörerwege; ein sehr schneller Impuls klingt dafür etwas härter als bei einem Limiter mit Vorausschau (der würde Millisekunden kosten).
 
 **Mix-minus für einen Gast:** im Busfeld *Mix-minus für …* den Streifen des Gastes wählen — der Bus enthält dann alle Streifen außer dem Gast.
 

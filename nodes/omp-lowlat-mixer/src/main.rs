@@ -5,7 +5,9 @@
 
 mod aes_io;
 mod alsa;
+mod dsp;
 mod engine;
+mod procparams;
 mod mxl_io;
 mod ring;
 mod rtp;
@@ -16,6 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use dsp::{LimParams, ProcParams};
 use engine::{Engine, MAX_BUSES, MAX_STRIPS, Shared, Source, StripIn, db_to_lin, lin_to_db};
 use omp_mediaio::mxl::MxlContext;
 use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverResource, bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery};
@@ -120,6 +123,7 @@ struct StripSet {
     mute: bool,
     source: Source,
     sends_db: Vec<f64>,
+    proc: ProcParams,
 }
 
 #[derive(Clone)]
@@ -129,6 +133,7 @@ struct BusSet {
     mute: bool,
     /// Erster ALSA-Ausgangskanal (1-basiert) des Stereopaares, 0 = kein ALSA-Ausgang
     alsa_out: u32,
+    lim: LimParams,
 }
 
 struct Settings {
@@ -426,6 +431,13 @@ fn rw(name: String, kind: ParamType, unit: Option<&str>, range: Option<Range>) -
     ParamSpec { name, kind, unit: unit.map(str::to_string), range, readonly: false }
 }
 
+fn proc_spec(name: String, d: &procparams::Def) -> ParamSpec {
+    match d.kind {
+        procparams::Kind::Bool => rw(name, ParamType::Boolean, None, None),
+        procparams::Kind::Num { min, max } => rw(name, ParamType::Number, d.unit, Some(Range::Number { min, max })),
+    }
+}
+
 fn db_range() -> Option<Range> {
     Some(Range::Number { min: -90.0, max: 12.0 })
 }
@@ -452,6 +464,7 @@ impl Store {
         for b in 0..self.rt.cfg.buses {
             self.rt.shared.set_send(s, b, db_to_lin(x.sends_db[b]));
         }
+        self.rt.shared.set_proc(s, x.proc);
     }
 
     fn apply_bus(&self, b: usize) {
@@ -460,11 +473,12 @@ impl Store {
         self.rt.shared.bus_gain[b].store(db_to_lin(x.gain_db).to_bits(), Ordering::Relaxed);
         self.rt.shared.bus_mute[b].store(x.mute, Ordering::Relaxed);
         self.rt.bus_alsa_out[b].store(x.alsa_out, Ordering::Relaxed);
+        self.rt.shared.set_lim(b, x.lim);
     }
 
     /// Alles, was die Bedienoberfläche je Aktualisierung braucht, in einer Antwort (statt > 100 Einzelabfragen): Streifen, Busse,
     /// Zähler. Geht über `GET /api/v1/nodes/{id}/measurements` (generische Orchestrator-Route).
-    fn snapshot(&self) -> Value {
+    fn snapshot(&self, detail: Option<usize>) -> Value {
         let cfg = &self.rt.cfg;
         let g = |n: &str| self.get(n).unwrap_or(Value::Null);
         let strips: Vec<Value> = (1..=cfg.strips)
@@ -472,26 +486,32 @@ impl Store {
                 json!({
                     "n": s, "label": g(&format!("strip.{s}.label")), "source": g(&format!("strip.{s}.source")), "gain": g(&format!("strip.{s}.gain")),
                     "mute": g(&format!("strip.{s}.mute")), "level": g(&format!("strip.{s}.levelDb")), "state": g(&format!("strip.{s}.state")),
-                    "bufferMs": g(&format!("strip.{s}.bufferMs")),
+                    "bufferMs": g(&format!("strip.{s}.bufferMs")), "gateGr": g(&format!("strip.{s}.gateGrDb")), "compGr": g(&format!("strip.{s}.compGrDb")),
                     "sends": (1..=cfg.buses).map(|b| g(&format!("strip.{s}.send.{b}"))).collect::<Vec<_>>(),
                 })
             })
             .collect();
         let buses: Vec<Value> = (1..=cfg.buses)
-            .map(|b| json!({ "n": b, "label": g(&format!("bus.{b}.label")), "gain": g(&format!("bus.{b}.gain")), "mute": g(&format!("bus.{b}.mute")), "alsaOut": g(&format!("bus.{b}.alsaOut")), "level": g(&format!("bus.{b}.levelDb")) }))
+            .map(|b| json!({ "n": b, "label": g(&format!("bus.{b}.label")), "gain": g(&format!("bus.{b}.gain")), "mute": g(&format!("bus.{b}.mute")), "alsaOut": g(&format!("bus.{b}.alsaOut")), "level": g(&format!("bus.{b}.levelDb")),
+                "limiter": g(&format!("bus.{b}.limiter.enabled")), "ceiling": g(&format!("bus.{b}.limiter.ceiling")), "limiterGr": g(&format!("bus.{b}.limiterGrDb")) }))
             .collect();
         let mut stats = serde_json::Map::new();
         for k in ["blockMs", "clockMaster", "realtime", "processUsAvg", "processUsMax", "deadlineMisses", "alsaIn", "alsaOut", "alsaXruns", "alsaOutDelayMs", "aesRx", "aesRxPackets", "aesRxLost", "aesTx", "aesTxPackets", "ringUnderruns", "ringSlips", "ringGrown", "ringShrunk", "mxlOutResyncs", "mxlInResyncs"] {
             stats.insert(k.to_string(), g(k));
         }
-        json!({ "strips": strips, "buses": buses, "stats": stats, "alsaInChannels": if self.rt.cfg.alsa_in.is_empty() { 0 } else { self.rt.cfg.alsa_in_ch }, "aesRxChannels": if self.rt.aes_ring.is_some() { self.rt.cfg.aes_rx_ch } else { 0 } })
+        // Einzelheiten (EQ/Dynamik) nur für den gewählten Streifen — alle Streifen in jeder Abfrage wären Verschwendung
+        let detail_json = detail.filter(|d| (1..=cfg.strips).contains(d)).map(|d| {
+            let st = self.rt.settings.lock().expect("lock poisoned");
+            json!({ "strip": d, "proc": procparams::proc_map(&st.strips[d - 1].proc) })
+        });
+        json!({ "detail": detail_json, "strips": strips, "buses": buses, "stats": stats, "alsaInChannels": if self.rt.cfg.alsa_in.is_empty() { 0 } else { self.rt.cfg.alsa_in_ch }, "aesRxChannels": if self.rt.aes_ring.is_some() { self.rt.cfg.aes_rx_ch } else { 0 } })
     }
 
     fn state_json(&self) -> Value {
         let st = self.rt.settings.lock().expect("lock poisoned");
         json!({
-            "strips": st.strips.iter().map(|s| json!({"label": s.label, "gainDb": s.gain_db, "mute": s.mute, "source": s.source.to_text(), "sendsDb": s.sends_db})).collect::<Vec<_>>(),
-            "buses": st.buses.iter().map(|b| json!({"label": b.label, "gainDb": b.gain_db, "mute": b.mute, "alsaOut": b.alsa_out})).collect::<Vec<_>>(),
+            "strips": st.strips.iter().map(|s| json!({"label": s.label, "gainDb": s.gain_db, "mute": s.mute, "source": s.source.to_text(), "sendsDb": s.sends_db, "proc": procparams::proc_map(&s.proc)})).collect::<Vec<_>>(),
+            "buses": st.buses.iter().map(|b| json!({"label": b.label, "gainDb": b.gain_db, "mute": b.mute, "alsaOut": b.alsa_out, "limiter": procparams::lim_map(&b.lim)})).collect::<Vec<_>>(),
         })
     }
 
@@ -513,6 +533,11 @@ impl Store {
                     }
                     if let Some(src) = s.get("source").and_then(Value::as_str).and_then(Source::parse) {
                         x.source = src;
+                    }
+                    if let Some(pm) = s.get("proc").and_then(Value::as_object) {
+                        for (k, v) in pm {
+                            let _ = procparams::proc_set(&mut x.proc, k, v); // unbekannte/ungültige Einträge (alte Sicherung) überspringen
+                        }
                     }
                     if let Some(sd) = s.get("sendsDb").and_then(Value::as_array) {
                         for (b, g) in sd.iter().enumerate().take(nb) {
@@ -537,6 +562,11 @@ impl Store {
                     }
                     if let Some(o) = s.get("alsaOut").and_then(Value::as_u64).filter(|o| *o <= 64) {
                         x.alsa_out = o as u32;
+                    }
+                    if let Some(lm) = s.get("limiter").and_then(Value::as_object) {
+                        for (k, v) in lm {
+                            let _ = procparams::lim_set(&mut x.lim, k, v);
+                        }
                     }
                 }
             }
@@ -593,6 +623,11 @@ impl ParamStore for Store {
             p.push(ro(format!("strip.{s}.state"), ParamType::String, None));
             p.push(ro(format!("strip.{s}.flow"), ParamType::String, None));
             p.push(ro(format!("strip.{s}.bufferMs"), ParamType::Number, Some("ms")));
+            for d in procparams::proc_defs() {
+                p.push(proc_spec(format!("strip.{s}.{}", d.key), &d));
+            }
+            p.push(ro(format!("strip.{s}.gateGrDb"), ParamType::Number, Some("dB")));
+            p.push(ro(format!("strip.{s}.compGrDb"), ParamType::Number, Some("dB")));
         }
         for b in 1..=cfg.buses {
             p.push(rw(format!("bus.{b}.label"), ParamType::String, None, None));
@@ -601,7 +636,13 @@ impl ParamStore for Store {
             p.push(rw(format!("bus.{b}.alsaOut"), ParamType::Number, None, Some(Range::Number { min: 0.0, max: 64.0 })));
             p.push(ro(format!("bus.{b}.levelDb"), ParamType::Number, Some("dBFS")));
             p.push(ro(format!("bus.{b}.flowId"), ParamType::String, None));
+            for d in procparams::lim_defs() {
+                p.push(proc_spec(format!("bus.{b}.{}", d.key), &d));
+            }
+            p.push(ro(format!("bus.{b}.limiterGrDb"), ParamType::Number, Some("dB")));
         }
+        p.push(ro("strips".to_string(), ParamType::String, None));
+        p.push(ro("buses".to_string(), ParamType::String, None));
         for (n, k, u) in [
             ("blockFrames", ParamType::Number, None),
             ("blockMs", ParamType::Number, Some("ms")),
@@ -631,6 +672,8 @@ impl ParamStore for Store {
         }
         let mut methods = vec![
             MethodSpec { name: "resetStats".to_string(), args: vec![] },
+            // Ein Schreibweg für Bedienpulte (Stream Deck u. a.), die nur Methoden aufrufen: Zahl oder Schalter (0/1) je Parametername
+            MethodSpec { name: "setParam".to_string(), args: vec![MethodArg { name: "name".to_string(), kind: ParamType::String }, MethodArg { name: "value".to_string(), kind: ParamType::Number }] },
         ];
         for s in 1..=cfg.strips {
             methods.push(MethodSpec { name: format!("strip.{s}.setFlow"), args: vec![MethodArg { name: "flowId".to_string(), kind: ParamType::String }] });
@@ -687,6 +730,14 @@ impl ParamStore for Store {
                     .sum();
                 return Some(json!(v));
             }
+            "strips" => {
+                let st = rt.settings.lock().expect("lock poisoned");
+                return Some(json!(serde_json::to_string(&st.strips.iter().enumerate().map(|(i, s)| json!({"id": (i + 1).to_string(), "label": s.label})).collect::<Vec<_>>()).unwrap_or_default()));
+            }
+            "buses" => {
+                let st = rt.settings.lock().expect("lock poisoned");
+                return Some(json!(serde_json::to_string(&st.buses.iter().enumerate().map(|(i, b)| json!({"id": (i + 1).to_string(), "label": b.label})).collect::<Vec<_>>()).unwrap_or_default()));
+            }
             "mxlOutResyncs" => return Some(json!(rt.stats.mxl_out_resyncs.load(Ordering::Relaxed))),
             "mxlInResyncs" => return Some(json!(rt.mxl_in.slots.iter().map(|s| s.resyncs.load(Ordering::Relaxed)).sum::<u64>())),
             _ => {}
@@ -712,7 +763,9 @@ impl ParamStore for Store {
                         drop(st);
                         return Some(json!(self.strip_state(idx)));
                     }
-                    _ => return None,
+                    "gateGrDb" => json!(f32::from_bits(rt.shared.gate_gr[idx].load(Ordering::Relaxed))),
+                    "compGrDb" => json!(f32::from_bits(rt.shared.comp_gr[idx].load(Ordering::Relaxed))),
+                    other => return procparams::proc_get(&s.proc, other),
                 })
             }
             "bus" if idx < cfg.buses => {
@@ -724,7 +777,8 @@ impl ParamStore for Store {
                     "alsaOut" => json!(b.alsa_out),
                     "levelDb" => json!(lin_to_db(Shared::peak_of(&rt.shared.bus_peak[idx]))),
                     "flowId" => json!(rt.out_flows[idx]),
-                    _ => return None,
+                    "limiterGrDb" => json!(f32::from_bits(rt.shared.bus_gr[idx].load(Ordering::Relaxed))),
+                    other => return procparams::lim_get(&b.lim, other),
                 })
             }
             _ => None,
@@ -755,8 +809,8 @@ impl ParamStore for Store {
                             "source" => s.source = value.as_str().and_then(Source::parse).ok_or(SetError::Unknown)?,
                             "gain" => s.gain_db = num().filter(|v| (-90.0..=12.0).contains(v)).ok_or(SetError::Unknown)?,
                             "mute" => s.mute = value.as_bool().ok_or(SetError::Unknown)?,
-                            "levelDb" | "state" | "flow" | "bufferMs" => return Err(SetError::ReadOnly),
-                            _ => return Err(SetError::Unknown),
+                            "levelDb" | "state" | "flow" | "bufferMs" | "gateGrDb" | "compGrDb" => return Err(SetError::ReadOnly),
+                            other => procparams::proc_set(&mut s.proc, other, &value)?,
                         }
                     }
                 }
@@ -772,8 +826,8 @@ impl ParamStore for Store {
                         "gain" => b.gain_db = num().filter(|v| (-90.0..=12.0).contains(v)).ok_or(SetError::Unknown)?,
                         "mute" => b.mute = value.as_bool().ok_or(SetError::Unknown)?,
                         "alsaOut" => b.alsa_out = num().filter(|v| (0.0..=64.0).contains(v)).ok_or(SetError::Unknown)? as u32,
-                        "levelDb" | "flowId" => return Err(SetError::ReadOnly),
-                        _ => return Err(SetError::Unknown),
+                        "levelDb" | "flowId" | "limiterGrDb" => return Err(SetError::ReadOnly),
+                        other => procparams::lim_set(&mut b.lim, other, &value)?,
                     }
                 }
                 self.apply_bus(idx);
@@ -791,6 +845,21 @@ impl ParamStore for Store {
                 a.store(0, Ordering::Relaxed);
             }
             return Ok(());
+        }
+        if name == "setParam" {
+            let pname = args.get("name").and_then(Value::as_str).ok_or_else(|| InvokeError::Message("name fehlt".to_string()))?;
+            let raw = args.get("value").and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| InvokeError::Message("value muss eine Zahl sein".to_string()))?;
+            // Schalter (Boolean) nehmen 0/1, Zahlen die Zahl; Texte (label, source) gehen nur über PATCH
+            let value = match self.get(pname) {
+                Some(Value::Bool(_)) => Value::Bool(raw != 0.0),
+                Some(Value::Number(_)) => json!(raw),
+                Some(_) => return Err(InvokeError::Message(format!("{pname} ist kein Zahlen- oder Schalter-Parameter"))),
+                None => return Err(InvokeError::Unknown),
+            };
+            return self.set(pname, value).map_err(|e| match e {
+                SetError::ReadOnly => InvokeError::Message(format!("{pname} ist nur lesbar")),
+                _ => InvokeError::Message(format!("Wert für {pname} ungültig (Bereich prüfen)")),
+            });
         }
         let (kind, idx, rest) = split_name(name).ok_or(InvokeError::Unknown)?;
         match (kind, rest) {
@@ -837,7 +906,7 @@ impl ParamStore for Store {
             return Some(r);
         }
         if method == "GET" && path.split('?').next() == Some("/measurements") {
-            return Some(RawResponse { status: 200, content_type: "application/json", body: serde_json::to_vec(&self.snapshot()).unwrap_or_default() });
+            return Some(RawResponse { status: 200, content_type: "application/json", body: serde_json::to_vec(&self.snapshot(path.split_once('?').and_then(|(_, q)| q.split('&').find_map(|kv| kv.strip_prefix("detail="))).and_then(|v| v.parse().ok()))).unwrap_or_default() });
         }
         // Workflow-Sicherung: Pegel, Sends, Quellen, Bezeichnungen überleben einen Neustart
         if method == "GET" && path == "/state" {
@@ -1029,8 +1098,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // MXL-Ausgänge je Bus
     let out_flows: Vec<String> = (0..cfg.buses).map(|_| omp_node_sdk::idgen::new_v4()).collect();
     let mut settings = Settings {
-        strips: (0..cfg.strips).map(|i| StripSet { label: format!("Streifen {}", i + 1), gain_db: 0.0, mute: false, source: Source::Mxl, sends_db: (0..cfg.buses).map(|b| if b == 0 { 0.0 } else { -90.0 }).collect() }).collect(),
-        buses: (0..cfg.buses).map(|b| BusSet { label: if b == 0 { "Hauptmix".to_string() } else { format!("Bus {}", b + 1) }, gain_db: 0.0, mute: false, alsa_out: if b == 0 && !cfg.alsa_out.is_empty() { 1 } else { 0 } }).collect(),
+        strips: (0..cfg.strips).map(|i| StripSet { label: format!("Streifen {}", i + 1), gain_db: 0.0, mute: false, source: Source::Mxl, sends_db: (0..cfg.buses).map(|b| if b == 0 { 0.0 } else { -90.0 }).collect(), proc: ProcParams::default() }).collect(),
+        buses: (0..cfg.buses).map(|b| BusSet { label: if b == 0 { "Hauptmix".to_string() } else { format!("Bus {}", b + 1) }, gain_db: 0.0, mute: false, alsa_out: if b == 0 && !cfg.alsa_out.is_empty() { 1 } else { 0 }, lim: LimParams::default() }).collect(),
     };
     settings.buses[0].alsa_out = settings.buses[0].alsa_out.min(64);
     let mut mxl_out = Vec::new();

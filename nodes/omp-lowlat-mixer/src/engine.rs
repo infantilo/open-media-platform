@@ -1,12 +1,15 @@
 //! Misch-Kern des Studio-Mischers (rein, ohne E/A): Eingangsstreifen (Stereo, aus Mono wird L=R) → Sends → Busse (Stereo).
 //!
 //! Gewollt klein: Pegel, Mute, Send-Matrix (daraus ergeben sich Mix-minus und In-Ear-Busse), Bus-Pegel/-Mute, Spitzenpegel.
-//! Kein EQ, keine Dynamik — jede Stufe kostet Latenz oder Rechenzeit, und dieser Pfad lebt von beidem so wenig wie möglich.
+//! Klangbearbeitung (`dsp.rs`: EQ, Gate, Kompressor je Streifen, Limiter je Bus) arbeitet ohne Vorausschau — Rechenzeit, keine Latenz.
 //! Alle Änderungen werden über **einen Block** linear ausgeblendet (kein Knacken, kein Zipper-Rauschen).
 //!
 //! Die Zielwerte liegen als Atomics in [`Shared`]; der Echtzeit-Thread liest sie am Blockanfang ohne Sperre.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::Mutex;
+
+use crate::dsp::{LimParams, Limiter, ProcParams, ProcStage};
 
 pub const MAX_STRIPS: usize = 32;
 pub const MAX_BUSES: usize = 16;
@@ -37,6 +40,15 @@ pub struct Shared {
     pub bus_mute: Vec<AtomicBool>,
     pub strip_peak: Vec<AtomicU32>,
     pub bus_peak: Vec<AtomicU32>,
+    /// Klangbearbeitung je Streifen (Parameter hinter kurzem Lock + Versionszähler; der Echtzeit-Thread nimmt nur `try_lock`)
+    proc: Vec<Mutex<ProcParams>>,
+    proc_ver: Vec<AtomicU64>,
+    lim: Vec<Mutex<LimParams>>,
+    lim_ver: Vec<AtomicU64>,
+    /// Anzeige: stärkste Absenkung des letzten Blocks (dB, ≤ 0)
+    pub gate_gr: Vec<AtomicU32>,
+    pub comp_gr: Vec<AtomicU32>,
+    pub bus_gr: Vec<AtomicU32>,
 }
 
 impl Shared {
@@ -53,11 +65,28 @@ impl Shared {
             bus_mute: (0..buses).map(|_| AtomicBool::new(false)).collect(),
             strip_peak: (0..strips).map(|_| af(0.0)).collect(),
             bus_peak: (0..buses).map(|_| af(0.0)).collect(),
+            proc: (0..strips).map(|_| Mutex::new(ProcParams::default())).collect(),
+            proc_ver: (0..strips).map(|_| AtomicU64::new(1)).collect(),
+            lim: (0..buses).map(|_| Mutex::new(LimParams::default())).collect(),
+            lim_ver: (0..buses).map(|_| AtomicU64::new(1)).collect(),
+            gate_gr: (0..strips).map(|_| af(0.0)).collect(),
+            comp_gr: (0..strips).map(|_| af(0.0)).collect(),
+            bus_gr: (0..buses).map(|_| af(0.0)).collect(),
         }
     }
 
     pub fn set_send(&self, strip: usize, bus: usize, lin: f32) {
         self.send[strip * self.buses + bus].store(lin.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn set_proc(&self, strip: usize, p: ProcParams) {
+        *self.proc[strip].lock().expect("lock poisoned") = p;
+        self.proc_ver[strip].fetch_add(1, Ordering::Release);
+    }
+
+    pub fn set_lim(&self, bus: usize, p: LimParams) {
+        *self.lim[bus].lock().expect("lock poisoned") = p;
+        self.lim_ver[bus].fetch_add(1, Ordering::Release);
     }
 
     pub fn peak_of(a: &AtomicU32) -> f32 {
@@ -81,6 +110,10 @@ pub struct Engine {
     tmp_l: Vec<f32>,
     tmp_r: Vec<f32>,
     ramp: Vec<f32>,
+    stages: Vec<ProcStage>,
+    seen_proc: Vec<u64>,
+    limiters: Vec<Limiter>,
+    seen_lim: Vec<u64>,
 }
 
 /// Abklingfaktor der Spitzenanzeige je Block (≈ 300 ms bei 1-ms-Blöcken).
@@ -100,6 +133,10 @@ impl Engine {
             tmp_l: vec![0.0; block],
             tmp_r: vec![0.0; block],
             ramp: (0..block).map(|i| (i + 1) as f32 / block as f32).collect(),
+            stages: (0..ns).map(|_| ProcStage::new()).collect(),
+            seen_proc: vec![0; ns],
+            limiters: (0..nb).map(|_| Limiter::new()).collect(),
+            seen_lim: vec![0; nb],
         }
     }
 
@@ -118,16 +155,31 @@ impl Engine {
             let mut peak = 0f32;
             match input {
                 Some(inp) if inp.present && inp.l.len() >= n && inp.r.len() >= n => {
+                    self.tmp_l.copy_from_slice(&inp.l[..n]);
+                    self.tmp_r.copy_from_slice(&inp.r[..n]);
+                    // Klangbearbeitung (ohne Vorausschau, keine Latenz); neue Parameter nur, wenn das Schloss frei ist
+                    let ver = self.shared.proc_ver[s].load(Ordering::Acquire);
+                    if ver != self.seen_proc[s]
+                        && let Ok(p) = self.shared.proc[s].try_lock()
+                    {
+                        self.stages[s].set_params(*p);
+                        self.seen_proc[s] = ver;
+                    }
+                    let red = self.stages[s].process(&mut self.tmp_l, &mut self.tmp_r);
+                    self.shared.gate_gr[s].store(red.gate_db.to_bits(), Ordering::Relaxed);
+                    self.shared.comp_gr[s].store(red.comp_db.to_bits(), Ordering::Relaxed);
                     for i in 0..n {
                         let g = g0 + (target_g - g0) * self.ramp[i];
-                        self.tmp_l[i] = inp.l[i] * g;
-                        self.tmp_r[i] = inp.r[i] * g;
+                        self.tmp_l[i] *= g;
+                        self.tmp_r[i] *= g;
                         peak = peak.max(self.tmp_l[i].abs()).max(self.tmp_r[i].abs());
                     }
                 }
                 _ => {
                     self.tmp_l.fill(0.0);
                     self.tmp_r.fill(0.0);
+                    self.shared.gate_gr[s].store(0f32.to_bits(), Ordering::Relaxed);
+                    self.shared.comp_gr[s].store(0f32.to_bits(), Ordering::Relaxed);
                 }
             }
             self.cur_strip_gain[s] = target_g;
@@ -156,9 +208,20 @@ impl Engine {
                 let g = g0 + (target - g0) * self.ramp[i];
                 out_l[b][i] *= g;
                 out_r[b][i] *= g;
-                peak = peak.max(out_l[b][i].abs()).max(out_r[b][i].abs());
             }
             self.cur_bus_gain[b] = target;
+            let ver = self.shared.lim_ver[b].load(Ordering::Acquire);
+            if ver != self.seen_lim[b]
+                && let Ok(p) = self.shared.lim[b].try_lock()
+            {
+                self.limiters[b].set_params(*p);
+                self.seen_lim[b] = ver;
+            }
+            let gr = self.limiters[b].process(&mut out_l[b][..n], &mut out_r[b][..n]);
+            self.shared.bus_gr[b].store(gr.to_bits(), Ordering::Relaxed);
+            for i in 0..n {
+                peak = peak.max(out_l[b][i].abs()).max(out_r[b][i].abs());
+            }
             let old = f32::from_bits(self.shared.bus_peak[b].load(Ordering::Relaxed)) * decay;
             self.shared.bus_peak[b].store(peak.max(old).to_bits(), Ordering::Relaxed);
         }
@@ -215,6 +278,7 @@ impl Source {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use std::sync::Arc;
@@ -280,6 +344,26 @@ mod tests {
         assert!(ol[0].iter().all(|v| *v == 0.0));
         let p2 = Shared::peak_of(&sh.strip_peak[0]);
         assert!(p2 < p1 && p2 > 0.7, "langsam abklingend: {p2}");
+    }
+
+    #[test]
+    fn strip_dsp_and_bus_limiter_run_in_the_engine() {
+        use crate::dsp::{CompParams, LimParams, ProcParams};
+        let sh = Arc::new(Shared::new(1, 1));
+        let mut p = ProcParams::default();
+        p.comp = CompParams { enabled: true, threshold_db: -30.0, ratio: 20.0, attack_ms: 0.5, release_ms: 20.0, knee_db: 0.0, makeup_db: 0.0, rms: false };
+        sh.set_proc(0, p);
+        sh.set_lim(0, LimParams { enabled: true, ceiling_db: -12.0, release_ms: 50.0 });
+        let mut e = Engine::new(48, sh.clone());
+        let ins = vec![(vec![0.5; 48], vec![0.5; 48])];
+        let mut last = 1.0f32;
+        for _ in 0..400 {
+            let (l, _) = run(&mut e, &ins, 1, 48);
+            last = l[0][47];
+        }
+        // Kompressor 20:1 bei −30 dB Schwelle zieht 0,5 stark herunter; Limiter hält ≤ −12 dB (0,2512)
+        assert!(last < 0.26, "Bearbeitung wirkt: {last}");
+        assert!(f32::from_bits(sh.comp_gr[0].load(Ordering::Relaxed)) < -10.0);
     }
 
     #[test]

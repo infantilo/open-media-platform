@@ -283,7 +283,7 @@ mod tests {
         let grown_to = r.safety;
         // danach 80 s lang gleichmäßig beliefern (1 Block je Tick) → Rückbau
         for _ in 0..(80 * 48_000 / 48) {
-            r.push(&vec![0.1; 48]);
+            r.push(&[0.1; 48]);
             r.pull(&mut out);
         }
         assert!(r.stats.shrunk >= 1 && r.safety < grown_to, "{:?} safety {} (vorher {grown_to})", r.stats, r.safety);
