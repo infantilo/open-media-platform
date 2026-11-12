@@ -4,6 +4,8 @@ import type { de } from "./de.ts";
 export const en: Record<keyof typeof de, string> = {
   "lang.title": "Language",
 
+  "mc.allTimeline": "All timelines",
+  "mc.allTimelineTip": "Show/hide all channels on one shared time axis",
   "mc.title": "Multi-channel overview",
   "mc.overview": "Overview",
   "mc.empty": "No playout channels assigned.",

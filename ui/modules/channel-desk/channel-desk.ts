@@ -14,7 +14,7 @@ import { mountUIBundleEl } from "../../shell/ui-bundle.ts";
 import { deckSession } from "../../shell/streamdeck/session.ts";
 import type { ConsoleEntry } from "../../shell/console-view.ts";
 import {
-  buildBlocks, fmtRemain, gangCall, nodeIdFromBundleUrl, nowOffsetPct, playlistNow, pruneSelection, stepChannel,
+  axisTicks, buildBlocks, fmtRemain, gangCall, nodeIdFromBundleUrl, nowOffsetPct, playlistNow, pruneSelection, stepChannel,
   summarize, summarizeGang, waitKindOf,
   type ChannelSummary, type ChannelValues, type GangAction, type GangResult, type TimelineEntry,
 } from "./multichannel-logic.ts";
@@ -73,6 +73,16 @@ omp-channel-desk .cd-tl b{position:absolute;top:3px;bottom:3px;border-radius:2px
 omp-channel-desk .cd-tl b.cur{background:var(--omp-accent,#4aa3ff);color:#fff}
 omp-channel-desk .cd-tl u{position:absolute;top:0;bottom:0;width:2px;background:#ff5c5c;text-decoration:none}
 omp-channel-desk .cd-stats{display:flex;gap:14px;color:var(--omp-text-dim);font-size:var(--omp-font-size-sm);font-variant-numeric:tabular-nums}
+omp-channel-desk .cd-all{display:flex;flex-direction:column;gap:3px;padding:10px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);background:var(--omp-surface)}
+omp-channel-desk .cd-all .row{display:flex;gap:8px;align-items:center}
+omp-channel-desk .cd-all .lbl{width:130px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--omp-font-size-sm);display:flex;gap:6px;align-items:center}
+omp-channel-desk .cd-all .lane{position:relative;flex:1;height:26px;border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
+omp-channel-desk .cd-all .lane b{position:absolute;top:3px;bottom:3px;border-radius:2px;background:#4c5a70;overflow:hidden;font-weight:400;font-size:11px;line-height:20px;padding:0 3px;box-sizing:border-box;white-space:nowrap;color:#e8eef7;border-right:1px solid var(--omp-surface-raised);cursor:pointer}
+omp-channel-desk .cd-all .lane b.cur{background:var(--omp-accent,#4aa3ff);color:#fff}
+omp-channel-desk .cd-all .axis{position:relative;height:16px;flex:1;font-size:11px;color:var(--omp-text-dim);font-variant-numeric:tabular-nums}
+omp-channel-desk .cd-all .axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+omp-channel-desk .cd-all .grid{position:absolute;top:0;bottom:0;width:1px;background:#ffffff14}
+omp-channel-desk .cd-all .nowline{position:absolute;top:0;bottom:0;width:2px;background:#ff5c5c}
 omp-channel-desk .cd-empty{color:var(--omp-text-dim);padding:24px;text-align:center}
 `;
 
@@ -83,6 +93,9 @@ export class ChannelDesk extends HTMLElement {
   #selected = new Set<string>();
   #openKey: string | null = null;
   #winMin = 30;
+  #combined = false;
+  #allBox!: HTMLDivElement;
+  #allBtn!: HTMLButtonElement;
   #timer?: number;
   #tick = 0;
   #polling = false;
@@ -107,6 +120,7 @@ export class ChannelDesk extends HTMLElement {
     try {
       const w = Number(localStorage.getItem("omp-cd-window"));
       if (WINDOWS_MIN.includes(w)) this.#winMin = w;
+      this.#combined = localStorage.getItem("omp-cd-combined") === "1";
     } catch { /* ohne Speicher: Standard */ }
     this.#bar = document.createElement("div");
     this.#bar.className = "cd-bar";
@@ -189,6 +203,7 @@ export class ChannelDesk extends HTMLElement {
       this.#winMin = Number(win.value);
       try { localStorage.setItem("omp-cd-window", String(this.#winMin)); } catch { /* egal */ }
       for (const c of this.#channels) this.#updateCard(c);
+      this.#updateCombined();
     });
     const all = this.#btn(t("mc.selectAll"), () => { this.#selected = new Set(this.#channels.map((c) => c.key)); this.#syncSelection(); });
     const none = this.#btn(t("mc.selectNone"), () => { this.#selected.clear(); this.#syncSelection(); });
@@ -204,7 +219,15 @@ export class ChannelDesk extends HTMLElement {
       b.title = t("mc.gangHint");
       return b;
     });
-    this.#tools.append(title, grow, win, all, none, this.#selInfo, sep, gangLabel, ...this.#gangBtns);
+    this.#allBtn = this.#btn(t("mc.allTimeline"), () => {
+      this.#combined = !this.#combined;
+      try { localStorage.setItem("omp-cd-combined", this.#combined ? "1" : "0"); } catch { /* egal */ }
+      this.#renderAll();
+    });
+    this.#allBtn.title = t("mc.allTimelineTip");
+    this.#allBox = document.createElement("div");
+    this.#allBox.className = "cd-all";
+    this.#tools.append(title, grow, win, this.#allBtn, all, none, this.#selInfo, sep, gangLabel, ...this.#gangBtns);
     this.#grid = document.createElement("div");
     this.#grid.className = "cd-grid";
   }
@@ -329,6 +352,46 @@ export class ChannelDesk extends HTMLElement {
     ch.switchBtn.title = `${s.name}${s.onAir ? ` — ${s.onAir}` : ""}`;
   }
 
+  // Gesamt-Timeline: eine Spur je Channel auf gemeinsamer Wanduhr-Achse (jeder Channel ist relativ zu seiner eigenen
+  // Sendeposition gezeichnet, „jetzt“ ist für alle dieselbe Linie — dadurch liegen gleichzeitige Events untereinander).
+  #updateCombined() {
+    if (!this.#combined || !this.#allBox.isConnected) return;
+    const past = Math.round(this.#winMin * 60_000 * 0.2);
+    const future = this.#winMin * 60_000 - past;
+    const nowPct = nowOffsetPct(past, future);
+    const ticks = axisTicks(Date.now(), past, future);
+    const mk = (cls: string, css = "", text = "") => Object.assign(document.createElement("div"), { className: cls, style: css, textContent: text });
+    const axis = mk("axis");
+    axis.append(...ticks.map((k) => Object.assign(document.createElement("span"), {
+      style: `left:${k.leftPct}%`, textContent: new Date(k.epochMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    })));
+    const axisRow = mk("row");
+    axisRow.append(mk("lbl"), axis);
+    const rows = this.#channels.map((c) => {
+      const lane = mk("lane");
+      const v = c.values;
+      const now = v ? playlistNow(c.tl, v.currentItemId, v.playheadPositionMs ?? 0) : null;
+      lane.append(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
+      if (v && now !== null) {
+        for (const b of buildBlocks(v.items ?? [], c.tl, now, v.currentItemId, past, future)) {
+          const el = Object.assign(document.createElement("b"), { textContent: b.label, title: b.label, className: b.current ? "cur" : "" });
+          el.style.left = `${b.leftPct}%`;
+          el.style.width = `${b.widthPct}%`;
+          el.addEventListener("dblclick", () => this.#open(c.key));
+          lane.append(el);
+        }
+      }
+      lane.append(mk("nowline", `left:${nowPct}%`));
+      const lbl = mk("lbl");
+      lbl.append(mk(`cd-dot ${c.summary.health}`), Object.assign(document.createElement("span"), { textContent: c.summary.name }));
+      lbl.title = c.summary.name;
+      const row = mk("row");
+      row.append(lbl, lane);
+      return row;
+    });
+    this.#allBox.replaceChildren(axisRow, ...rows);
+  }
+
   #syncSelection() {
     for (const c of this.#channels) {
       c.card.classList.toggle("sel", this.#selected.has(c.key));
@@ -411,8 +474,11 @@ export class ChannelDesk extends HTMLElement {
         this.#main.replaceChildren(Object.assign(document.createElement("p"), { className: "cd-empty", textContent: t("mc.empty") }));
       } else {
         this.#grid.replaceChildren(...this.#channels.map((c) => c.card));
-        this.#main.replaceChildren(this.#tools, this.#grid);
+        this.#main.replaceChildren(this.#tools, ...(this.#combined ? [this.#allBox] : []), this.#grid);
+        this.#allBtn.classList.toggle("active", this.#combined);
+        this.#allBtn.style.borderColor = this.#combined ? "var(--omp-accent,#4aa3ff)" : "";
         this.#syncSelection();
+        this.#updateCombined();
       }
       return;
     }
@@ -443,6 +509,7 @@ export class ChannelDesk extends HTMLElement {
       this.#polling = false;
     }
     for (const c of this.#channels) this.#updateCard(c);
+    this.#updateCombined();
   }
 
   async #pollOne(c: Channel) {

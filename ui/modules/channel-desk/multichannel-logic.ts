@@ -190,3 +190,22 @@ export function stepChannel(ids: string[], current: string | null, delta: 1 | -1
 export function nodeIdFromBundleUrl(url: string): string {
   return url.replace(/\/+$/, "").split("/").pop() ?? "";
 }
+
+export interface AxisTick {
+  leftPct: number;
+  epochMs: number;
+}
+
+/** Zeitmarken der gemeinsamen Achse (Wanduhr), auf runde Minuten, höchstens ~8 Stück. */
+export function axisTicks(nowEpochMs: number, pastMs: number, futureMs: number): AxisTick[] {
+  const span = pastMs + futureMs;
+  if (span <= 0) return [];
+  const stepMin = [1, 2, 5, 10, 15, 30, 60].find((m) => span / (m * 60_000) <= 8) ?? 60;
+  const step = stepMin * 60_000;
+  const from = nowEpochMs - pastMs;
+  const out: AxisTick[] = [];
+  for (let t = Math.ceil(from / step) * step; t <= nowEpochMs + futureMs; t += step) {
+    out.push({ leftPct: ((t - from) / span) * 100, epochMs: t });
+  }
+  return out;
+}

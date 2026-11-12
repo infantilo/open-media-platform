@@ -2042,6 +2042,7 @@ und nennt die Dauer:
 
 Sind Ihnen mehrere Playout-Channels zugewiesen, weist der Techniker Ihnen den Dienst **Mehrkanal-Platz** (Katalog: `omp-channel-desk`) wie jede andere Konsole zu. Er zeigt nur die Channels, die Sie bedienen dürfen. Jeder Channel hat eine Kachel mit Sendestand, Restzeit, Zeitleiste (10/30/60 Minuten) und Kennzahlen; die Ampel zeigt, ob er läuft, auf Bedienung wartet oder Aufmerksamkeit braucht.
 
+- **Gesamt-Timeline:** Der Knopf *Gesamt-Timeline* legt alle Channels als Spuren untereinander auf eine gemeinsame Uhrzeit-Achse; die rote Linie ist „jetzt“. So sieht man, welche Events gleichzeitig laufen oder enden.
 - **Gruppen-Start:** Channels ankreuzen, dann *Next*, *Take*, *Next Live*, *Hold* oder *Auto* — wirkt auf alle gewählten Channels, bei mehr als einem nach Rückfrage.
 - **Bearbeiten und Wechseln:** *Bearbeiten* öffnet die volle Playlist des Channels; die Leiste oben schaltet mit einem Klick (oder **Alt+←/→**, **Alt+1…9**) zu einem anderen Channel, **Alt+0** zurück zur Übersicht. Die Restzeit der anderen Channels bleibt dort sichtbar.
 

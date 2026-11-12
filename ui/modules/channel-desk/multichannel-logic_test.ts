@@ -1,6 +1,6 @@
 import { assertEquals, assertAlmostEquals } from "jsr:@std/assert@1";
 import {
-  buildBlocks, fmtRemain, gangCall, nodeIdFromBundleUrl, playlistNow, pruneSelection, stepChannel, summarize, summarizeGang,
+  axisTicks, buildBlocks, fmtRemain, gangCall, nodeIdFromBundleUrl, playlistNow, pruneSelection, stepChannel, summarize, summarizeGang,
   type ChannelItem, type TimelineEntry,
 } from "./multichannel-logic.ts";
 
@@ -77,4 +77,13 @@ Deno.test("Auswahl und Wechsel", () => {
   assertEquals(stepChannel(["a", "b"], null, 1), "a");
   assertEquals(stepChannel([], null, 1), null);
   assertEquals(nodeIdFromBundleUrl("/api/v1/nodes/n-1/"), "n-1");
+});
+
+Deno.test("axisTicks: runde Minuten, begrenzte Anzahl", () => {
+  const now = Date.UTC(2026, 10, 12, 12, 7, 30);
+  const t = axisTicks(now, 6 * 60_000, 24 * 60_000); // 30 min → 5-min-Raster (6 Marken)
+  assertEquals(t.length, 6);
+  assertEquals(t.every((x) => x.epochMs % 300_000 === 0 && x.leftPct >= 0 && x.leftPct <= 100), true);
+  assertEquals(axisTicks(now, 0, 0), []);
+  assertEquals(axisTicks(now, 12 * 60_000, 48 * 60_000).length <= 8, true);
 });

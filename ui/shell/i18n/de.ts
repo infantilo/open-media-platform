@@ -3,6 +3,8 @@
 export const de = {
   "lang.title": "Sprache",
 
+  "mc.allTimeline": "Gesamt-Timeline",
+  "mc.allTimelineTip": "Alle Channels auf einer gemeinsamen Zeitachse ein-/ausblenden",
   "mc.title": "Mehrkanal-Übersicht",
   "mc.overview": "Übersicht",
   "mc.empty": "Keine Playout-Channels zugewiesen.",
