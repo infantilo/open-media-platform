@@ -3,9 +3,6 @@
 export const de = {
   "lang.title": "Sprache",
 
-  "app.tab.channels": "Kanäle",
-  "mc.toggle.desk": "Mehrkanal-Übersicht",
-  "mc.toggle.consoles": "Zur Konsolen-Ansicht",
   "mc.title": "Mehrkanal-Übersicht",
   "mc.overview": "Übersicht",
   "mc.empty": "Keine Playout-Channels zugewiesen.",

@@ -36,6 +36,7 @@ members = [
     "omp-scaler",
     "omp-audio-monitor",
     "omp-xy-panel",
+    "omp-channel-desk",
     "omp-scope",
     "omp-webrtc-gateway",
     "omp-audio-rules",

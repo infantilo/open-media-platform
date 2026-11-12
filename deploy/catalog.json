@@ -341,6 +341,16 @@
     "expectedResources": "sehr gering (nur Steuerebene)"
   },
   {
+    "type": "omp-channel-desk",
+    "label": "Mehrkanal-Platz (Playout)",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-channel-desk"],
+    "env": {},
+    "description": "Bedienpanel für Operatoren, die mehrere Playout-Channels betreuen: Übersicht mit Sendestand, Restzeit, Zeitleiste und Kennzahlen je Channel, Gruppen-Start (Next, Take, Next Live, Hold, Auto auf mehrere gewählte Channels), schneller Wechsel zwischen den Channels beim Bearbeiten (Alt+Pfeile). Zeigt nur die Channels, die der angemeldete Nutzer bedienen darf, und folgt Rollen, die kommen und gehen. Der Node ist per Rollenbindung wie jede Konsole zuzuweisen; er hat keine eigene Medienverarbeitung.",
+    "i18n": { "en": {"label": "Multi-channel desk (playout)", "description": "Control panel for operators who look after several playout channels: overview with on-air state, remaining time, timeline and key figures per channel, gang roll (Next, Take, Next Live, Hold, Auto on several selected channels), quick switching between channels while editing (Alt+arrows). Shows only the channels the signed-in user may operate and follows roles that come and go. Assign the node by role binding like any console; it does no media processing.", "expectedResources": "very low (control plane only)"} },
+    "expectedResources": "sehr gering (nur Steuerebene)"
+  },
+  {
     "type": "omp-sign-avatar",
     "label": "Gebärdensprach-Avatar",
     "runner": "process",

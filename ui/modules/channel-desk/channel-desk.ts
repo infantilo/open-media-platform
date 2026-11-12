@@ -6,13 +6,13 @@
 //   (mit Live-Ampel und Restzeit je Channel, Alt+←/→) schaltet ohne Umweg zwischen den Channels um.
 // Alles dynamisch: Die Channel-Liste folgt `setEntries` (Rollen kommen/gehen); ein Node gilt als Playout-Channel,
 // wenn er die Parameter der Playout-Automation liefert — kein fest verdrahteter Typ.
-import { apiFetch } from "./connection.ts";
-import { confirmDialog } from "../kit/omp-confirm.ts";
-import { showToast } from "../kit/omp-toast.ts";
-import { t, type I18nKey } from "./i18n.ts";
-import { mountUIBundleEl } from "./ui-bundle.ts";
-import { deckSession } from "./streamdeck/session.ts";
-import type { ConsoleEntry } from "./console-view.ts";
+import { apiFetch } from "../../shell/connection.ts";
+import { confirmDialog } from "../../kit/omp-confirm.ts";
+import { showToast } from "../../kit/omp-toast.ts";
+import { t, type I18nKey } from "../../shell/i18n.ts";
+import { mountUIBundleEl } from "../../shell/ui-bundle.ts";
+import { deckSession } from "../../shell/streamdeck/session.ts";
+import type { ConsoleEntry } from "../../shell/console-view.ts";
 import {
   buildBlocks, fmtRemain, gangCall, nodeIdFromBundleUrl, nowOffsetPct, playlistNow, pruneSelection, stepChannel,
   summarize, summarizeGang, waitKindOf,

@@ -4,9 +4,6 @@ import type { de } from "./de.ts";
 export const en: Record<keyof typeof de, string> = {
   "lang.title": "Language",
 
-  "app.tab.channels": "Channels",
-  "mc.toggle.desk": "Multi-channel overview",
-  "mc.toggle.consoles": "Back to consoles",
   "mc.title": "Multi-channel overview",
   "mc.overview": "Overview",
   "mc.empty": "No playout channels assigned.",

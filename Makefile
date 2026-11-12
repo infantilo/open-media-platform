@@ -39,6 +39,8 @@ ui:
 	deno bundle ui/modules/intercom/panel.ts -o nodes/omp-intercom/ui/bundle.js
 	# Segue-Editor (RB7.3): gebaute Kopie im Radio-Automation-Node (`include_str!`), vom Panel per Import geladen.
 	deno bundle ui/modules/segue-editor/element.ts -o nodes/omp-radio-automation/ui/segue-editor.js
+	# Mehrkanal-Platz (Kapitel 96): gebaute Kopie im Node (`include_str!`).
+	deno bundle ui/modules/channel-desk/panel.ts -o nodes/omp-channel-desk/ui/bundle.js
 	# OGraf-Editor (Kapitel 90.4): gebaute Kopie im Node (`include_str!`), hängt hinter dem Panel-Bundle.
 	deno bundle ui/modules/ograf-editor/library.ts -o nodes/omp-ograf/ui/library.js
 
