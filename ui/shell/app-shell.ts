@@ -120,6 +120,50 @@ interface WorkflowOption {
 // (gleiches Muster wie ui/shell/workflows-view.ts REFRESH_EVENT_TYPES).
 const WORKFLOW_REFRESH_EVENT_TYPES = new Set(["workflow.updated", "lost-events"]);
 
+// Kleines Aufklappmenü für die App-Bar: ein Knopf, darunter eine Spalte mit den (bereits verdrahteten) Knöpfen. Schließt bei
+// Klick auf einen Eintrag, Klick daneben und Esc.
+function makeBarMenu(label: string, title: string, items: HTMLButtonElement[]): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "position:relative;font-size:var(--omp-font-size-xs);";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = `${label} ▾`;
+  btn.title = title;
+  btn.style.cssText =
+    "white-space:nowrap;padding:2px 8px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
+    "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:inherit;";
+  const pop = document.createElement("div");
+  pop.style.cssText =
+    "display:none;position:absolute;right:0;top:100%;margin-top:4px;z-index:3000;min-width:160px;flex-direction:column;gap:4px;" +
+    "background:var(--omp-surface-raised,#1b2233);border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
+    "box-shadow:0 6px 24px rgba(0,0,0,.5);padding:6px;box-sizing:border-box;";
+  for (const it of items) {
+    it.style.width = "100%";
+    it.style.textAlign = "left";
+    pop.appendChild(it);
+  }
+  const outside = (ev: Event) => {
+    if (!wrap.contains(ev.target as Node)) close();
+  };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") close();
+  };
+  function close() {
+    pop.style.display = "none";
+    document.removeEventListener("pointerdown", outside, true);
+    document.removeEventListener("keydown", onKey, true);
+  }
+  btn.addEventListener("click", () => {
+    if (pop.style.display !== "none") return close();
+    pop.style.display = "flex";
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", onKey, true);
+  });
+  pop.addEventListener("click", () => window.setTimeout(close, 0));
+  wrap.append(btn, pop);
+  return wrap;
+}
+
 class AppShell extends HTMLElement {
   #activeTab: TabId = "flow";
   #tabs: TabDef[] = [...BASE_TABS];
@@ -217,7 +261,7 @@ class AppShell extends HTMLElement {
     render();
     window.setInterval(render, 30_000);
     this.#contentEl.before(bar);
-    for (const role of ["timeline-marker", "freeze-button"]) {
+    for (const role of ["support-menu"]) {
       const el = this.querySelector<HTMLElement>(`[data-role="${role}"]`);
       if (el) el.style.display = "none";
     }
@@ -320,16 +364,15 @@ class AppShell extends HTMLElement {
     const right = document.createElement("div");
     right.style.cssText = "display:flex;align-items:center;gap:var(--omp-space-3);flex:0 0 auto;margin-left:var(--omp-space-3);";
 
-    // S6: Workflow-Auswahl in der App-Bar — wirkt nur auf den Flow-
-    // Editor-Tab (s. #switchTab/FlowCanvas.setWorkflowFilter), bleibt
-    // aber über Tab-Wechsel hinweg erhalten (s. #workflowFilter-Doku).
+    // S6: Workflow-Auswahl — wirkt nur auf den Flow-Editor-Tab (s. #switchTab/FlowCanvas.setWorkflowFilter) und sitzt
+    // deshalb dort in dessen Kopfleiste (Nutzerwunsch 2026-11-12: Platz in der App-Bar sparen). Der Filter bleibt über
+    // Tab-Wechsel hinweg erhalten (s. #workflowFilter-Doku), die Auswahl-Kachel gehört weiter der App.
     const picker = new WorkflowPicker();
     picker.onChange = (id) => {
       this.#workflowFilter = id || null;
       this.#applyWorkflowFilter();
     };
     this.#workflowPicker = picker;
-    right.appendChild(picker.element);
 
     const pill = document.createElement("span");
     pill.setAttribute("data-role", "connection-pill");
@@ -381,7 +424,12 @@ class AppShell extends HTMLElement {
       freezeBtn.textContent = t("fr.button");
       window.setTimeout(() => (freezeBtn.disabled = false), 3000);
     });
-    right.append(mark, freezeBtn, deck.button, midi.button);
+    // Platz sparen (Nutzerwunsch 2026-11-12): Stream Deck + MIDI unter „Geräte“, Marker + Einfrieren unter „Support“.
+    const devicesMenu = makeBarMenu(t("app.menu.devices"), t("app.menu.devices.title"), [deck.button, midi.button]);
+    devicesMenu.setAttribute("data-role", "devices-menu");
+    const supportMenu = makeBarMenu(t("app.menu.support"), t("app.menu.support.title"), [mark, freezeBtn]);
+    supportMenu.setAttribute("data-role", "support-menu");
+    right.append(supportMenu, devicesMenu);
 
     bar.append(left, right);
 
@@ -449,7 +497,10 @@ class AppShell extends HTMLElement {
     // S6: eine zuvor getroffene Workflow-Auswahl auf den frisch
     // gemounteten Flow-Editor-Tab anwenden — die Kachel selbst hält
     // dazwischen keinen Zustand (s. #workflowFilter-Doku oben).
-    if (id === "flow") this.#applyWorkflowFilter();
+    if (id === "flow") {
+      (this.#contentEl.querySelector("omp-flow-canvas") as FlowCanvas | null)?.setToolbarExtra(this.#workflowPicker.element);
+      this.#applyWorkflowFilter();
+    }
   }
 
   #applyWorkflowFilter() {

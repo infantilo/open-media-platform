@@ -41,7 +41,7 @@ export class WorkflowPicker {
     this.#btn.addEventListener("click", () => (this.#pop.style.display === "none" ? this.#open() : this.#close()));
     this.#pop = document.createElement("div");
     this.#pop.style.cssText =
-      "display:none;position:absolute;right:0;top:100%;margin-top:4px;z-index:3000;width:280px;background:var(--omp-surface-raised,#1b2233);" +
+      "display:none;position:absolute;left:0;top:100%;margin-top:4px;z-index:3000;width:280px;background:var(--omp-surface-raised,#1b2233);" +
       "border:1px solid var(--omp-border);border-radius:var(--omp-radius);box-shadow:0 6px 24px rgba(0,0,0,.5);padding:6px;box-sizing:border-box;";
     this.#input = document.createElement("input");
     this.#input.type = "search";

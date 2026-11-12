@@ -661,6 +661,8 @@ export class FlowCanvas extends HTMLElement {
   #svg!: SVGSVGElement;
   #viewportGroup!: SVGGElement;
   #breadcrumbBar!: HTMLDivElement;
+  // Von der App eingehängte Bedienelemente (Workflow-Auswahl), überleben das Neuzeichnen der Kopfleiste.
+  #toolbarExtra: HTMLElement | null = null;
   #panelContainer!: HTMLDivElement;
   #panelResizeHandle!: HTMLDivElement;
   #panelContent!: HTMLDivElement;
@@ -1923,6 +1925,11 @@ export class FlowCanvas extends HTMLElement {
   // Tabs, damit eine zuvor getroffene Auswahl erhalten bleibt — die
   // App-Bar hält den Filter, nicht die Kachel selbst, die bei jedem
   // Tab-Wechsel neu erzeugt wird).
+  setToolbarExtra(el: HTMLElement) {
+    this.#toolbarExtra = el;
+    if (this.#breadcrumbBar) this.#renderBreadcrumbInner();
+  }
+
   setWorkflowFilter(workflowId: string | null) {
     this.#workflowFilter = workflowId;
     this.#render();
@@ -3347,6 +3354,7 @@ export class FlowCanvas extends HTMLElement {
 
   #renderBreadcrumbInner() {
     this.#breadcrumbBar.replaceChildren();
+    if (this.#toolbarExtra) this.#breadcrumbBar.appendChild(this.#toolbarExtra);
 
     // Bug 2: eigener Breadcrumb statt Gruppen-Pfad — der bearbeitete
     // Workflow ist keine B5-Gruppe (viele haben gar keine, s.
