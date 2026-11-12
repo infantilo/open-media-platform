@@ -7,7 +7,8 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -687,7 +688,25 @@ impl std::error::Error for QueryError {}
 #[derive(Debug, Clone)]
 pub struct RegistryClient {
     base_url: String,
+    flows: Arc<Mutex<FlowCache>>,
 }
+
+/// Flow-Cache gegen das N+1-Muster der Discovery-Schleifen (Lastfund 2026-11-12): Schalter, Mischer, Multiviewer u. a. fragen
+/// alle 2 s je Sender einzeln `flows/<id>` ab; bei 100 Quellen und mehreren Verbrauchern sind das hunderte Registry-
+/// Anfragen pro Takt. Häufen sich Einzelabfragen (>= BULK_AFTER innerhalb von BULK_WINDOW), wird die Flow-Liste einmal
+/// seitenweise geholt und kurz (CACHE_TTL) für die folgenden Abfragen genutzt. Wenige Abfragen bleiben Einzelabfragen;
+/// ein im Cache fehlender Flow fällt ebenfalls auf die Einzelabfrage zurück.
+#[derive(Debug, Default)]
+struct FlowCache {
+    at: Option<Instant>,
+    map: HashMap<String, FlowInfo>,
+    window_start: Option<Instant>,
+    lookups: u32,
+}
+
+const BULK_AFTER: u32 = 4;
+const BULK_WINDOW: Duration = Duration::from_secs(2);
+const CACHE_TTL: Duration = Duration::from_millis(1500);
 
 impl RegistryClient {
     pub fn new(base_url: impl Into<String>) -> Self {
@@ -695,7 +714,53 @@ impl RegistryClient {
         while base_url.ends_with('/') {
             base_url.pop();
         }
-        RegistryClient { base_url }
+        RegistryClient { base_url, flows: Arc::new(Mutex::new(FlowCache::default())) }
+    }
+
+    /// Flow aus dem Sammel-Cache (s. [`FlowCache`]) oder `None` -> Einzelabfrage.
+    fn flow_cached(&self, flow_id: &str) -> Option<FlowInfo> {
+        let mut c = self.flows.lock().ok()?;
+        let now = Instant::now();
+        if c.window_start.is_none_or(|w| now.duration_since(w) > BULK_WINDOW) {
+            c.window_start = Some(now);
+            c.lookups = 0;
+        }
+        c.lookups += 1;
+        let fresh = c.at.is_some_and(|a| now.duration_since(a) < CACHE_TTL);
+        if !fresh && c.lookups >= BULK_AFTER {
+            #[derive(Deserialize)]
+            struct Rate {
+                numerator: u32,
+                denominator: u32,
+            }
+            #[derive(Deserialize)]
+            struct Raw {
+                id: String,
+                format: String,
+                frame_width: Option<u32>,
+                frame_height: Option<u32>,
+                grain_rate: Option<Rate>,
+            }
+            if let Ok(all) = self.list_paged::<Raw>("flows") {
+                c.map = all
+                    .into_iter()
+                    .map(|r| {
+                        let video = match (r.frame_width, r.frame_height, r.grain_rate) {
+                            (Some(width), Some(height), Some(g)) if g.denominator > 0 => {
+                                Some(VideoFormat { width, height, rate_num: g.numerator, rate_den: g.denominator })
+                            }
+                            _ => None,
+                        };
+                        (r.id, FlowInfo { format: r.format, video })
+                    })
+                    .collect();
+                c.at = Some(now);
+            }
+        }
+        if c.at.is_some_and(|a| now.duration_since(a) < CACHE_TTL) {
+            return c.map.get(flow_id).cloned();
+        }
+        None
     }
 
     /// Meldet eine Resource vom angegebenen Typ ("node", "device", "sender",
@@ -785,6 +850,9 @@ impl RegistryClient {
     /// volle `Flow`/`AudioFlow`-Typ: der Aufrufer braucht nur das eine
     /// Feld, beide Flow-Varianten haben es unter demselben Namen.
     pub fn get_flow_format(&self, flow_id: &str) -> Result<String, QueryError> {
+        if let Some(info) = self.flow_cached(flow_id) {
+            return Ok(info.format);
+        }
         #[derive(Deserialize)]
         struct FlowFormat {
             format: String,
@@ -805,6 +873,9 @@ impl RegistryClient {
     /// zusätzlich das Videoformat (Auflösung/Framerate), sofern der Flow
     /// eines trägt (2026-09-30: Formatabweichungs-Anzeige im Mixer).
     pub fn get_flow_info(&self, flow_id: &str) -> Result<FlowInfo, QueryError> {
+        if let Some(info) = self.flow_cached(flow_id) {
+            return Ok(info);
+        }
         #[derive(Deserialize)]
         struct Rate {
             numerator: u32,
