@@ -575,15 +575,8 @@ func ensureMxlDomain() {
 // aufruft — buildEnv selbst kennt die Allowlist nicht, reine
 // Merge-Funktion.
 func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, registryURL, natsURL, orchestratorURL, launchSecret string) []string {
-	merged := map[string]string{}
-	for _, kv := range os.Environ() {
-		for i := 0; i < len(kv); i++ {
-			if kv[i] == '=' {
-				merged[kv[:i]] = kv[i+1:]
-				break
-			}
-		}
-	}
+	// Freigabeliste statt voller Vererbung (envfilter.go, HAERTUNG-PLAN M1).
+	merged := envInherited(os.Environ())
 	for k, v := range entryEnv {
 		merged[k] = v
 	}

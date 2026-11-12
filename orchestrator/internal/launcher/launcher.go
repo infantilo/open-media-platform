@@ -2383,7 +2383,7 @@ func processAlive(pid int) bool {
 	return process.Signal(syscall.Signal(0)) == nil
 }
 
-// buildEnv baut die Subprozess-Umgebung: geerbte Umgebung + Katalog-
+// buildEnv baut die Subprozess-Umgebung: gefilterte geerbte Umgebung (envfilter.go) + Katalog-
 // eigene env{} + die fünf vom Launcher vorgegebenen Variablen, die immer
 // gewinnen (Korrektheitsgarantie: eine Instanz läuft unter der vom
 // Launcher vergebenen ID und sucht sich selbst einen freien Port,
@@ -2391,12 +2391,8 @@ func processAlive(pid int) bool {
 // Duplikaten, weil doppelte Keys in envp technisch nicht sauber
 // spezifiziert sind.
 func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, launchSecret, registryURL, orchestratorURL, natsURL string) []string {
-	merged := map[string]string{}
-	for _, kv := range os.Environ() {
-		if i := strings.IndexByte(kv, '='); i >= 0 {
-			merged[kv[:i]] = kv[i+1:]
-		}
-	}
+	// Freigabeliste statt voller Vererbung (envfilter.go, HAERTUNG-PLAN M1).
+	merged := envInherited(os.Environ())
 	for k, v := range entryEnv {
 		merged[k] = v
 	}
