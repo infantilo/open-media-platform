@@ -45,6 +45,7 @@ members = [
     "omp-intercom",
     "omp-subtitle-asr",
     "omp-sign-avatar",
+    "omp-lowlat-mixer",
 ]
 
 # Eigener Rust-Code mit Pixel-Schleifen (v210-Packen/Alpha-Key-Extraktion in

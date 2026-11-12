@@ -2518,5 +2518,407 @@
         }
       ]
     }
+  ],
+  "omp-lowlat-mixer": [
+    {
+      "key": "OMP_LL_BLOCK",
+      "i18n": {
+        "en": {
+          "label": "Block size (frames)",
+          "description": "Mixer clock in frames at 48 kHz: 16 = 0.33 ms, 48 = 1 ms (default), 96 = 2 ms, 192 = 4 ms, 480 = 10 ms. Smaller = less latency, more CPU and jitter sensitivity. 16/48/192 are AES67 packet times.",
+          "group": "Latency"
+        }
+      },
+      "label": "Blockgröße (Rahmen)",
+      "type": "enum",
+      "description": "Takt des Mischers in Rahmen bei 48 kHz: 16 = 0,33 ms, 48 = 1 ms (Standard), 96 = 2 ms, 192 = 4 ms, 480 = 10 ms. Kleiner = weniger Latenz, mehr CPU und Jitter-Empfindlichkeit. 16/48/192 sind AES67-Paketzeiten.",
+      "group": "Latenz",
+      "default": "48",
+      "choices": [
+        {
+          "value": "16"
+        },
+        {
+          "value": "48"
+        },
+        {
+          "value": "96"
+        },
+        {
+          "value": "192"
+        },
+        {
+          "value": "480"
+        }
+      ]
+    },
+    {
+      "key": "OMP_LL_STRIPS",
+      "i18n": {
+        "en": {
+          "label": "Number of strips",
+          "description": "Input strips (1–32).",
+          "group": "Layout"
+        }
+      },
+      "label": "Anzahl Streifen",
+      "type": "int",
+      "description": "Eingangsstreifen (1–32).",
+      "group": "Aufbau",
+      "default": "8",
+      "min": 1,
+      "max": 32
+    },
+    {
+      "key": "OMP_LL_BUSES",
+      "i18n": {
+        "en": {
+          "label": "Number of buses",
+          "description": "Stereo buses (1–16); bus 1 is the main mix. Every bus is also sent as an MXL audio flow.",
+          "group": "Layout"
+        }
+      },
+      "label": "Anzahl Busse",
+      "type": "int",
+      "description": "Stereo-Busse (1–16); Bus 1 ist der Hauptmix. Jeder Bus wird auch als MXL-Ton-Flow gesendet.",
+      "group": "Aufbau",
+      "default": "4",
+      "min": 1,
+      "max": 16
+    },
+    {
+      "key": "OMP_LL_INPUT_BUFFER_MS",
+      "i18n": {
+        "en": {
+          "label": "Input reserve (ms)",
+          "description": "Minimum reserve per input ring in milliseconds. Sources with large blocks (e.g. 10 ms) need more; on underruns the reserve grows by itself up to the limit.",
+          "group": "Latency"
+        }
+      },
+      "label": "Eingangs-Reserve (ms)",
+      "type": "float",
+      "description": "Mindest-Reserve je Eingangsring in Millisekunden. Quellen mit großen Blöcken (z. B. 10 ms) brauchen mehr; bei Unterläufen wächst die Reserve selbsttätig bis zur Grenze.",
+      "group": "Latenz",
+      "default": "1",
+      "min": 0,
+      "max": 200
+    },
+    {
+      "key": "OMP_LL_INPUT_BUFFER_MAX_MS",
+      "i18n": {
+        "en": {
+          "label": "Input reserve limit (ms)",
+          "description": "Up to this value the reserve may grow by itself.",
+          "group": "Latency"
+        }
+      },
+      "label": "Grenze der Eingangs-Reserve (ms)",
+      "type": "float",
+      "description": "Bis hierhin darf die Reserve selbsttätig wachsen.",
+      "group": "Latenz",
+      "default": "20",
+      "min": 1,
+      "max": 500
+    },
+    {
+      "key": "OMP_LL_ADAPTIVE",
+      "i18n": {
+        "en": {
+          "label": "Reserve grows automatically",
+          "description": "On an underrun raise the reserve by one block (recommended). Off = fixed reserve.",
+          "group": "Latency"
+        }
+      },
+      "label": "Reserve wächst selbsttätig",
+      "type": "enum",
+      "description": "Bei einem Unterlauf die Reserve um einen Block erhöhen (empfohlen). Aus = feste Reserve.",
+      "group": "Latenz",
+      "default": "1",
+      "choices": [
+        {
+          "value": "1"
+        },
+        {
+          "value": "0"
+        }
+      ]
+    },
+    {
+      "key": "OMP_LL_ALSA_IN",
+      "i18n": {
+        "en": {
+          "label": "ALSA input (device)",
+          "description": "ALSA device name of the capture side, e.g. hw:0,0 or plughw:1. Empty = no card input. If a card input or output is set, the card sets the clock.",
+          "group": "ALSA"
+        }
+      },
+      "label": "ALSA-Eingang (Gerät)",
+      "type": "string",
+      "description": "ALSA-Gerätename der Aufnahme, z. B. hw:0,0 oder plughw:1. Leer = kein Karteneingang. Ist ein Karten-Ein- oder Ausgang gesetzt, gibt die Karte den Takt.",
+      "group": "ALSA",
+      "default": "",
+      "placeholder": "z. B. hw:0,0"
+    },
+    {
+      "key": "OMP_LL_ALSA_OUT",
+      "i18n": {
+        "en": {
+          "label": "ALSA output (device)",
+          "description": "ALSA device name of the playback side. Empty = no card output. Bus-to-channel mapping: bus.N.alsaOut.",
+          "group": "ALSA"
+        }
+      },
+      "label": "ALSA-Ausgang (Gerät)",
+      "type": "string",
+      "description": "ALSA-Gerätename der Wiedergabe. Leer = kein Kartenausgang. Zuordnung der Busse zu Kanälen: bus.N.alsaOut.",
+      "group": "ALSA",
+      "default": "",
+      "placeholder": "z. B. hw:0,0"
+    },
+    {
+      "key": "OMP_LL_ALSA_IN_CH",
+      "i18n": {
+        "en": {
+          "label": "ALSA input: channels",
+          "description": "Number of capture channels of the card.",
+          "group": "ALSA"
+        }
+      },
+      "label": "ALSA-Eingang: Kanäle",
+      "type": "int",
+      "description": "Anzahl der Aufnahmekanäle der Karte.",
+      "group": "ALSA",
+      "default": "2",
+      "min": 1,
+      "max": 64
+    },
+    {
+      "key": "OMP_LL_ALSA_OUT_CH",
+      "i18n": {
+        "en": {
+          "label": "ALSA output: channels",
+          "description": "Number of playback channels of the card.",
+          "group": "ALSA"
+        }
+      },
+      "label": "ALSA-Ausgang: Kanäle",
+      "type": "int",
+      "description": "Anzahl der Wiedergabekanäle der Karte.",
+      "group": "ALSA",
+      "default": "2",
+      "min": 1,
+      "max": 64
+    },
+    {
+      "key": "OMP_LL_ALSA_PERIODS",
+      "i18n": {
+        "en": {
+          "label": "ALSA: periods in buffer",
+          "description": "2 = smallest safe latency; more periods = more reserve against dropouts, more latency.",
+          "group": "ALSA"
+        }
+      },
+      "label": "ALSA: Perioden im Puffer",
+      "type": "int",
+      "description": "2 = kleinste sichere Latenz; mehr Perioden = mehr Reserve gegen Aussetzer, mehr Latenz.",
+      "group": "ALSA",
+      "default": "2",
+      "min": 2,
+      "max": 8
+    },
+    {
+      "key": "OMP_LL_AES_RX",
+      "i18n": {
+        "en": {
+          "label": "AES67 receive (address:port)",
+          "description": "Multicast group or unicast address with port, e.g. 239.69.1.1:5004. Empty = no receive. Strip source: aes:K (mono) or aes:K-L (pair).",
+          "group": "AES67"
+        }
+      },
+      "label": "AES67-Empfang (Adresse:Port)",
+      "type": "string",
+      "description": "Multicast-Gruppe oder Unicast-Adresse mit Port, z. B. 239.69.1.1:5004. Leer = kein Empfang. Streifenquelle: aes:K (Mono) bzw. aes:K-L (Paar).",
+      "group": "AES67",
+      "default": "",
+      "placeholder": "z. B. 239.69.1.1:5004"
+    },
+    {
+      "key": "OMP_LL_AES_RX_CH",
+      "i18n": {
+        "en": {
+          "label": "AES67 receive: channels",
+          "description": "Channel count of the received stream (per the sender's SDP).",
+          "group": "AES67"
+        }
+      },
+      "label": "AES67-Empfang: Kanäle",
+      "type": "int",
+      "description": "Kanalzahl des empfangenen Stroms (laut SDP des Senders).",
+      "group": "AES67",
+      "default": "8",
+      "min": 1,
+      "max": 64
+    },
+    {
+      "key": "OMP_LL_AES_RX_FMT",
+      "i18n": {
+        "en": {
+          "label": "AES67 receive: format",
+          "description": "Sample format of the received stream.",
+          "group": "AES67"
+        }
+      },
+      "label": "AES67-Empfang: Format",
+      "type": "enum",
+      "description": "Abtastformat des empfangenen Stroms.",
+      "group": "AES67",
+      "default": "L24",
+      "choices": [
+        {
+          "value": "L24"
+        },
+        {
+          "value": "L16"
+        }
+      ]
+    },
+    {
+      "key": "OMP_LL_AES_TX",
+      "i18n": {
+        "en": {
+          "label": "AES67 send (address:port)",
+          "description": "Destination of the sent stream (multicast or unicast). Empty = no send. Bus N is on channels 2N−1/2N; the SDP is in parameter aesTxSdp.",
+          "group": "AES67"
+        }
+      },
+      "label": "AES67-Senden (Adresse:Port)",
+      "type": "string",
+      "description": "Ziel des gesendeten Stroms (Multicast oder Unicast). Leer = kein Senden. Bus N liegt auf den Kanälen 2N−1/2N; die SDP steht im Parameter aesTxSdp.",
+      "group": "AES67",
+      "default": "",
+      "placeholder": "z. B. 239.69.2.1:5004"
+    },
+    {
+      "key": "OMP_LL_AES_TX_CH",
+      "i18n": {
+        "en": {
+          "label": "AES67 send: channels",
+          "description": "Channel count of the sent stream (default: 2 per bus, at most 8 at 1 ms packet time).",
+          "group": "AES67"
+        }
+      },
+      "label": "AES67-Senden: Kanäle",
+      "type": "int",
+      "description": "Kanalzahl des gesendeten Stroms (Standard: 2 je Bus, höchstens 8 bei 1 ms Paketzeit).",
+      "group": "AES67",
+      "min": 1,
+      "max": 64
+    },
+    {
+      "key": "OMP_LL_AES_TX_FMT",
+      "i18n": {
+        "en": {
+          "label": "AES67 send: format",
+          "description": "Sample format of the sent stream.",
+          "group": "AES67"
+        }
+      },
+      "label": "AES67-Senden: Format",
+      "type": "enum",
+      "description": "Abtastformat des gesendeten Stroms.",
+      "group": "AES67",
+      "default": "L24",
+      "choices": [
+        {
+          "value": "L24"
+        },
+        {
+          "value": "L16"
+        }
+      ]
+    },
+    {
+      "key": "OMP_LL_AES_IFACE",
+      "i18n": {
+        "en": {
+          "label": "AES67: network interface (IP)",
+          "description": "IP address of the interface for multicast join and send. Empty/0.0.0.0 = system default.",
+          "group": "AES67"
+        }
+      },
+      "label": "AES67: Netzwerkschnittstelle (IP)",
+      "type": "host",
+      "description": "IP-Adresse der Schnittstelle für Multicast-Beitritt und -Senden. Leer/0.0.0.0 = Standard des Systems.",
+      "group": "AES67",
+      "default": "0.0.0.0"
+    },
+    {
+      "key": "OMP_LL_AES_TTL",
+      "i18n": {
+        "en": {
+          "label": "AES67: multicast TTL",
+          "description": "Time-to-live of sent multicast packets.",
+          "group": "AES67"
+        }
+      },
+      "label": "AES67: Multicast-TTL",
+      "type": "int",
+      "description": "Time-to-live gesendeter Multicast-Pakete.",
+      "group": "AES67",
+      "default": "32",
+      "min": 1,
+      "max": 255
+    },
+    {
+      "key": "OMP_LL_AES_PT",
+      "i18n": {
+        "en": {
+          "label": "AES67: RTP payload type",
+          "description": "Dynamic payload type (96–127).",
+          "group": "AES67"
+        }
+      },
+      "label": "AES67: RTP-Nutzlasttyp",
+      "type": "int",
+      "description": "Dynamischer Nutzlasttyp (96–127).",
+      "group": "AES67",
+      "default": "97",
+      "min": 96,
+      "max": 127
+    },
+    {
+      "key": "OMP_LL_RT_PRIORITY",
+      "i18n": {
+        "en": {
+          "label": "Real-time priority",
+          "description": "SCHED_FIFO priority of the mixing thread (1–90, 0 = off). Needs the privilege (RLIMIT_RTPRIO or CAP_SYS_NICE); without it the node runs at normal priority and reports that in parameter realtime.",
+          "group": "Latency"
+        }
+      },
+      "label": "Echtzeit-Priorität",
+      "type": "int",
+      "description": "SCHED_FIFO-Priorität des Misch-Threads (1–90, 0 = aus). Braucht das Recht (RLIMIT_RTPRIO bzw. CAP_SYS_NICE); ohne Recht läuft der Node mit normaler Priorität und meldet das im Parameter realtime.",
+      "group": "Latenz",
+      "default": "50",
+      "min": 0,
+      "max": 90
+    },
+    {
+      "key": "OMP_LL_SPIN_US",
+      "i18n": {
+        "en": {
+          "label": "Busy wait (µs)",
+          "description": "Without a card the clock sleeps until shortly before the deadline and then spins. More = more accurate, costs CPU (100 µs ≈ 10 % of a core at a 1 ms tick).",
+          "group": "Latency"
+        }
+      },
+      "label": "Aktives Warten (µs)",
+      "type": "int",
+      "description": "Ohne Karte schläft der Takt bis kurz vor dem Fälligkeitszeitpunkt und dreht dann aktiv. Mehr = genauer, kostet CPU (100 µs ≈ 10 % eines Kerns bei 1-ms-Takt).",
+      "group": "Latenz",
+      "default": "100",
+      "min": 0,
+      "max": 2000
+    }
   ]
 }

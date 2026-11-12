@@ -1,0 +1,24 @@
+[package]
+name = "omp-lowlat-mixer"
+version = "0.1.0"
+edition = "2024"
+# Projektlizenz noch nicht entschieden (docs/decisions.md, Schritt C1) — publish=false wie bei den übrigen Nodes.
+publish = false
+
+[dependencies]
+omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
+omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+# MXL-Samples direkt lesen/schreiben (ohne GStreamer, kleine Blöcke) — derselbe Pfad-Pin wie omp-segue-player.
+mxl = { path = "../../third_party/mxl/rust/mxl", features = ["mxl-not-built"] }
+mxl-sys = { path = "../../third_party/mxl/rust/mxl-sys", features = ["mxl-not-built"] }
+# `libloading`: libasound.so.2 erst zur Laufzeit laden (kein Build gegen ALSA-Header, die auf Zielhosts fehlen können; ein
+# `alsa`-Crate bräuchte libasound2-dev beim Bauen). Gleiche Version wie im Abhängigkeitsbaum (über mxl-sys). `libc`: Echtzeit-
+# Priorität (SCHED_FIFO), mlockall, DSCP-Markierung der RTP-Pakete — nicht über die Standardbibliothek erreichbar.
+libloading = "0.8.9"
+libc = "0.2"
+# `socket2`: SO_REUSEADDR vor dem Binden, Multicast-Schnittstelle und DSCP (IP_TOS) — `std::net::UdpSocket` kann beides nicht; die Kiste
+# ist über tokio schon im Abhängigkeitsbaum (0.6.5).
+socket2 = { version = "0.6.5", features = ["all"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }

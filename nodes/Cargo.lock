@@ -1521,6 +1521,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-lowlat-mixer"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libloading",
+ "mxl",
+ "mxl-sys",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde",
+ "serde_json",
+ "socket2",
+ "tokio",
+]
+
+[[package]]
 name = "omp-mediaio"
 version = "0.1.0"
 dependencies = [

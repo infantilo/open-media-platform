@@ -2720,6 +2720,22 @@ Alle ffmpeg-/ffprobe-Läufe der Plattform — der Workflow-Schritt **Script**, d
 
 **Medien auf anderen Hosts (Pfadzuordnung).** Ein Job auf einem anderen Host braucht Zugriff auf dieselben Dateien: gemeinsamer Speicher (NFS/SMB/Isilon …), der dort eingehängt ist. Tragen Sie unter *Pfadzuordnung* ein, wie der Pfad am Orchestrator (z. B. `/data/media`) auf dem Host heißt (z. B. `/mnt/media`). Fehlt der Zugriff, ist der Host für diesen Job „nicht geeignet“ (steht unter „Warum dort?“). Dateien werden nicht kopiert.
 
+## 10i. Studio-Mischer mit niedriger Latenz (Moderation, Konferenz, In-Ear)
+
+Der **Studio-Mischer** (`omp-lowlat-mixer`) ist für Wege gedacht, bei denen jede Millisekunde zählt: die eigene Stimme im Kopfhörer des Moderators, Rückwege für Gäste (Mix-minus), In-Ear-Mischungen. Er ist **kein Ersatz** für den Audiomischer: er kann Pegel, Mute und Sends, aber keinen EQ und keine Dynamik — jede zusätzliche Stufe kostet Zeit.
+
+**Aufbau:** Eingangsstreifen (Standard 8) → Sends → Busse (Standard 4, Bus 1 = Hauptmix). Jeder Bus wird auch als MXL-Ton-Flow bereitgestellt; für die übrige Plattform gelten dort die normalen Latenzen.
+
+**Quellen eines Streifens** (Feld *Quelle*): `mxl` (über den NMOS-Empfänger des Streifens oder `strip.N.setFlow`), `alsa:3` (Kartenkanal 3) bzw. `alsa:3-4` (Paar), `aes:1` / `aes:1-2` (AES67-Strom), `off`.
+
+**Ausgänge:** MXL-Flow je Bus; ALSA: im Busfeld den ersten Kanal des Paares eintragen; AES67: Bus *N* liegt auf den Kanälen 2*N*−1/2*N*, die SDP-Beschreibung steht im Parameter `aesTxSdp`.
+
+**Mix-minus für einen Gast:** im Busfeld *Mix-minus für …* den Streifen des Gastes wählen — der Bus enthält dann alle Streifen außer dem Gast.
+
+**Einstellungen** (Instanz-Optionen): Blockgröße (Standard 1 ms), ALSA-Geräte und Kanalzahlen, AES67-Adressen, Eingangs-Reserve, Echtzeit-Priorität. Mit `omp-lowlat-mixer --alsa-test hw:0,0 48 2` lässt sich vor dem Einsatz prüfen, welche Periodengröße die Karte schafft (die virtuelle Karte einer VM nimmt nur ≥ 2 ms an).
+
+**Wichtig für verlässliche Zeiten:** Der Mischer braucht Echtzeit-Rechte (`RLIMIT_RTPRIO`, z. B. `@audio - rtprio 95` in `limits.d`) und am besten feste CPU-Kerne (`OMP_CPU_AFFINITY`). Ohne diese Rechte läuft er mit normaler Priorität; die Kennzahl *Echtzeit* zeigt das. Aussetzer des Rechners fängt er dann mit einer größeren Eingangs-Reserve ab (*Reserve gewachsen*) — die Latenz steigt entsprechend. Die Zielwerte (2–15 ms Rundlauf) sind auf einem echten Host zu messen: `tools/lowlat-mixer/measure.py`, Karte mit Schleifenkabel.
+
 ## 11. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,
