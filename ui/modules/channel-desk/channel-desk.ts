@@ -14,7 +14,7 @@ import { mountUIBundleEl } from "../../shell/ui-bundle.ts";
 import { deckSession } from "../../shell/streamdeck/session.ts";
 import type { ConsoleEntry } from "../../shell/console-view.ts";
 import {
-  axisTicks, buildBlocks, fmtRemain, gangCall, nodeIdFromBundleUrl, nowOffsetPct, playlistNow, pruneSelection, stepChannel,
+  axisTicks, buildBlocks, TIMELINE_PAST_SHARE, fmtRemain, gangCall, nodeIdFromBundleUrl, nowOffsetPct, playlistNow, pruneSelection, stepChannel,
   summarize, summarizeGang, waitKindOf,
   type ChannelSummary, type ChannelValues, type GangAction, type GangResult, type TimelineEntry,
 } from "./multichannel-logic.ts";
@@ -313,9 +313,9 @@ export class ChannelDesk extends HTMLElement {
     // Zeitleiste: Fenster um die Sendeposition
     const v = ch.values;
     const tlEl = this.#q(c, "tl");
-    const now = v ? playlistNow(ch.tl, v.currentItemId, v.playheadPositionMs ?? 0) : null;
+    const now = v ? playlistNow(ch.tl, v.currentItemId, v.playheadPositionMs ?? 0, v.cuedItemId) : null;
     if (v && now !== null) {
-      const past = Math.round(this.#winMin * 60_000 * 0.2);
+      const past = Math.round(this.#winMin * 60_000 * TIMELINE_PAST_SHARE);
       const future = this.#winMin * 60_000 - past;
       const blocks = buildBlocks(v.items ?? [], ch.tl, now, v.currentItemId, past, future);
       tlEl.replaceChildren(
@@ -356,7 +356,7 @@ export class ChannelDesk extends HTMLElement {
   // Sendeposition gezeichnet, „jetzt“ ist für alle dieselbe Linie — dadurch liegen gleichzeitige Events untereinander).
   #updateCombined() {
     if (!this.#combined || !this.#allBox.isConnected) return;
-    const past = Math.round(this.#winMin * 60_000 * 0.2);
+    const past = Math.round(this.#winMin * 60_000 * TIMELINE_PAST_SHARE);
     const future = this.#winMin * 60_000 - past;
     const nowPct = nowOffsetPct(past, future);
     const ticks = axisTicks(Date.now(), past, future);
@@ -370,7 +370,7 @@ export class ChannelDesk extends HTMLElement {
     const rows = this.#channels.map((c) => {
       const lane = mk("lane");
       const v = c.values;
-      const now = v ? playlistNow(c.tl, v.currentItemId, v.playheadPositionMs ?? 0) : null;
+      const now = v ? playlistNow(c.tl, v.currentItemId, v.playheadPositionMs ?? 0, v.cuedItemId) : null;
       lane.append(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
       if (v && now !== null) {
         for (const b of buildBlocks(v.items ?? [], c.tl, now, v.currentItemId, past, future)) {

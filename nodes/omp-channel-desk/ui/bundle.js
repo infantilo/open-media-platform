@@ -11259,10 +11259,13 @@ function nowOffsetPct(pastMs, futureMs) {
   const span = pastMs + futureMs;
   return span > 0 ? pastMs / span * 100 : 0;
 }
-function playlistNow(tl, currentItemId, playheadMs) {
-  const e = tl.find((x) => x.itemId === currentItemId);
-  return e ? e.startMs + playheadMs : null;
+function playlistNow(tl, currentItemId, playheadMs, cuedItemId) {
+  const cur = currentItemId ? tl.find((x) => x.itemId === currentItemId) : void 0;
+  if (cur) return cur.startMs + playheadMs;
+  const cued = cuedItemId ? tl.find((x) => x.itemId === cuedItemId) : void 0;
+  return (cued ?? tl[0])?.startMs ?? null;
 }
+var TIMELINE_PAST_SHARE = 0.06;
 function fmtRemain(ms) {
   if (ms === null) return "\u2013:\u2013\u2013";
   const s = Math.max(0, Math.round(ms / 1e3));
@@ -11654,9 +11657,9 @@ var ChannelDesk = class extends HTMLElement {
     this.#q(c, "next").textContent = s.nextLabel ? `${t("mc.next")}: ${s.nextLabel}` : "";
     const v = ch.values;
     const tlEl = this.#q(c, "tl");
-    const now = v ? playlistNow(ch.tl, v.currentItemId, v.playheadPositionMs ?? 0) : null;
+    const now = v ? playlistNow(ch.tl, v.currentItemId, v.playheadPositionMs ?? 0, v.cuedItemId) : null;
     if (v && now !== null) {
-      const past = Math.round(this.#winMin * 6e4 * 0.2);
+      const past = Math.round(this.#winMin * 6e4 * TIMELINE_PAST_SHARE);
       const future = this.#winMin * 6e4 - past;
       const blocks = buildBlocks(v.items ?? [], ch.tl, now, v.currentItemId, past, future);
       tlEl.replaceChildren(...blocks.map((b) => {
@@ -11705,7 +11708,7 @@ var ChannelDesk = class extends HTMLElement {
   // Sendeposition gezeichnet, „jetzt“ ist für alle dieselbe Linie — dadurch liegen gleichzeitige Events untereinander).
   #updateCombined() {
     if (!this.#combined || !this.#allBox.isConnected) return;
-    const past = Math.round(this.#winMin * 6e4 * 0.2);
+    const past = Math.round(this.#winMin * 6e4 * TIMELINE_PAST_SHARE);
     const future = this.#winMin * 6e4 - past;
     const nowPct = nowOffsetPct(past, future);
     const ticks = axisTicks(Date.now(), past, future);
@@ -11727,7 +11730,7 @@ var ChannelDesk = class extends HTMLElement {
     const rows = this.#channels.map((c) => {
       const lane = mk("lane");
       const v = c.values;
-      const now = v ? playlistNow(c.tl, v.currentItemId, v.playheadPositionMs ?? 0) : null;
+      const now = v ? playlistNow(c.tl, v.currentItemId, v.playheadPositionMs ?? 0, v.cuedItemId) : null;
       lane.append(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
       if (v && now !== null) {
         for (const b of buildBlocks(v.items ?? [], c.tl, now, v.currentItemId, past, future)) {

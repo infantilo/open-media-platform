@@ -87,3 +87,10 @@ Deno.test("axisTicks: runde Minuten, begrenzte Anzahl", () => {
   assertEquals(axisTicks(now, 0, 0), []);
   assertEquals(axisTicks(now, 12 * 60_000, 48 * 60_000).length <= 8, true);
 });
+
+Deno.test("playlistNow: ohne laufendes Event gecuetes, sonst erstes Event", () => {
+  assertEquals(playlistNow(tl, undefined, 0), 0);
+  assertEquals(playlistNow(tl, "", 0, "c"), 90_000);
+  assertEquals(playlistNow(tl, "b", 5_000, "c"), 65_000);
+  assertEquals(playlistNow([], undefined, 0), null);
+});

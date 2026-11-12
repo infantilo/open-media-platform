@@ -135,11 +135,19 @@ export function nowOffsetPct(pastMs: number, futureMs: number): number {
   return span > 0 ? (pastMs / span) * 100 : 0;
 }
 
-/** Playlist-Zeit der Sendeposition: Beginn des laufenden Events + Playhead. */
-export function playlistNow(tl: TimelineEntry[], currentItemId: string | undefined, playheadMs: number): number | null {
-  const e = tl.find((x) => x.itemId === currentItemId);
-  return e ? e.startMs + playheadMs : null;
+/**
+ * Bezugspunkt der Zeitleiste in Playlist-Zeit — wie die Zeitleiste der Playlist selbst: laufendes Event + Playhead,
+ * sonst Beginn des gecueten Events, sonst des ersten. So zeigt auch ein Channel ohne Sendung seine geplanten Balken.
+ */
+export function playlistNow(tl: TimelineEntry[], currentItemId: string | undefined, playheadMs: number, cuedItemId?: string): number | null {
+  const cur = currentItemId ? tl.find((x) => x.itemId === currentItemId) : undefined;
+  if (cur) return cur.startMs + playheadMs;
+  const cued = cuedItemId ? tl.find((x) => x.itemId === cuedItemId) : undefined;
+  return (cued ?? tl[0])?.startMs ?? null;
 }
+
+/** Anteil des Fensters vor dem Bezugspunkt (wie in der Playlist-Zeitleiste). */
+export const TIMELINE_PAST_SHARE = 0.06;
 
 export function fmtRemain(ms: number | null): string {
   if (ms === null) return "–:––";
