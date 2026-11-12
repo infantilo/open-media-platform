@@ -23,6 +23,7 @@ import "./alert-bar.ts";
 import "./health-view.ts";
 import "./signal-path-view.ts";
 import "./scheduler-view.ts";
+import "./channels-view.ts";
 import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
@@ -81,6 +82,8 @@ const BASE_TABS: TabDef[] = [
   // VerbConfigure-gated (schlägt für Nutzer ohne diesen Verb einfach
   // fehl, exakt wie im bestehenden Workflow-Formular).
   { id: "scheduler", labelKey: "app.tab.scheduler", element: "omp-scheduler-view" },
+  // Kapitel 96: Mehrkanal-Übersicht für Playout-Channels (alle Channels des Bestands).
+  { id: "channels", labelKey: "app.tab.channels", element: "omp-channels-view" },
 ];
 
 // Kapitel 11 Teil 1 (docs/END-GOAL-FEATURES.md §11.4): eigener Tab statt

@@ -2038,6 +2038,13 @@ und nennt die Dauer:
 
 ![Messgerät: Schwarzbild- und Standbild-Alarm nach Ablauf der Haltezeit](screenshots/scope-qc-alarme.png)
 
+### Mehrere Playout-Channels betreuen (Mehrkanal-Übersicht)
+
+Sind Ihnen mehrere Playout-Channels zugewiesen, erscheint unten rechts der Knopf **Mehrkanal-Übersicht** (Techniker: Tab **Kanäle**). Jeder Channel hat eine Kachel mit Sendestand, Restzeit, Zeitleiste (10/30/60 Minuten) und Kennzahlen; die Ampel zeigt, ob er läuft, auf Bedienung wartet oder Aufmerksamkeit braucht.
+
+- **Gruppen-Start:** Channels ankreuzen, dann *Next*, *Take*, *Next Live*, *Hold* oder *Auto* — wirkt auf alle gewählten Channels, bei mehr als einem nach Rückfrage.
+- **Bearbeiten und Wechseln:** *Bearbeiten* öffnet die volle Playlist des Channels; die Leiste oben schaltet mit einem Klick (oder **Alt+←/→**, **Alt+1…9**) zu einem anderen Channel, **Alt+0** zurück zur Übersicht. Die Restzeit der anderen Channels bleibt dort sichtbar.
+
 ## 10a. Audiomischer-Konsole
 
 Die Konsole des Audiomischers zeigt Kanäle als **Kanalzüge** (Name, Pegel,

@@ -27,9 +27,11 @@ import type { ConsoleView, ConsoleEntry } from "./console-view.ts";
 // Gleicher Grund wie beim console-view.ts-Import oben (sonst optimiert der
 // Bundler das customElements.define(...) in console-board.ts weg).
 import "./console-board.ts";
+import "./channel-desk.ts";
 // Test-/Simulator-Seite Stream Deck (Kap. 40.2); Seiteneffekt-Import wie oben.
 import "./streamdeck/sim.ts";
 import type { ConsoleBoard } from "./console-board.ts";
+import type { ChannelDesk } from "./channel-desk.ts";
 import { whoami, showLoginOverlay, buildUserWidget, redeemSupportLink } from "./auth.ts";
 import { attachTaskBadge, landingButton, landingCard, landingGrid, loadWorkTiles, renderLanding, renderTileView } from "./operator-home.ts";
 import type { OperatorHome } from "./operator-home.ts";
@@ -187,6 +189,41 @@ function createConsoleHost(entries: ConsoleEntry[], workflowId: string): Console
   return document.createElement("omp-console-view") as ConsoleView;
 }
 
+// Kapitel 96: Betreut ein Operator mehrere Playout-Channels, gibt es neben der Konsolen-Ansicht die Mehrkanal-
+// Übersicht (Kacheln mit Zeitleiste, Gruppen-Start, schneller Wechsel). Der Umschalter erscheint nur dann; die
+// Wahl bleibt im Browser. Beide Ansichten bekommen dieselbe, live nachgeführte Konsolen-Liste.
+const DESK_PREF_KEY = "omp-console-desk";
+function withChannelDesk(host: ConsoleHost & HTMLElement): ConsoleHost {
+  const desk = document.createElement("omp-channel-desk") as ChannelDesk;
+  const toggle = document.createElement("button");
+  toggle.dataset.role = "desk-toggle";
+  toggle.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:50;display:none;box-shadow:0 2px 8px rgba(0,0,0,.4)";
+  let on = false;
+  try { on = localStorage.getItem(DESK_PREF_KEY) === "1"; } catch { /* Standard: Konsolen */ }
+  const apply = () => {
+    const usable = desk.channelCount > 1;
+    const showDesk = usable && on;
+    host.style.display = showDesk ? "none" : "";
+    desk.style.display = showDesk ? "" : "none";
+    toggle.style.display = usable ? "" : "none";
+    toggle.textContent = showDesk ? t("mc.toggle.consoles") : t("mc.toggle.desk");
+  };
+  toggle.addEventListener("click", () => {
+    on = !on;
+    try { localStorage.setItem(DESK_PREF_KEY, on ? "1" : "0"); } catch { /* egal */ }
+    apply();
+  });
+  host.after(desk, toggle);
+  desk.style.display = "none";
+  return {
+    async setEntries(entries, preselect) {
+      await host.setEntries(entries, preselect);
+      await desk.setEntries(entries);
+      apply();
+    },
+  };
+}
+
 function watchConsoleEntries(
   view: ConsoleHost,
   selectEntries: (consoles: ConsoleEntry[]) => ConsoleEntry[],
@@ -331,8 +368,9 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
       const selectEntries = (cs: ConsoleEntry[]) => cs.filter((c) => c.workflowId === workflowMatch[1]);
       const host = createConsoleHost(scoped, workflowMatch[1]);
       root.replaceChildren(host);
-      await host.setEntries(selectEntries(consoles));
-      watchConsoleEntries(host, selectEntries);
+      const both = withChannelDesk(host);
+      await both.setEntries(selectEntries(consoles));
+      watchConsoleEntries(both, selectEntries);
       if (workflowIds.length > 1 || workstation) homeHref = "/";
     } else if (workflowIds.length <= 1) {
       // Genau ein (oder gar kein) Workflow unter den zugewiesenen
@@ -342,8 +380,9 @@ async function renderShell(root: HTMLElement, username: string | null): Promise<
       // das später ändert).
       const host = createConsoleHost(consoles, workflowIds[0]);
       root.replaceChildren(host);
-      await host.setEntries(consoles);
-      watchConsoleEntries(host, (cs) => cs);
+      const both = withChannelDesk(host);
+      await both.setEntries(consoles);
+      watchConsoleEntries(both, (cs) => cs);
     } else {
       // §12.5 offene Frage 5 ("Kachel-Auswahl nach jedem Login (Vorschlag)
       // oder automatisch der zuletzt benutzte Workflow mit Umschalter?"):
