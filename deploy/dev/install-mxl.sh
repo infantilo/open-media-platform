@@ -51,6 +51,12 @@
 set -euo pipefail
 
 MXL_VERSION="v1.1.0"
+# Tags lassen sich verschieben: der Commit ist der eigentliche Pin (HAERTUNG-PLAN.md 98.2). Stimmt er nach dem Holen nicht, bricht das Skript ab.
+MXL_COMMIT="8f3f1096e804bfb822eb959cdf2fc23199a7d15d"
+# vcpkg bestimmt die Versionen der C++-Abhängigkeiten von MXL (dessen vcpkg.json hat nur Untergrenzen, keine Baseline) — ohne Pin zöge
+# jede frische Installation den jeweils neuesten Stand. Frischer Checkout wird auf diesen Commit gesetzt; ein vorhandener Checkout wird
+# nicht verschoben, nur gemeldet (ein anderer Stand ändert die gebaute Bibliothek).
+VCPKG_COMMIT="40a9bd4ccdf5dc14ff76d4ed47d46a226ce84a83"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MXL_SRC_DIR="${MXL_SRC_DIR:-$ROOT_DIR/third_party/mxl}"
@@ -84,8 +90,12 @@ if [ ! -x "$VCPKG_ROOT/vcpkg" ]; then
     exit 1
   else
     git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+    git -C "$VCPKG_ROOT" checkout --detach "$VCPKG_COMMIT"
   fi
   "$VCPKG_ROOT/bootstrap-vcpkg.sh" --disableMetrics
+fi
+if [ "$(git -C "$VCPKG_ROOT" rev-parse HEAD 2>/dev/null)" != "$VCPKG_COMMIT" ]; then
+  echo "Hinweis: vcpkg in $VCPKG_ROOT steht auf $(git -C "$VCPKG_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?'), gepinnt ist ${VCPKG_COMMIT:0:12} (VCPKG_COMMIT) — C++-Abhängigkeiten können abweichen." >&2
 fi
 
 echo "== Clone dmf-mxl/mxl @ $MXL_VERSION =="
@@ -103,6 +113,12 @@ if [ -d "$MXL_SRC_DIR/.git" ]; then
 else
   mkdir -p "$(dirname "$MXL_SRC_DIR")"
   git clone --depth 1 --branch "$MXL_VERSION" https://github.com/dmf-mxl/mxl "$MXL_SRC_DIR"
+fi
+
+if [ "$(git -C "$MXL_SRC_DIR" rev-parse "HEAD^{commit}")" != "$MXL_COMMIT" ]; then
+  echo "Fehler: $MXL_SRC_DIR steht auf $(git -C "$MXL_SRC_DIR" rev-parse HEAD), erwartet $MXL_COMMIT ($MXL_VERSION). Tag verschoben oder fremder Checkout." >&2
+  echo "Prüfen; nur nach bewusster Entscheidung MXL_COMMIT in diesem Skript und in .github/workflows/ci.yml ändern." >&2
+  exit 1
 fi
 
 echo "== OMP-eigene Patches anwenden (deploy/dev/mxl-patches/) =="

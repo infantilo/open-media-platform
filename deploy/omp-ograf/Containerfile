@@ -1,7 +1,7 @@
 # OGraf-Grafik (omp-ograf) als importierbares Microservice-Image: Node, Web-Renderer (GStreamer wpesrc / WPE-WebKit) und MXL-Laufzeit.
 # Vorlagen: was beim Bauen in `templates/` liegt (prepare.sh kopiert OMP_OGRAF_TEMPLATES, Standard data/ograf-templates); die eingebaute
 # Untertitel-Vorlage legt der Node selbst an.
-FROM debian:bookworm-slim
+FROM docker.io/library/debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates libunwind8 libdw1 \

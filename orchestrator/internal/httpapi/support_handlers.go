@@ -276,14 +276,15 @@ Dateien / files
   selftest.json      Ampel-Selbsttest (Befunde mit nächstem Schritt)
   api/*.json         Version, Nodes, Instanzen, Hosts, Cluster, Einstellungen, Workflows ...
   logs/*.json        Fehler und Warnungen des gewählten Zeitraums, gruppierte Probleme
-  system/*.txt       Betriebssystem, Speicher, Platten, Prozesse, Kernel-Meldungen
+  system/*.txt       Betriebssystem, Speicher, Platten, Prozesse, Kernel-Meldungen, libraries.txt (Systembibliotheken der Node-Programme mit Paket und Version)
   orchestrator/*.txt Goroutinen-Bericht und Speicherstatistik des Orchestrators
 
 Bitte die ganze ZIP-Datei an den Support senden. / Please send the whole ZIP file to support.
 `
 
 // handleSupportBundle liefert GET /api/v1/admin/support-bundle?minutes=N als ZIP.
-func handleSupportBundle(h http.Handler, raftDir string, clusterSvc ClusterService, sc *sysCache, ta ...*trends.Analyzer) http.HandlerFunc {
+// nodeBins liefert die Pfade der ausgelieferten Node-Programme und die PIDs der laufenden Instanzen (für system/libraries.txt); nil = kein Verzeichnis.
+func handleSupportBundle(h http.Handler, raftDir string, clusterSvc ClusterService, sc *sysCache, nodeBins func() ([]string, []int), ta ...*trends.Analyzer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		minutes := 120
 		if v, err := strconv.Atoi(r.URL.Query().Get("minutes")); err == nil && v > 0 {
@@ -343,6 +344,12 @@ func handleSupportBundle(h http.Handler, raftDir string, clusterSvc ClusterServi
 		}
 		for name, why := range localFailed {
 			failed["system/"+name] = why
+		}
+		// Bibliotheken der Node-Programme dieses Rechners (HAERTUNG-PLAN.md 98.2): welche Systembibliothek steckt in welchem Paket.
+		if nodeBins != nil {
+			if bins, pids := nodeBins(); len(bins) > 0 {
+				add("system/libraries.txt", []byte(jobwire.LibraryReport(ctx, bins, os.Getenv("LD_LIBRARY_PATH"), pids...)))
+			}
 		}
 		labels := map[string]string{}
 		for _, h := range in.Hosts {

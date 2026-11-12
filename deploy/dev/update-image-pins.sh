@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ENVF="$ROOT/deploy/images.env"
 MODE=write; [ "${1:-}" = "--check" ] && MODE=check
-EXTERNAL=("$ROOT"/deploy/quadlets/*.container "$ROOT"/.github/workflows/ci.yml "$ROOT"/deploy/patroni/Dockerfile)
+EXTERNAL=("$ROOT"/deploy/quadlets/*.container "$ROOT"/.github/workflows/ci.yml "$ROOT"/deploy/patroni/Dockerfile "$ROOT"/deploy/omp-intercom/Containerfile "$ROOT"/deploy/omp-ograf/Containerfile "$ROOT"/deploy/subtitle-asr/Containerfile)
 bad=0
 while IFS='=' read -r name val; do
   case "$name" in ''|\#*) continue ;; esac

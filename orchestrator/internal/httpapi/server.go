@@ -664,7 +664,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Selbsttest und Support-Paket (Kap. 72): sammeln über den eigenen Router mit den Rechten der aufrufenden Person.
 	mux.HandleFunc("GET /api/v1/admin/selftest", g.requireVerbGlobal(authz.VerbAdmin, handleSelftest(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache, options.trends)))
 	mux.HandleFunc("POST /api/v1/admin/support/analyze", g.requireVerbGlobal(authz.VerbAdmin, handleAnalyzeUpload()))
-	mux.HandleFunc("GET /api/v1/admin/support-bundle", g.requireVerbGlobal(authz.VerbAdmin, handleSupportBundle(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache, options.trends)))
+	mux.HandleFunc("GET /api/v1/admin/support-bundle", g.requireVerbGlobal(authz.VerbAdmin, handleSupportBundle(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache, nodeBinaryPaths(launcherSvc), options.trends)))
 	// Orchestrator-Cluster (ARCHITECTURE.md §19.3, UMSETZUNG.md D12 Teil 1).
 	mux.HandleFunc("GET /api/v1/cluster/status", g.requireAuth(handleClusterStatus(clusterSvc)))
 	// D12 Teil 2: Laufzeit-Mitgliedschaft — Admin-Verb wie andere
@@ -1213,4 +1213,33 @@ func supportVerifier(s SupportAccessStore) SupportVerifier {
 		return nil
 	}
 	return s
+}
+
+// nodeBinaryPaths: Pfade der Programme aller Katalogeinträge mit Prozess-Runner (dedupliziert, Reihenfolge des Katalogs) und PIDs
+// der laufenden lokalen Instanzen.
+func nodeBinaryPaths(l interface {
+	Catalog() []launcher.CatalogEntry
+	List() []launcher.Instance
+}) func() ([]string, []int) {
+	if l == nil {
+		return nil
+	}
+	return func() ([]string, []int) {
+		seen := map[string]bool{}
+		var out []string
+		for _, e := range l.Catalog() {
+			if (e.Runner != "" && e.Runner != "process") || len(e.Command) == 0 || seen[e.Command[0]] {
+				continue
+			}
+			seen[e.Command[0]] = true
+			out = append(out, e.Command[0])
+		}
+		var pids []int
+		for _, i := range l.List() {
+			if i.PID > 0 && !i.Crashed {
+				pids = append(pids, i.PID)
+			}
+		}
+		return out, pids
+	}
 }

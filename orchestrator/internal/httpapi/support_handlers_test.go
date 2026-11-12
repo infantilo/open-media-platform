@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +92,7 @@ func TestSelftestHandlerUsesCallerCredentials(t *testing.T) {
 
 func TestSupportBundleZipIsRedactedAndComplete(t *testing.T) {
 	rec := httptest.NewRecorder()
-	handleSupportBundle(supportTestMux(t), "", nil, nil)(rec, authed("/api/v1/admin/support-bundle?minutes=30"))
+	handleSupportBundle(supportTestMux(t), "", nil, nil, nil)(rec, authed("/api/v1/admin/support-bundle?minutes=30"))
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/zip" ||
 		!strings.Contains(rec.Header().Get("Content-Disposition"), "omp-support-") {
 		t.Fatal(rec.Code, rec.Header())
@@ -182,7 +184,7 @@ func TestSelftestAndBundleIncludeHostSysinfo(t *testing.T) {
 
 	// Das Paket fragt frisch ab, schwärzt den Bericht und nennt den älteren Agent unter failed.
 	rec = httptest.NewRecorder()
-	handleSupportBundle(mux, "", nil, sc)(rec, authed("/api/v1/admin/support-bundle"))
+	handleSupportBundle(mux, "", nil, sc, nil)(rec, authed("/api/v1/admin/support-bundle"))
 	zr, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
 	if err != nil {
 		t.Fatal(err)
@@ -205,5 +207,48 @@ func TestSelftestAndBundleIncludeHostSysinfo(t *testing.T) {
 	_ = json.Unmarshal([]byte(all["manifest.json"]), &man)
 	if !strings.Contains(man.Failed["hosts/Alt-h3/sysinfo"], "unknown action") {
 		t.Errorf("älterer Agent nicht im manifest: %v", man.Failed)
+	}
+}
+
+func TestSupportBundleContainsLibraryInventory(t *testing.T) {
+	bin, err := filepath.EvalSymlinks("/bin/ls")
+	if err != nil {
+		t.Skip("kein /bin/ls")
+	}
+	rec := httptest.NewRecorder()
+	handleSupportBundle(supportTestMux(t), "", nil, nil, func() ([]string, []int) { return []string{bin}, []int{os.Getpid()} })(rec, authed("/api/v1/admin/support-bundle?minutes=30"))
+	zr, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range zr.File {
+		if f.Name != "system/libraries.txt" {
+			continue
+		}
+		rc, _ := f.Open()
+		b, _ := io.ReadAll(rc)
+		rc.Close()
+		if !strings.Contains(string(b), "libc.so.6 |") {
+			t.Errorf("libc fehlt im Bibliotheksverzeichnis:\n%s", b)
+		}
+		return
+	}
+	t.Error("system/libraries.txt fehlt im Support-Paket")
+}
+
+func TestNodeBinaryPathsDedupsAndSkipsContainers(t *testing.T) {
+	l := fakeCatalog{
+		{Type: "a", Runner: "process", Command: []string{"/x/omp-a"}},
+		{Type: "b", Runner: "process", Command: []string{"/x/omp-a"}},
+		{Type: "c", Runner: "podman", Image: "img"},
+		{Type: "d", Command: []string{"/x/omp-d"}},
+	}
+	got, _ := nodeBinaryPaths(l)()
+	if strings.Join(got, ",") != "/x/omp-a,/x/omp-d" {
+		t.Errorf("Pfade: %v", got)
+	}
+	var none LauncherService
+	if nodeBinaryPaths(none) != nil {
+		t.Error("ohne Launcher kein Verzeichnis")
 	}
 }

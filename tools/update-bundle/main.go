@@ -8,6 +8,7 @@
 //	    [-node omp-source=F ...] [-min-from V] [-migrations a.sql,b.sql] [-rolling-safe]
 //	    [-commit C] [-notes T] [-arch linux/amd64] [-unsigned]
 //	update-bundle verify -pub <trusted.pub> <paket.tar.gz>
+//	update-bundle sbom -version V -out <omp.cdx.json> [-root .] [-commit C]   (CycloneDX 1.6, sbom.go)
 package main
 
 import (
@@ -44,6 +45,8 @@ func main() {
 		err = pack(os.Args[2:])
 	case "verify":
 		err = verify(os.Args[2:])
+	case "sbom":
+		err = sbom(os.Args[2:])
 	default:
 		usage()
 	}
@@ -54,7 +57,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "Usage: update-bundle keygen|pack|verify …  (siehe Kopfkommentar in main.go)")
+	fmt.Fprintln(os.Stderr, "Usage: update-bundle keygen|pack|verify|sbom …  (siehe Kopfkommentar in main.go)")
 	os.Exit(2)
 }
 

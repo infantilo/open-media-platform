@@ -72,7 +72,10 @@ jobs:
       - name: MXL holen (fester Tag + OMP-Patches)
         run: |
           MXL_VERSION="$(sed -n 's/^MXL_VERSION="\(.*\)"/\1/p' deploy/dev/install-mxl.sh | head -1)"
+          MXL_COMMIT="$(sed -n 's/^MXL_COMMIT="\(.*\)"/\1/p' deploy/dev/install-mxl.sh | head -1)"
           git clone --depth 1 --branch "$MXL_VERSION" https://github.com/dmf-mxl/mxl third_party/mxl
+          # Commit ist der Pin, das Tag nur der Name (HAERTUNG-PLAN.md 98.2).
+          [ "$(git -C third_party/mxl rev-parse HEAD)" = "$MXL_COMMIT" ] || { echo "MXL-Tag $MXL_VERSION zeigt nicht mehr auf $MXL_COMMIT" >&2; exit 1; }
           for p in deploy/dev/mxl-patches/*.diff; do git -C third_party/mxl apply "$PWD/$p"; done
 
       - name: Rust-Toolchain

@@ -1,4 +1,4 @@
-.PHONY: image-pins-check streamdeck-udev preflight doctor update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak clean-cache
+.PHONY: sbom image-pins-check streamdeck-udev preflight doctor update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak clean-cache
 
 # Container-Images mit Digest (Audit 2026-10-23): eine Quelle für Makefile und Skripte, s. deploy/images.env.
 include deploy/images.env
@@ -109,6 +109,15 @@ update-bundle: ui nodes
 		-host-agent ../../dist/update/omp-host-agent -ui-dir ../../ui/dist \
 		-catalog ../../deploy/catalog.json -nodes-dir ../../nodes/target/$(NODES_PROFILE) $(UPDATE_BUNDLE_ARGS)
 	@echo "Paket: dist/omp-update-$(UPDATE_VERSION).tar.gz"
+	@$(MAKE) --no-print-directory sbom UPDATE_VERSION=$(UPDATE_VERSION) SBOM_OUT=dist/omp-update-$(UPDATE_VERSION).sbom.cdx.json
+
+# Software-Stückliste (CycloneDX 1.6 JSON, HAERTUNG-PLAN.md 98.2): Rust-Crates (aus Cargo.lock, mit Prüfsumme und Graph) und Go-Module der
+# ausgelieferten Programme. Liegt als Begleitdatei neben dem Update-Paket, NICHT darin: ein zusätzliches Ziel im signierten Paket würde
+# die Prüfung bereits ausgelieferter Supervisor-Versionen verwerfen ("Ziel nicht erlaubt"). Systembibliotheken: Support-Paket, system/libraries.txt.
+SBOM_OUT ?= dist/omp.sbom.cdx.json
+sbom:
+	mkdir -p $(dir $(SBOM_OUT))
+	cd tools/update-bundle && go run . sbom -root ../.. -version "$(UPDATE_VERSION)" -commit "$$(git rev-parse --short HEAD 2>/dev/null)" -out ../../$(SBOM_OUT)
 
 # Prüft den Node-Contract (ARCHITECTURE.md §5) gegen einen laufenden
 # Node (UMSETZUNG.md C9). NODE_URL erforderlich, z. B.:

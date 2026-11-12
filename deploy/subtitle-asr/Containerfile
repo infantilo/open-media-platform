@@ -1,7 +1,7 @@
 # Auto-Untertitel (omp-subtitle-asr) als vollständiges, importierbares Microservice-Image: Node, Spracherkennungs-Engine
 # (whisper.cpp) und Modelle sind dabei. Build-Kontext stellt build.sh zusammen (node/, mxl/, engine/).
 # Gleiche Debian-Bookworm-glibc wie der Host-Build des Nodes (kein eigener Rust-Build-Stage nötig).
-FROM debian:bookworm-slim
+FROM docker.io/library/debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \

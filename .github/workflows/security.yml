@@ -42,3 +42,22 @@ jobs:
         run: |
           cargo install cargo-audit --locked
           cd nodes && cargo audit
+
+  # HAERTUNG-PLAN.md 98.2: Lizenzen, Quellen und Verbote (nodes/deny.toml) bisher nur lokal in `make check`. cargo deny braucht die
+  # Paketstruktur (cargo metadata) und damit die Pfad-Abhängigkeit third_party/mxl (nicht gebaut, nur der feste Commit als Quelltext).
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: MXL-Quelltext (fester Commit)
+        run: |
+          MXL_VERSION="$(sed -n 's/^MXL_VERSION="\(.*\)"/\1/p' deploy/dev/install-mxl.sh | head -1)"
+          MXL_COMMIT="$(sed -n 's/^MXL_COMMIT="\(.*\)"/\1/p' deploy/dev/install-mxl.sh | head -1)"
+          git clone --depth 1 --branch "$MXL_VERSION" https://github.com/dmf-mxl/mxl third_party/mxl
+          [ "$(git -C third_party/mxl rev-parse HEAD)" = "$MXL_COMMIT" ] || { echo "MXL-Tag $MXL_VERSION zeigt nicht mehr auf $MXL_COMMIT" >&2; exit 1; }
+
+      - name: cargo deny
+        run: |
+          cargo install cargo-deny --locked
+          cd nodes && cargo deny check
