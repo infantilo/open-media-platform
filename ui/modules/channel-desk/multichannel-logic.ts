@@ -7,6 +7,11 @@ export interface ChannelItem {
   label: string;
   durationMs: number;
   eventType?: string;
+  startType?: string;
+  senderId?: string;
+  available?: boolean;
+  asset?: unknown;
+  readiness?: string;
 }
 
 export interface ChannelValues {
@@ -94,6 +99,25 @@ export interface TimelineBlock {
   leftPct: number;
   widthPct: number;
   current: boolean;
+  /** Farbklassen wie in der Playlist-Zeitleiste: onair, cued, live, ctl, fix, miss, bad (leer = geplant). */
+  cls: string;
+}
+
+/** Farbklassen eines Events — dieselben Regeln wie die Zeitleiste der Playlist selbst. */
+export function blockClass(it: ChannelItem | undefined, currentItemId?: string, cuedItemId?: string): string {
+  if (!it) return "";
+  const c: string[] = [];
+  const ctl = it.eventType === "HOLD" || it.eventType === "JUMP";
+  if (!ctl) {
+    if (it.available === false) c.push("miss");
+    else if (it.asset && it.readiness === "NOT_READY") c.push("bad");
+  }
+  if (it.id === currentItemId) c.push("onair");
+  else if (it.id === cuedItemId) c.push("cued");
+  if (it.startType === "fixtime") c.push("fix");
+  if (it.senderId) c.push("live");
+  if (ctl) c.push("ctl");
+  return c.join(" ");
 }
 
 /**
@@ -108,6 +132,7 @@ export function buildBlocks(
   currentItemId: string | undefined,
   pastMs: number,
   futureMs: number,
+  cuedItemId?: string,
 ): TimelineBlock[] {
   const span = pastMs + futureMs;
   if (span <= 0) return [];
@@ -125,6 +150,7 @@ export function buildBlocks(
       leftPct: ((s - from) / span) * 100,
       widthPct: Math.max(0.4, ((f - s) / span) * 100),
       current: e.itemId === currentItemId,
+      cls: blockClass(byId.get(e.itemId), currentItemId, cuedItemId),
     });
   }
   return out;

@@ -1,6 +1,6 @@
 import { assertEquals, assertAlmostEquals } from "jsr:@std/assert@1";
 import {
-  axisTicks, buildBlocks, fmtRemain, gangCall, nodeIdFromBundleUrl, playlistNow, pruneSelection, stepChannel, summarize, summarizeGang,
+  axisTicks, blockClass, buildBlocks, fmtRemain, gangCall, nodeIdFromBundleUrl, playlistNow, pruneSelection, stepChannel, summarize, summarizeGang,
   type ChannelItem, type TimelineEntry,
 } from "./multichannel-logic.ts";
 
@@ -93,4 +93,18 @@ Deno.test("playlistNow: ohne laufendes Event gecuetes, sonst erstes Event", () =
   assertEquals(playlistNow(tl, "", 0, "c"), 90_000);
   assertEquals(playlistNow(tl, "b", 5_000, "c"), 65_000);
   assertEquals(playlistNow([], undefined, 0), null);
+});
+
+Deno.test("blockClass: Farben wie in der Playlist-Zeitleiste", () => {
+  const it = (o: Partial<ChannelItem>): ChannelItem => ({ id: "x", label: "x", durationMs: 1, ...o });
+  assertEquals(blockClass(it({}), "y", "z"), "");
+  assertEquals(blockClass(it({}), "x"), "onair");
+  assertEquals(blockClass(it({}), "y", "x"), "cued");
+  assertEquals(blockClass(it({ senderId: "s" })), "live");
+  assertEquals(blockClass(it({ startType: "fixtime" })), "fix");
+  assertEquals(blockClass(it({ eventType: "HOLD" })), "ctl");
+  assertEquals(blockClass(it({ available: false })), "miss");
+  assertEquals(blockClass(it({ asset: {}, readiness: "NOT_READY" })), "bad");
+  assertEquals(blockClass(it({ eventType: "JUMP", available: false })), "ctl");
+  assertEquals(blockClass(it({ available: false }), "x"), "miss onair");
 });

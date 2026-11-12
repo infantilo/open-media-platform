@@ -69,20 +69,25 @@ omp-channel-desk .cd-prog{height:6px;border-radius:3px;background:var(--omp-surf
 omp-channel-desk .cd-prog>i{display:block;height:100%;background:var(--omp-accent,#4aa3ff)}
 omp-channel-desk .cd-next{min-height:1.3em;color:var(--omp-text-dim);font-size:var(--omp-font-size-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 omp-channel-desk .cd-tl{position:relative;height:26px;border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
-omp-channel-desk .cd-tl b{position:absolute;top:3px;bottom:3px;border-radius:2px;background:#4c5a70;overflow:hidden;font-weight:400;font-size:11px;line-height:20px;padding:0 3px;box-sizing:border-box;white-space:nowrap;color:#e8eef7;border-right:1px solid var(--omp-surface-raised)}
-omp-channel-desk .cd-tl b.cur{background:var(--omp-accent,#4aa3ff);color:#fff}
+omp-channel-desk .cd-tl b{position:absolute;top:3px;bottom:3px;border-radius:2px;background:linear-gradient(#3a6f9a,#24506f);overflow:hidden;font-weight:400;font-size:11px;line-height:20px;padding:0 3px;box-sizing:border-box;white-space:nowrap;color:#fff;border:1px solid #000}
 omp-channel-desk .cd-tl u{position:absolute;top:0;bottom:0;width:2px;background:#ff5c5c;text-decoration:none}
 omp-channel-desk .cd-stats{display:flex;gap:14px;color:var(--omp-text-dim);font-size:var(--omp-font-size-sm);font-variant-numeric:tabular-nums}
 omp-channel-desk .cd-all{display:flex;flex-direction:column;gap:3px;padding:10px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);background:var(--omp-surface)}
 omp-channel-desk .cd-all .row{display:flex;gap:8px;align-items:center}
 omp-channel-desk .cd-all .lbl{width:130px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--omp-font-size-sm);display:flex;gap:6px;align-items:center}
 omp-channel-desk .cd-all .lane{position:relative;flex:1;height:26px;border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
-omp-channel-desk .cd-all .lane b{position:absolute;top:3px;bottom:3px;border-radius:2px;background:#4c5a70;overflow:hidden;font-weight:400;font-size:11px;line-height:20px;padding:0 3px;box-sizing:border-box;white-space:nowrap;color:#e8eef7;border-right:1px solid var(--omp-surface-raised);cursor:pointer}
-omp-channel-desk .cd-all .lane b.cur{background:var(--omp-accent,#4aa3ff);color:#fff}
+omp-channel-desk .cd-all .lane b{position:absolute;top:3px;bottom:3px;border-radius:2px;background:linear-gradient(#3a6f9a,#24506f);overflow:hidden;font-weight:400;font-size:11px;line-height:20px;padding:0 3px;box-sizing:border-box;white-space:nowrap;color:#fff;border:1px solid #000;cursor:pointer}
 omp-channel-desk .cd-all .axis{position:relative;height:16px;flex:1;font-size:11px;color:var(--omp-text-dim);font-variant-numeric:tabular-nums}
 omp-channel-desk .cd-all .axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
 omp-channel-desk .cd-all .grid{position:absolute;top:0;bottom:0;width:1px;background:#ffffff14}
 omp-channel-desk .cd-all .nowline{position:absolute;top:0;bottom:0;width:2px;background:#ff5c5c}
+omp-channel-desk b.live{background:linear-gradient(#b3407a,#7d2455)!important}
+omp-channel-desk b.ctl{background:linear-gradient(#555,#3a3a3a)!important}
+omp-channel-desk b.fix{box-shadow:0 0 0 1px var(--omp-accent,#4aa3ff) inset}
+omp-channel-desk b.cued{background:linear-gradient(#c79a1c,#8a6a0a)!important;color:#1a1100!important}
+omp-channel-desk b.onair{background:linear-gradient(#35b862,#1c8a48)!important;color:#02150a!important}
+omp-channel-desk b.miss{background:repeating-linear-gradient(135deg,#c42b2b 0 6px,#7a1414 6px 12px)!important;box-shadow:0 0 0 2px #ff4040;z-index:1}
+omp-channel-desk b.bad{background:repeating-linear-gradient(135deg,#d98a14 0 6px,#7a4a08 6px 12px)!important;box-shadow:0 0 0 2px #ff9f1c;z-index:1}
 omp-channel-desk .cd-empty{color:var(--omp-text-dim);padding:24px;text-align:center}
 `;
 
@@ -317,7 +322,7 @@ export class ChannelDesk extends HTMLElement {
     if (v && now !== null) {
       const past = Math.round(this.#winMin * 60_000 * TIMELINE_PAST_SHARE);
       const future = this.#winMin * 60_000 - past;
-      const blocks = buildBlocks(v.items ?? [], ch.tl, now, v.currentItemId, past, future);
+      const blocks = buildBlocks(v.items ?? [], ch.tl, now, v.currentItemId, past, future, v.cuedItemId);
       tlEl.replaceChildren(
         ...blocks.map((b) => {
           const el = document.createElement("b");
@@ -325,7 +330,7 @@ export class ChannelDesk extends HTMLElement {
           el.style.width = `${b.widthPct}%`;
           el.textContent = b.label;
           el.title = b.label;
-          if (b.current) el.className = "cur";
+          el.className = b.cls;
           return el;
         }),
         Object.assign(document.createElement("u"), { style: `left:${nowOffsetPct(past, future)}%` }),
@@ -373,8 +378,8 @@ export class ChannelDesk extends HTMLElement {
       const now = v ? playlistNow(c.tl, v.currentItemId, v.playheadPositionMs ?? 0, v.cuedItemId) : null;
       lane.append(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
       if (v && now !== null) {
-        for (const b of buildBlocks(v.items ?? [], c.tl, now, v.currentItemId, past, future)) {
-          const el = Object.assign(document.createElement("b"), { textContent: b.label, title: b.label, className: b.current ? "cur" : "" });
+        for (const b of buildBlocks(v.items ?? [], c.tl, now, v.currentItemId, past, future, v.cuedItemId)) {
+          const el = Object.assign(document.createElement("b"), { textContent: b.label, title: b.label, className: b.cls });
           el.style.left = `${b.leftPct}%`;
           el.style.width = `${b.widthPct}%`;
           el.addEventListener("dblclick", () => this.#open(c.key));
