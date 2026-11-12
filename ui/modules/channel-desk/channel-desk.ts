@@ -11,8 +11,8 @@ import { confirmDialog } from "../../kit/omp-confirm.ts";
 import { showToast } from "../../kit/omp-toast.ts";
 import { t, type I18nKey } from "../../shell/i18n.ts";
 import { mountUIBundleEl } from "../../shell/ui-bundle.ts";
-import { deckSession } from "../../shell/streamdeck/session.ts";
 import type { ConsoleEntry } from "../../shell/console-view.ts";
+import type { DeckInput } from "./deck-logic.ts";
 import {
   attentionList, axisTicks, buildBlocks, childRows, nextByKind, planWarnings, TIMELINE_PAST_SHARE, upcomingList, urgencyOf,
   type AttentionItem, type Upcoming, fmtRemain, gangCall, nodeIdFromBundleUrl, nowOffsetPct, playlistNow, pruneSelection, stepChannel,
@@ -168,7 +168,6 @@ export class ChannelDesk extends HTMLElement {
   disconnectedCallback() {
     clearInterval(this.#timer);
     removeEventListener("keydown", this.#keyHandler);
-    for (const c of this.#channels) deckSession.unregisterTab(c.key);
   }
 
   /** Setzt die Konsolen-Liste (aus /api/v1/me/consoles oder dem Node-Bestand); wiederholt aufrufbar. */
@@ -197,6 +196,35 @@ export class ChannelDesk extends HTMLElement {
     this.#renderAll();
     void this.#poll();
   }
+
+  /** Wird bei jeder Änderung angezeigter Werte, der Auswahl oder des geöffneten Channels aufgerufen (Stream Deck). */
+  onModelChange?: () => void;
+
+  /** Stand für die Stream-Deck-Belegung (siehe deck-logic.ts). */
+  deckInput(armed: GangAction | null, openMode: boolean): DeckInput {
+    const first = attentionList(this.#channels.map((c) => ({ key: c.key, name: c.summary.name, list: c.upcoming })), 1)[0];
+    return {
+      channels: this.#channels.map((c) => ({
+        key: c.key, name: c.summary.name, health: c.summary.health, remainingMs: c.summary.remainingMs,
+        onAir: !!c.summary.onAir, selected: this.#selected.has(c.key),
+      })),
+      openKey: this.#openKey,
+      openMode,
+      attention: first ? { key: first.key, channel: first.channel, label: first.label, inMs: first.inMs, waiting: first.waiting, kind: first.kind === "live" ? "live" : "manual" } : undefined,
+      armed,
+    };
+  }
+  toggleSelect(key: string) {
+    if (this.#selected.has(key)) this.#selected.delete(key); else this.#selected.add(key);
+    if (this.#openKey === null) this.#syncSelection(); else this.onModelChange?.();
+  }
+  selectAll() { this.#selected = new Set(this.#channels.map((c) => c.key)); this.#syncIfOverview(); }
+  selectNone() { this.#selected.clear(); this.#syncIfOverview(); }
+  #syncIfOverview() { if (this.#openKey === null) this.#syncSelection(); else this.onModelChange?.(); }
+  /** Channel am Bildschirm öffnen (`null` = Übersicht). */
+  openChannel(key: string | null) { this.#open(key); }
+  /** Werte sofort nachladen (auch wenn die Ansicht gerade verdeckt ist). */
+  async refreshNow() { await this.#poll(true); }
 
   /** Channels, die die Ansicht zeigt (für die Shell: gibt es überhaupt etwas zu übersichten?). */
   get channelCount(): number { return this.#channels.length; }
@@ -531,6 +559,7 @@ export class ChannelDesk extends HTMLElement {
       c.card.classList.toggle("sel", this.#selected.has(c.key));
       (this.#q(c.card, "sel") as HTMLInputElement).checked = this.#selected.has(c.key);
     }
+    this.onModelChange?.();
     this.#selInfo.textContent = this.#selected.size ? t("mc.selected", { n: this.#selected.size }) : "";
     for (const b of this.#gangBtns) b.disabled = this.#selected.size === 0;
   }
@@ -538,11 +567,16 @@ export class ChannelDesk extends HTMLElement {
   // ---- Gruppen-Start --------------------------------------------------------------------------------------------
 
   async #gang(a: GangAction) {
-    const targets = this.#channels.filter((c) => this.#selected.has(c.key));
+    await this.runAction(a, [...this.#selected], true);
+  }
+
+  /** Aktion auf Channels (Schlüssel); `ask`: bei mehr als einem Channel erst bestätigen (Stream Deck bestätigt selbst per Doppeldruck). */
+  async runAction(a: GangAction, keys: string[], ask: boolean) {
+    const targets = this.#channels.filter((c) => keys.includes(c.key));
     if (targets.length === 0) return;
     const action = t(`mc.act.${a}` as I18nKey);
     // Ein Klick soll nie versehentlich mehrere Sendungen fahren: bei mehr als einem Channel erst bestätigen.
-    if (targets.length > 1) {
+    if (ask && targets.length > 1) {
       const ok = await confirmDialog(t("mc.confirm", { action, n: targets.length, names: targets.map((c) => c.summary.name).join(", ") }), { confirmLabel: action });
       if (!ok) return;
     }
@@ -570,6 +604,7 @@ export class ChannelDesk extends HTMLElement {
     if (key === this.#openKey) return;
     this.#openKey = key;
     this.#renderAll();
+    this.onModelChange?.();
   }
 
   #onKey(ev: KeyboardEvent) {
@@ -601,7 +636,6 @@ export class ChannelDesk extends HTMLElement {
     for (const c of this.#channels) c.switchBtn.classList.toggle("active", c.key === this.#openKey);
 
     if (this.#openKey === null) {
-      for (const c of this.#channels) deckSession.unregisterTab(c.key);
       this.#editHost = undefined;
       if (this.#loading) {
         this.#main.replaceChildren(Object.assign(document.createElement("p"), { className: "cd-empty", textContent: t("mc.loading") }));
@@ -626,16 +660,14 @@ export class ChannelDesk extends HTMLElement {
     void (async () => {
       const el = await mountUIBundleEl(host, ch.entry.uiBundleUrl);
       if (this.#editHost !== host) return; // zwischenzeitlich weitergewechselt
-      for (const c of this.#channels) if (c.key !== ch.key) deckSession.unregisterTab(c.key);
-      if (el) deckSession.registerTab(ch.key, ch.entry.nodeLabel, el, ch.entry.uiBundleUrl.split("/").pop() ?? "");
-      else host.replaceChildren(Object.assign(document.createElement("p"), { className: "cd-empty", textContent: t("mc.noBundle", { name: ch.entry.nodeLabel }) }));
+      if (!el) host.replaceChildren(Object.assign(document.createElement("p"), { className: "cd-empty", textContent: t("mc.noBundle", { name: ch.entry.nodeLabel }) }));
     })();
   }
 
   // ---- Abfrage --------------------------------------------------------------------------------------------------
 
-  async #poll() {
-    if (this.#polling || this.#channels.length === 0 || this.offsetParent === null) return; // versteckt: nicht abfragen
+  async #poll(force = false) {
+    if (this.#polling || this.#channels.length === 0 || (!force && this.offsetParent === null)) return; // versteckt: nicht abfragen
     this.#polling = true;
     this.#tick++;
     try {
@@ -649,6 +681,7 @@ export class ChannelDesk extends HTMLElement {
     }
     this.#updateAttention();
     this.#refreshViews();
+    this.onModelChange?.();
   }
 
   async #pollOne(c: Channel) {

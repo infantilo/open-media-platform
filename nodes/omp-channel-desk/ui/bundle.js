@@ -161,6 +161,10 @@ var de = {
   "mc.attn.title": "N\xE4chste Handlung",
   "mc.attn.tip": "N\xE4chste manuelle oder Live-Ereignisse \xFCber alle Channels \u2014 z. B. wann ein externer Regieplatz zu starten ist",
   "mc.attn.none": "Keine manuelle oder Live-Aktion geplant",
+  "mc.deck.back": "\xDCBERSICHT",
+  "mc.deck.open": "\xD6FFNEN",
+  "mc.deck.again": "nochmal",
+  "mc.deck.noAttn": "keine Handlung",
   "mc.title": "Mehrkanal-\xDCbersicht",
   "mc.overview": "\xDCbersicht",
   "mc.empty": "Keine Playout-Channels zugewiesen.",
@@ -3346,6 +3350,10 @@ var en = {
   "mc.attn.title": "Next action",
   "mc.attn.tip": "Next manual or live events across all channels \u2014 e.g. when an external control room has to be started",
   "mc.attn.none": "No manual or live action planned",
+  "mc.deck.back": "OVERVIEW",
+  "mc.deck.open": "OPEN",
+  "mc.deck.again": "press again",
+  "mc.deck.noAttn": "no action",
   "mc.title": "Multi-channel overview",
   "mc.overview": "Overview",
   "mc.empty": "No playout channels assigned.",
@@ -6868,4339 +6876,6 @@ async function mountUIBundleEl(container, apiBase) {
   }
 }
 
-// ui/shell/streamdeck/adapter.ts
-var RELAYOUT_EVENT = "omp-streamdeck-relayout";
-function adapterOf(el) {
-  const a = el?.streamDeck;
-  return a && typeof a.getLayout === "function" && typeof a.onKey === "function" ? a : null;
-}
-
-// ui/shell/streamdeck/autoraster-logic.ts
-function buildItems(d) {
-  const items = [];
-  for (const p of d.parameters) {
-    if (p.readonly) continue;
-    if (p.type === "boolean") items.push({
-      kind: "toggle",
-      name: p.name
-    });
-    else if (p.type === "enum" && p.range && "values" in p.range && p.range.values.length > 0) {
-      items.push({
-        kind: "enum",
-        name: p.name,
-        values: p.range.values
-      });
-    }
-  }
-  for (const m of d.methods) if (m.args.length === 0) items.push({
-    kind: "trigger",
-    name: m.name
-  });
-  return items;
-}
-function buildDialItems(d) {
-  const out = [];
-  for (const p of d.parameters) {
-    if (!p.readonly && p.type === "number" && p.range && "min" in p.range && p.range.max > p.range.min) {
-      out.push({
-        name: p.name,
-        min: p.range.min,
-        max: p.range.max,
-        unit: p.unit ?? ""
-      });
-    }
-  }
-  return out;
-}
-function dialStep(spec) {
-  const raw = (spec.max - spec.min) / 100;
-  const exp = Math.floor(Math.log10(raw));
-  for (const m of [
-    1,
-    2,
-    5,
-    10
-  ]) {
-    const v = m * Math.pow(10, exp);
-    if (v >= raw * 0.999) return Math.round(v * 1e9) / 1e9;
-  }
-  return raw;
-}
-function applyDial(value, delta, spec) {
-  const v = Math.min(spec.max, Math.max(spec.min, value + delta * dialStep(spec)));
-  return Math.round(v * 1e6) / 1e6;
-}
-function nextEnum(values, cur) {
-  const i = values.indexOf(String(cur));
-  return values[(i + 1) % values.length];
-}
-function shortName(name) {
-  return name.replace(/[._]+/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2");
-}
-function keyFor(item, value) {
-  if (item.kind === "toggle") return {
-    label: shortName(item.name),
-    state: value === true ? "onair" : "off",
-    dim: value === void 0
-  };
-  if (item.kind === "enum") return {
-    label: shortName(item.name),
-    sub: value === void 0 ? void 0 : String(value),
-    state: "off"
-  };
-  return {
-    label: shortName(item.name),
-    state: "off",
-    icon: "\u25B6"
-  };
-}
-function formatDial(v, unit) {
-  if (typeof v !== "number") return "\u2013";
-  return `${Math.round(v * 100) / 100}${unit ? ` ${unit}` : ""}`;
-}
-function layoutAuto(items, dials, values, cols, rows, dialCount, page) {
-  const cells = cols * rows;
-  const perPage = items.length > cells ? cells - 1 : cells;
-  const pages = Math.max(1, Math.ceil(items.length / Math.max(1, perPage)));
-  const p = Math.min(Math.max(0, page), pages - 1);
-  const visible2 = items.slice(p * perPage, p * perPage + perPage);
-  const keys = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const grid = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  visible2.forEach((it, i) => {
-    const r = Math.floor(i / cols), c = i % cols;
-    keys[r][c] = keyFor(it, values[it.name]);
-    grid[r][c] = it;
-  });
-  const dialPages = dialCount > 0 ? Math.max(1, Math.ceil(dials.length / dialCount)) : 1;
-  const visibleDials = dialCount > 0 ? dials.slice(p % dialPages * dialCount, p % dialPages * dialCount + dialCount) : [];
-  const dd = visibleDials.map((d) => ({
-    label: shortName(d.name),
-    value: formatDial(values[d.name], d.unit),
-    fill: typeof values[d.name] === "number" ? (values[d.name] - d.min) / (d.max - d.min) : void 0
-  }));
-  return {
-    keys,
-    dials: dd,
-    pages: Math.max(pages, dialCount > 0 ? dialPages : 1),
-    cells: grid,
-    visible: visible2,
-    visibleDials
-  };
-}
-
-// ui/shell/streamdeck/autoraster.ts
-function proxyIO(nodeId) {
-  const base = `/api/v1/nodes/${nodeId}`;
-  return {
-    async descriptor() {
-      const r = await apiFetch(`${base}/descriptor`);
-      if (!r.ok) throw new Error(`descriptor ${r.status}`);
-      return await r.json();
-    },
-    async getParam(name) {
-      const r = await apiFetch(`${base}/params/${name}`);
-      if (!r.ok) throw new Error(`param ${name} ${r.status}`);
-      const j = await r.json();
-      return j && typeof j === "object" && "value" in j ? j.value : j;
-    },
-    async setParam(name, value) {
-      const r = await apiFetch(`${base}/params/${name}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          value
-        })
-      });
-      if (!r.ok) throw new Error(`set ${name} ${r.status}`);
-    },
-    async call(name, body) {
-      const r = await apiFetch(`${base}/methods/${name}`, {
-        method: "POST",
-        headers: body ? {
-          "Content-Type": "application/json"
-        } : void 0,
-        body: body ? JSON.stringify(body) : void 0
-      });
-      if (!r.ok) throw new Error(`call ${name} ${r.status}`);
-    }
-  };
-}
-var AutoRasterAdapter = class {
-  io;
-  #items;
-  #dials;
-  #values;
-  #last;
-  #ready;
-  #ctx;
-  /** Node meldet `operatorWait` (Playout-Automation): wartet die Sendung auf den Operator, blinkt die „next“-Taste. */
-  #hasWait;
-  #waiting;
-  #phase;
-  #blink;
-  /** Vom Broker gesetzt: Anzeige neu aufbauen. */
-  onChange;
-  /** Vom Broker gesetzt: Fehlermeldung. */
-  onError;
-  constructor(io) {
-    this.io = io;
-    this.#items = [];
-    this.#dials = [];
-    this.#values = {};
-    this.#last = null;
-    this.#ready = false;
-    this.#ctx = null;
-    this.#hasWait = false;
-    this.#waiting = false;
-    this.#phase = false;
-    this.#blink = null;
-    this.onChange = () => {
-    };
-    this.onError = () => {
-    };
-    void this.#init();
-  }
-  async #init() {
-    try {
-      const d = await this.io.descriptor();
-      this.#items = buildItems(d);
-      this.#dials = buildDialItems(d);
-      this.#hasWait = d.parameters.some((p) => p.name === "operatorWait");
-      this.#ready = true;
-      await this.refresh();
-    } catch (e) {
-      this.onError(e);
-    }
-    this.onChange();
-  }
-  getLayout(ctx) {
-    this.#ctx = ctx;
-    if (!this.#ready) return {
-      keys: [
-        [
-          {
-            label: "\u2026",
-            dim: true
-          }
-        ]
-      ]
-    };
-    this.#last = layoutAuto(this.#items, this.#dials, this.#values, ctx.cols, ctx.rows, ctx.dials, ctx.page);
-    if (this.#waiting) {
-      this.#last.cells.forEach((row, r) => row.forEach((it, c) => {
-        const k = this.#last.keys[r][c];
-        if (k && it?.kind === "trigger" && it.name === "next") this.#last.keys[r][c] = {
-          ...k,
-          state: this.#phase ? "cue" : "off",
-          sub: "!"
-        };
-      }));
-    }
-    return this.#last;
-  }
-  onKey(row, col, down) {
-    if (!down) return;
-    const item = this.#last?.cells[row]?.[col];
-    if (!item) return;
-    void this.#act(item);
-  }
-  async #act(item) {
-    try {
-      if (item.kind === "toggle") {
-        const v = !(this.#values[item.name] === true);
-        this.#values[item.name] = v;
-        this.onChange();
-        await this.io.setParam(item.name, v);
-      } else if (item.kind === "enum") {
-        const v = nextEnum(item.values, this.#values[item.name]);
-        this.#values[item.name] = v;
-        this.onChange();
-        await this.io.setParam(item.name, v);
-      } else {
-        await this.io.call(item.name);
-      }
-    } catch (e) {
-      this.onError(e);
-    }
-    await this.refresh();
-  }
-  onDial(index, delta) {
-    const spec = this.#last?.visibleDials[index];
-    if (!spec) return;
-    const cur = typeof this.#values[spec.name] === "number" ? this.#values[spec.name] : spec.min;
-    const v = applyDial(cur, delta, spec);
-    this.#values[spec.name] = v;
-    this.onChange();
-    this.io.setParam(spec.name, v).catch((e) => this.onError(e));
-  }
-  async refresh() {
-    const names = /* @__PURE__ */ new Set();
-    for (const i of this.#last?.visible ?? this.#items.slice(0, 64)) if (i.kind !== "trigger") names.add(i.name);
-    for (const d of this.#last?.visibleDials ?? []) names.add(d.name);
-    let changed = false;
-    await Promise.all([
-      ...names
-    ].map(async (n) => {
-      try {
-        const v = await this.io.getParam(n);
-        if (JSON.stringify(v) !== JSON.stringify(this.#values[n])) {
-          this.#values[n] = v;
-          changed = true;
-        }
-      } catch {
-      }
-    }));
-    if (this.#hasWait) {
-      try {
-        const raw = await this.io.getParam("operatorWait");
-        const w = typeof raw === "string" ? JSON.parse(raw) : raw;
-        this.#setWaiting(!!(w && typeof w === "object" && w.kind));
-      } catch {
-      }
-    }
-    if (changed) this.onChange();
-  }
-  #setWaiting(on) {
-    if (on === this.#waiting) return;
-    this.#waiting = on;
-    this.#phase = on;
-    if (on) {
-      this.#blink = globalThis.setInterval(() => {
-        this.#phase = !this.#phase;
-        this.onChange();
-      }, 500);
-    } else if (this.#blink) {
-      clearInterval(this.#blink);
-      this.#blink = null;
-    }
-    this.onChange();
-  }
-  dispose() {
-    if (this.#blink) clearInterval(this.#blink);
-    this.#blink = null;
-  }
-  get context() {
-    return this.#ctx;
-  }
-};
-
-// ui/shell/streamdeck/plot-logic.ts
-var clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-function biquadMagDb(kind, f0, q, gainDb, f, fs = 48e3) {
-  f0 = clamp(f0, 10, fs * 0.45);
-  q = clamp(q, 0.1, 20);
-  const w0 = 2 * Math.PI * f0 / fs, sw = Math.sin(w0), cw = Math.cos(w0);
-  const alpha = sw / (2 * q), A = Math.pow(10, gainDb / 40);
-  let b0, b1, b2, a0, a1, a2;
-  if (kind === "hp") {
-    b0 = (1 + cw) / 2;
-    b1 = -(1 + cw);
-    b2 = b0;
-    a0 = 1 + alpha;
-    a1 = -2 * cw;
-    a2 = 1 - alpha;
-  } else if (kind === "peak") {
-    b0 = 1 + alpha * A;
-    b1 = -2 * cw;
-    b2 = 1 - alpha * A;
-    a0 = 1 + alpha / A;
-    a1 = -2 * cw;
-    a2 = 1 - alpha / A;
-  } else {
-    const s = 2 * Math.sqrt(A) * alpha;
-    if (kind === "low") {
-      b0 = A * (A + 1 - (A - 1) * cw + s);
-      b1 = 2 * A * (A - 1 - (A + 1) * cw);
-      b2 = A * (A + 1 - (A - 1) * cw - s);
-      a0 = A + 1 + (A - 1) * cw + s;
-      a1 = -2 * (A - 1 + (A + 1) * cw);
-      a2 = A + 1 + (A - 1) * cw - s;
-    } else {
-      b0 = A * (A + 1 + (A - 1) * cw + s);
-      b1 = -2 * A * (A - 1 + (A + 1) * cw);
-      b2 = A * (A + 1 + (A - 1) * cw - s);
-      a0 = A + 1 - (A - 1) * cw + s;
-      a1 = 2 * (A - 1 - (A + 1) * cw);
-      a2 = A + 1 - (A - 1) * cw - s;
-    }
-  }
-  const w = 2 * Math.PI * f / fs, c1 = Math.cos(w), s1 = Math.sin(w), c2 = Math.cos(2 * w), s2 = Math.sin(2 * w);
-  const nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2);
-  const dr = a0 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
-  return 10 * Math.log10((nr * nr + ni * ni) / (dr * dr + di * di));
-}
-function eqResponseDb(spec, f) {
-  let db = spec.hp ? biquadMagDb("hp", spec.hp, Math.SQRT1_2, 0, f) : 0;
-  for (const b of spec.bands) if (Math.abs(b.g) > 0.01) db += biquadMagDb(b.kind, b.f, b.q, b.g, f);
-  return db;
-}
-function compOutDb(spec, x) {
-  const { thr, ratio, knee, makeup } = spec;
-  const r = Math.max(1, ratio);
-  let y;
-  if (2 * (x - thr) < -knee) y = x;
-  else if (knee > 0 && 2 * Math.abs(x - thr) <= knee) y = x + (1 / r - 1) * (x - thr + knee / 2) ** 2 / (2 * knee);
-  else y = thr + (x - thr) / r;
-  return y + makeup;
-}
-var widthToQ = (freq, widthHz) => clamp(freq / Math.max(widthHz, 1), 0.1, 20);
-
-// ui/shell/streamdeck/adapters/audio-mixer-logic.ts
-var eqBand = (prop, band, label) => ({
-  prop,
-  label,
-  min: -24,
-  max: 12,
-  step: 0.5,
-  unit: "dB",
-  set: (v) => ({
-    method: "setEqGain",
-    body: {
-      band,
-      gainDb: v
-    }
-  })
-});
-var MODE_PARAMS = {
-  eq: {
-    params: [
-      eqBand("eqLow", "low", "Low"),
-      eqBand("eqMid", "mid", "Mid"),
-      eqBand("eqMid2", "mid2", "Mid 2"),
-      eqBand("eqHigh", "high", "High")
-    ],
-    toggles: [
-      {
-        prop: "eqBypass",
-        label: "EQ Bypass",
-        set: (on) => ({
-          method: "setEqBypass",
-          body: {
-            bypass: on
-          }
-        })
-      }
-    ]
-  },
-  dyn: {
-    params: [
-      {
-        prop: "compThreshold",
-        label: "Comp Thr",
-        min: -60,
-        max: 0,
-        step: 1,
-        unit: "dB",
-        set: (v) => ({
-          method: "setComp",
-          body: {
-            thresholdDb: v
-          }
-        })
-      },
-      {
-        prop: "compRatio",
-        label: "Comp Ratio",
-        min: 1,
-        max: 20,
-        step: 0.5,
-        unit: ":1",
-        set: (v) => ({
-          method: "setComp",
-          body: {
-            ratio: v
-          }
-        })
-      },
-      {
-        prop: "compMakeup",
-        label: "Makeup",
-        min: 0,
-        max: 24,
-        step: 0.5,
-        unit: "dB",
-        set: (v) => ({
-          method: "setComp",
-          body: {
-            makeupDb: v
-          }
-        })
-      },
-      {
-        prop: "gateThreshold",
-        label: "Gate Thr",
-        min: -90,
-        max: 0,
-        step: 1,
-        unit: "dB",
-        set: (v) => ({
-          method: "setGate",
-          body: {
-            thresholdDb: v
-          }
-        })
-      }
-    ],
-    toggles: [
-      {
-        prop: "compEnabled",
-        label: "Comp",
-        set: (on) => ({
-          method: "setComp",
-          body: {
-            enabled: on
-          }
-        })
-      },
-      {
-        prop: "gateEnabled",
-        label: "Gate",
-        set: (on) => ({
-          method: "setGate",
-          body: {
-            enabled: on
-          }
-        })
-      }
-    ]
-  },
-  pan: {
-    params: [
-      {
-        prop: "pan",
-        label: "Pan",
-        min: -1,
-        max: 1,
-        step: 0.05,
-        unit: "",
-        set: (v) => ({
-          method: "setPan",
-          body: {
-            pan: v
-          }
-        })
-      }
-    ],
-    toggles: [
-      {
-        prop: "phaseInvert",
-        label: "Phase",
-        set: (on) => ({
-          method: "setPhase",
-          body: {
-            invert: on
-          }
-        })
-      },
-      {
-        prop: "mainRoute",
-        label: "Main",
-        set: (on) => ({
-          method: "setMainRoute",
-          body: {
-            routed: on
-          }
-        })
-      }
-    ]
-  }
-};
-var EXTRA_PROPS = {
-  eq: [
-    "eqHpEnabled",
-    "eqHpFreq",
-    ...[
-      "Low",
-      "Mid",
-      "Mid2",
-      "High"
-    ].flatMap((b) => [
-      `eq${b}Freq`,
-      `eq${b}Width`
-    ])
-  ],
-  dyn: [
-    "compKnee"
-  ]
-};
-var GAIN = {
-  prop: "gain",
-  min: -60,
-  max: 12,
-  step: 0.5,
-  unit: "dB"
-};
-var clamp2 = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-var roundTo = (v, step) => Math.round(Math.round(v / step) * step * 1e6) / 1e6;
-function nudged(cur, steps, p) {
-  return roundTo(clamp2(cur + steps * p.step, p.min, p.max), p.step);
-}
-function fmt(v, unit) {
-  if (typeof v !== "number") return "\u2013";
-  const t2 = Math.abs(v) >= 100 ? v.toFixed(0) : (Math.round(v * 100) / 100).toString();
-  return unit ? `${t2} ${unit}` : t2;
-}
-var chShort = (c) => c.label.replace(/^omp-/, "").replace(/\s+Sender\s*\d+$/i, "") || c.id;
-var EQ_DEF = [
-  [
-    "Low",
-    "low",
-    100,
-    200
-  ],
-  [
-    "Mid",
-    "peak",
-    1e3,
-    1e3
-  ],
-  [
-    "Mid2",
-    "peak",
-    3500,
-    3500
-  ],
-  [
-    "High",
-    "high",
-    8e3,
-    4e3
-  ]
-];
-function plotSpec(s, id, mode, focus) {
-  const n = (prop, d) => num(s, id, prop) ?? d;
-  if (mode === "eq") {
-    return {
-      kind: "eq",
-      bypass: bool(s, id, "eqBypass"),
-      hp: bool(s, id, "eqHpEnabled") ? n("eqHpFreq", 80) : null,
-      bands: EQ_DEF.map(([b, kind, f0, w0]) => {
-        const f = n(`eq${b}Freq`, f0);
-        return {
-          kind,
-          f,
-          q: widthToQ(f, n(`eq${b}Width`, w0)),
-          g: n(`eq${b}`, 0)
-        };
-      }),
-      focus
-    };
-  }
-  if (mode === "dyn") {
-    return {
-      kind: "dyn",
-      on: bool(s, id, "compEnabled"),
-      thr: n("compThreshold", 0),
-      ratio: n("compRatio", 1),
-      makeup: n("compMakeup", 0),
-      knee: n("compKnee", 0),
-      gateOn: bool(s, id, "gateEnabled"),
-      gateThr: n("gateThreshold", -90)
-    };
-  }
-  return null;
-}
-var num = (s, id, prop) => {
-  const v = s.values[`${id}.${prop}`];
-  return typeof v === "number" ? v : void 0;
-};
-var bool = (s, id, prop) => s.values[`${id}.${prop}`] === true;
-function empty(rows, cols) {
-  return {
-    keys: Array.from({
-      length: rows
-    }, () => Array(cols).fill(null)),
-    act: Array.from({
-      length: rows
-    }, () => Array(cols).fill(null))
-  };
-}
-function layoutAudioMixer(s, cols, rows, dialCount, page) {
-  const { keys, act } = empty(rows, cols);
-  const dialAct = [];
-  const dials = [];
-  const sel = s.channels.find((c) => c.id === s.sel);
-  if (s.mode !== "mix" && sel) {
-    const m = MODE_PARAMS[s.mode];
-    const modeKeys = [
-      [
-        "mix",
-        "\u25C0 Mix"
-      ],
-      [
-        "eq",
-        "EQ"
-      ],
-      [
-        "dyn",
-        "Dynamik"
-      ],
-      [
-        "pan",
-        "Pan"
-      ]
-    ];
-    modeKeys.forEach(([mode, label], i) => {
-      if (i >= cols) return;
-      keys[0][i] = {
-        label,
-        sub: i === 0 ? chShort(sel) : void 0,
-        state: mode === s.mode ? "preset" : "off"
-      };
-      act[0][i] = {
-        t: "mode",
-        mode
-      };
-    });
-    const focus = Math.min(s.focus, m.params.length - 1);
-    const showSelectors = rows >= 2 && (rows >= 3 || page % 2 === 0);
-    if (showSelectors) {
-      m.params.forEach((p2, i) => {
-        if (i >= cols) return;
-        keys[1][i] = {
-          label: p2.label,
-          sub: fmt(num(s, sel.id, p2.prop), p2.unit),
-          state: i === focus ? "preset" : "off"
-        };
-        act[1][i] = {
-          t: "focus",
-          index: i
-        };
-      });
-      m.toggles.forEach((t2, j) => {
-        const c = m.params.length + j;
-        if (c >= cols) return;
-        const on = bool(s, sel.id, t2.prop);
-        keys[1][c] = {
-          label: t2.label,
-          state: on ? "onair" : "off"
-        };
-        const a = t2.set(!on);
-        act[1][c] = {
-          t: "call",
-          id: sel.id,
-          ...a
-        };
-      });
-    }
-    const fp = m.params[focus];
-    const showNudge = rows >= 3 || rows === 2 && page % 2 === 1;
-    if (showNudge) {
-      const r = rows >= 3 ? 2 : 1;
-      const steps = [
-        [
-          "\u2212",
-          -1
-        ],
-        [
-          "+",
-          1
-        ],
-        [
-          "\u2212\u2212",
-          -5
-        ],
-        [
-          "++",
-          5
-        ]
-      ];
-      steps.forEach(([label, n], i) => {
-        if (i >= cols) return;
-        keys[r][i] = {
-          label,
-          sub: i === 0 ? `${fp.label} ${fmt(num(s, sel.id, fp.prop), fp.unit)}` : void 0
-        };
-        act[r][i] = {
-          t: "nudge",
-          steps: n
-        };
-      });
-    }
-    m.params.slice(0, dialCount).forEach((p2, i) => {
-      const cur = num(s, sel.id, p2.prop);
-      dials.push({
-        label: p2.label,
-        value: fmt(cur, p2.unit),
-        fill: cur === void 0 ? void 0 : (cur - p2.min) / (p2.max - p2.min)
-      });
-      dialAct.push({
-        id: sel.id,
-        p: p2,
-        press: m.toggles[i] ? {
-          t: "call",
-          id: sel.id,
-          ...m.toggles[i].set(!bool(s, sel.id, m.toggles[i].prop))
-        } : void 0
-      });
-    });
-    const spec = plotSpec(s, sel.id, s.mode, focus);
-    if (spec) {
-      const start = m.params.length + m.toggles.length;
-      const cw = Math.min(4, cols - start);
-      if (rows >= 3 && cw >= 2) {
-        for (let r = 0; r < 3; r++) for (let c = 0; c < cw; c++) keys[r][start + c] = {
-          plot: {
-            spec,
-            cx: c,
-            cy: r,
-            cw,
-            ch: 3
-          }
-        };
-      }
-      for (let i = 0; i < dialCount; i++) {
-        const plot = {
-          spec,
-          cx: i,
-          cy: 0,
-          cw: dialCount,
-          ch: 1
-        };
-        dials[i] = dials[i] ? {
-          ...dials[i],
-          plot
-        } : {
-          label: "",
-          value: "",
-          plot
-        };
-      }
-    }
-    return {
-      keys,
-      act,
-      dials,
-      dialAct,
-      pages: rows === 2 ? 2 : 1
-    };
-  }
-  const screens = rows >= 3 ? 1 : rows === 2 ? 2 : 3;
-  const probe = Math.ceil(s.channels.length / cols) * screens;
-  const reserve = probe > 1;
-  const cap = Math.max(1, reserve ? cols - 1 : cols);
-  const chPages = Math.max(1, Math.ceil(s.channels.length / cap));
-  const pages = chPages * screens;
-  const p = clamp2(page, 0, pages - 1);
-  const slice = s.channels.slice(Math.floor(p / screens) * cap, Math.floor(p / screens) * cap + cap);
-  const screen = p % screens;
-  const rowKinds = rows >= 3 ? [
-    "mute",
-    "pfl",
-    "sel"
-  ] : rows === 2 ? screen === 0 ? [
-    "mute",
-    "sel"
-  ] : [
-    "pfl",
-    "sel"
-  ] : [
-    [
-      "mute",
-      "pfl",
-      "sel"
-    ][screen]
-  ];
-  slice.forEach((c, i) => {
-    rowKinds.forEach((kind, r) => {
-      if (kind === "mute") {
-        const on = bool(s, c.id, "mute");
-        keys[r][i] = {
-          label: chShort(c),
-          sub: "MUTE",
-          state: on ? "onair" : "off"
-        };
-        act[r][i] = {
-          t: "call",
-          id: c.id,
-          method: "setMute",
-          body: {
-            muted: !on
-          }
-        };
-      } else if (kind === "pfl") {
-        const on = bool(s, c.id, "pfl");
-        keys[r][i] = {
-          label: chShort(c),
-          sub: "PFL",
-          state: on ? "cue" : "off"
-        };
-        act[r][i] = {
-          t: "call",
-          id: c.id,
-          method: "setPfl",
-          body: {
-            enabled: !on
-          }
-        };
-      } else {
-        keys[r][i] = {
-          label: chShort(c),
-          sub: fmt(num(s, c.id, "gain"), "dB"),
-          state: c.id === s.sel ? "preset" : "off"
-        };
-        act[r][i] = {
-          t: "select",
-          id: c.id
-        };
-      }
-    });
-  });
-  slice.slice(0, dialCount).forEach((c) => {
-    const g = num(s, c.id, "gain");
-    dials.push({
-      label: chShort(c),
-      value: fmt(g, "dB"),
-      fill: g === void 0 ? void 0 : (g - GAIN.min) / (GAIN.max - GAIN.min),
-      dim: bool(s, c.id, "mute")
-    });
-    dialAct.push({
-      id: c.id,
-      p: {
-        ...GAIN,
-        set: (v) => ({
-          method: "setGain",
-          body: {
-            db: v
-          }
-        })
-      },
-      press: {
-        t: "call",
-        id: c.id,
-        method: "setMute",
-        body: {
-          muted: !bool(s, c.id, "mute")
-        }
-      }
-    });
-  });
-  return {
-    keys,
-    act,
-    dials,
-    dialAct,
-    pages
-  };
-}
-
-// ui/shell/streamdeck/adapters/audio-mixer.ts
-var BASE_PROPS = [
-  "gain",
-  "mute",
-  "pfl"
-];
-function audioMixerAdapter(io) {
-  const st = {
-    channels: [],
-    values: {},
-    sel: null,
-    mode: "mix",
-    focus: 0
-  };
-  let last = null;
-  const a = {
-    onChange: () => {
-    },
-    onError: (_e) => {
-    },
-    getLayout(ctx) {
-      last = layoutAudioMixer(st, ctx.cols, ctx.rows, ctx.dials, ctx.page);
-      return last;
-    },
-    onKey(row, col, down) {
-      if (!down) return;
-      const x = last?.act[row]?.[col];
-      if (x) void run(x);
-    },
-    onDial(i, delta) {
-      const d = last?.dialAct[i];
-      if (!d) return;
-      const key = `${d.id}.${d.p.prop}`;
-      const cur = typeof st.values[key] === "number" ? st.values[key] : d.p.min;
-      const v = nudged(cur, delta, d.p);
-      st.values[key] = v;
-      a.onChange();
-      const c = d.p.set(v);
-      io.call(`channel.${d.id}.${c.method}`, c.body).catch(a.onError);
-    },
-    onDialPress(i, down) {
-      const d = last?.dialAct[i];
-      if (down && d?.press) void run(d.press);
-    },
-    async refresh() {
-      try {
-        const raw = await io.getParam("channels");
-        const list = typeof raw === "string" ? JSON.parse(raw) : raw ?? [];
-        st.channels = list.map((c) => ({
-          id: c.id,
-          label: c.label
-        }));
-        if (st.sel && !st.channels.some((c) => c.id === st.sel)) {
-          st.sel = null;
-          st.mode = "mix";
-        }
-      } catch (e) {
-        a.onError(e);
-        return;
-      }
-      const props = /* @__PURE__ */ new Map();
-      for (const c of st.channels) props.set(c.id, [
-        ...BASE_PROPS
-      ]);
-      if (st.sel && st.mode !== "mix") {
-        const m = MODE_PARAMS[st.mode];
-        props.set(st.sel, [
-          ...BASE_PROPS,
-          ...m.params.map((p) => p.prop),
-          ...m.toggles.map((t2) => t2.prop),
-          ...st.mode === "pan" ? [] : EXTRA_PROPS[st.mode]
-        ]);
-      }
-      let changed = false;
-      await Promise.all([
-        ...props
-      ].flatMap(([id, ps]) => ps.map(async (p) => {
-        try {
-          const v = await io.getParam(`channel.${id}.${p}`);
-          if (st.values[`${id}.${p}`] !== v) {
-            st.values[`${id}.${p}`] = v;
-            changed = true;
-          }
-        } catch {
-        }
-      })));
-      if (changed || st.channels.length) a.onChange();
-    }
-  };
-  async function run(x) {
-    try {
-      if (x.t === "select") {
-        st.sel = x.id;
-        st.mode = "eq";
-        st.focus = 0;
-        await a.refresh();
-      } else if (x.t === "mode") {
-        st.mode = x.mode;
-        st.focus = 0;
-        await a.refresh();
-      } else if (x.t === "focus") {
-        st.focus = x.index;
-      } else if (x.t === "nudge") {
-        if (st.sel && st.mode !== "mix") {
-          const p = MODE_PARAMS[st.mode].params[Math.min(st.focus, MODE_PARAMS[st.mode].params.length - 1)];
-          const key = `${st.sel}.${p.prop}`;
-          const cur = typeof st.values[key] === "number" ? st.values[key] : p.min;
-          const v = nudged(cur, x.steps, p);
-          st.values[key] = v;
-          const c = p.set(v);
-          a.onChange();
-          await io.call(`channel.${st.sel}.${c.method}`, c.body);
-        }
-      } else {
-        await io.call(`channel.${x.id}.${x.method}`, x.body);
-        await a.refresh();
-        return;
-      }
-    } catch (e) {
-      a.onError(e);
-    }
-    a.onChange();
-  }
-  return a;
-}
-
-// ui/shell/streamdeck/adapters/device-hub-logic.ts
-var kindText = (d) => `${d.kind === "video" ? "Video" : "Audio"} ${d.direction === "output" ? "Aus" : "Ein"}`;
-function deviceKey(d) {
-  const err = d.status.startsWith("error");
-  return {
-    label: d.name,
-    sub: `${kindText(d)} \xB7 ${d.offered ? "EIN" : "AUS"}`,
-    state: err ? "error" : d.offered ? "preset" : "off",
-    dim: !d.present
-  };
-}
-function layoutHub(devices, cols, rows, dialCount, page) {
-  const slots = Math.max(1, rows * cols);
-  const items = [
-    {
-      key: {
-        label: "NEU SUCHEN",
-        state: "cue"
-      },
-      act: {
-        t: "rescan"
-      }
-    },
-    ...devices.map((d) => ({
-      key: deviceKey(d),
-      act: {
-        t: "toggle",
-        id: d.id,
-        on: !d.offered
-      }
-    }))
-  ];
-  const cap = items.length > slots ? Math.max(1, slots - 1) : slots;
-  const pages = Math.max(1, Math.ceil(items.length / cap));
-  const p = Math.min(Math.max(0, page), pages - 1);
-  const keys = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const act = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  items.slice(p * cap, p * cap + cap).forEach((it, i) => {
-    keys[Math.floor(i / cols)][i % cols] = it.key;
-    act[Math.floor(i / cols)][i % cols] = it.act;
-  });
-  const on = devices.filter((d) => d.offered).length;
-  const dials = [
-    {
-      label: "Angeboten",
-      value: `${on}/${devices.length}`,
-      fill: devices.length ? on / devices.length : 0
-    },
-    {
-      label: "Eing\xE4nge",
-      value: String(devices.filter((d) => d.direction === "input" && d.offered).length)
-    },
-    {
-      label: "Ausg\xE4nge",
-      value: String(devices.filter((d) => d.direction === "output" && d.offered).length)
-    },
-    {
-      label: "Fehler",
-      value: String(devices.filter((d) => d.status.startsWith("error")).length),
-      dim: !devices.some((d) => d.status.startsWith("error"))
-    }
-  ];
-  return {
-    keys,
-    act,
-    dials: dials.slice(0, dialCount),
-    pages
-  };
-}
-
-// ui/shell/streamdeck/adapters/device-hub.ts
-function deviceHubAdapter(io) {
-  let devices = [];
-  let last = null;
-  const a = {
-    onChange: () => {
-    },
-    onError: (_e) => {
-    },
-    getLayout(ctx) {
-      last = layoutHub(devices, ctx.cols, ctx.rows, ctx.dials, ctx.page);
-      return last;
-    },
-    onKey(row, col, down) {
-      if (!down) return;
-      const x = last?.act[row]?.[col];
-      if (!x) return;
-      void (async () => {
-        try {
-          if (x.t === "rescan") {
-            await io.call("rescan");
-            setTimeout(() => void a.refresh(), 1500);
-          } else {
-            const d = devices.find((v) => v.id === x.id);
-            if (d) d.offered = x.on;
-            a.onChange();
-            await io.call("setOffered", {
-              id: x.id,
-              on: x.on
-            });
-            await a.refresh();
-          }
-        } catch (e) {
-          a.onError(e);
-          await a.refresh();
-        }
-        a.onChange();
-      })();
-    },
-    async refresh() {
-      try {
-        const raw = await io.getParam("devices");
-        const v = typeof raw === "string" ? JSON.parse(raw) : raw;
-        devices = (Array.isArray(v) ? v : []).map((d) => ({
-          id: String(d.id),
-          name: String(d.name ?? d.id),
-          kind: String(d.kind ?? ""),
-          direction: String(d.direction ?? "input"),
-          offered: d.offered === true,
-          present: d.present !== false,
-          status: String(d.status ?? "")
-        }));
-        a.onChange();
-      } catch (e) {
-        a.onError(e);
-      }
-    }
-  };
-  return a;
-}
-
-// ui/shell/streamdeck/adapters/ograf-logic.ts
-var layerOf = (s, id) => id ? s.layers.find((l) => l.id === id) : void 0;
-function continueTarget(s) {
-  const l = layerOf(s, s.sel);
-  if (l) return l;
-  return s.layers.length === 1 ? s.layers[0] : void 0;
-}
-function controlList(s) {
-  const sel = s.templates.find((t2) => t2.id === s.sel);
-  const onAir = !!layerOf(s, s.sel);
-  const c = continueTarget(s);
-  const multi = !!c && c.stepCount > 1;
-  return [
-    {
-      key: {
-        label: "TAKE",
-        sub: sel?.label,
-        state: sel && !onAir ? "preset" : "off",
-        dim: !sel || onAir
-      },
-      act: {
-        t: "take"
-      }
-    },
-    {
-      key: {
-        label: "TAKE OUT",
-        state: onAir ? "onair" : "off",
-        dim: !onAir
-      },
-      act: {
-        t: "out"
-      }
-    },
-    {
-      key: {
-        label: "CONTINUE",
-        sub: multi ? `${c.step + 1}/${c.stepCount}` : void 0,
-        state: c?.canContinue ? "cue" : "off",
-        dim: !c?.canContinue
-      },
-      act: {
-        t: "cont"
-      }
-    },
-    {
-      key: {
-        label: "ALLE AUS",
-        sub: s.layers.length ? `${s.layers.length} on air` : void 0,
-        state: s.layers.length ? "error" : "off",
-        dim: !s.layers.length
-      },
-      act: {
-        t: "clear"
-      }
-    }
-  ];
-}
-function presetKey(s, t2) {
-  const l = layerOf(s, t2.id);
-  const selected = t2.id === s.sel;
-  return {
-    label: t2.label,
-    sub: l ? l.stepCount > 1 ? `ON AIR ${l.step + 1}/${l.stepCount}` : "ON AIR" : t2.stepCount > 1 ? `${t2.stepCount} Schritte` : void 0,
-    state: l ? "onair" : selected ? "preset" : "off",
-    // Gewählt und on air: Rahmen-Hinweis über den Untertitel
-    ...l && selected ? {
-      icon: "\u25B6"
-    } : {}
-  };
-}
-function dialsFor(s, count) {
-  const sel = s.templates.find((t2) => t2.id === s.sel);
-  const names = s.layers.map((l) => l.label).join(", ");
-  const all = [
-    {
-      label: "Preset",
-      value: sel?.label ?? "\u2013",
-      fill: s.templates.length > 1 && sel ? s.templates.indexOf(sel) / (s.templates.length - 1) : void 0
-    },
-    {
-      label: "TAKE/OUT",
-      value: layerOf(s, s.sel) ? "ON AIR" : sel ? "bereit" : "\u2013",
-      dim: !sel
-    },
-    {
-      label: "CONTINUE",
-      value: continueTarget(s)?.canContinue ? "bereit" : "\u2013",
-      dim: !continueTarget(s)?.canContinue
-    },
-    {
-      label: "On Air",
-      value: s.layers.length ? `${s.layers.length}: ${names}` : "\u2013",
-      dim: !s.layers.length
-    },
-    {
-      label: "ALLE AUS",
-      value: s.layers.length ? "dr\xFCcken" : "\u2013",
-      dim: !s.layers.length
-    },
-    {
-      label: "",
-      value: ""
-    }
-  ];
-  return all.slice(0, count);
-}
-function dialActions(count) {
-  return [
-    null,
-    {
-      t: "take"
-    },
-    {
-      t: "cont"
-    },
-    null,
-    {
-      t: "clear"
-    },
-    null
-  ].slice(0, count);
-}
-function layoutOgraf(s, cols, rows, dialCount, page) {
-  const ctrls = controlList(s);
-  const n = s.templates.length;
-  const single = rows < 2;
-  const presetRows = single ? 1 : rows - 1;
-  const perPage = (reserve) => Math.max(1, presetRows * cols - (single && reserve ? 1 : 0));
-  let cap = perPage(false);
-  let pages = single ? 1 + Math.max(1, Math.ceil(n / cap)) : Math.max(1, Math.ceil(n / cap));
-  if (single || pages > 1) {
-    cap = perPage(true);
-    pages = single ? 1 + Math.max(1, Math.ceil(n / cap)) : Math.max(1, Math.ceil(n / cap));
-  }
-  const ctrlSlots = single && pages > 1 ? cols - 1 : cols;
-  const p = Math.min(Math.max(0, page), pages - 1);
-  const keys = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const act = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const putPresets = (row0, chunk, perRow) => {
-    s.templates.slice(chunk * cap, chunk * cap + cap).forEach((t2, i) => {
-      const r = row0 + Math.floor(i / perRow), c = i % perRow;
-      if (r < row0 + presetRows) {
-        keys[r][c] = presetKey(s, t2);
-        act[r][c] = {
-          t: "pick",
-          id: t2.id
-        };
-      }
-    });
-  };
-  const putCtrls = (r) => {
-    ctrls.slice(0, ctrlSlots).forEach((it, c) => {
-      keys[r][c] = it.key;
-      act[r][c] = it.act;
-    });
-  };
-  if (!single) {
-    putPresets(0, p, cols);
-    putCtrls(rows - 1);
-  } else if (p === 0) putCtrls(0);
-  else putPresets(0, p - 1, cols);
-  return {
-    keys,
-    act,
-    dials: dialsFor(s, dialCount),
-    dialAct: dialActions(dialCount),
-    pages
-  };
-}
-function stepTemplate(s, delta) {
-  const n = s.templates.length;
-  if (!n) return null;
-  const i = s.templates.findIndex((t2) => t2.id === s.sel);
-  const j = i < 0 ? delta > 0 ? 0 : n - 1 : Math.min(n - 1, Math.max(0, i + (delta > 0 ? 1 : -1)));
-  return s.templates[j].id;
-}
-
-// ui/shell/streamdeck/adapters/ograf.ts
-var arr = (raw) => {
-  const v = typeof raw === "string" ? JSON.parse(raw) : raw;
-  return Array.isArray(v) ? v : [];
-};
-function ografAdapter(io) {
-  const st = {
-    templates: [],
-    layers: [],
-    sel: null
-  };
-  let last = null;
-  async function run(x) {
-    try {
-      if (x.t === "pick") st.sel = x.id;
-      else if (x.t === "take") {
-        if (st.sel && !st.layers.some((l) => l.id === st.sel)) await io.call("show", {
-          templateId: st.sel,
-          data: {}
-        });
-      } else if (x.t === "out") {
-        if (st.sel && st.layers.some((l) => l.id === st.sel)) await io.call("hide", {
-          layerId: st.sel
-        });
-      } else if (x.t === "cont") {
-        const c = continueTarget(st);
-        if (c?.canContinue) await io.call("continue", {
-          layerId: c.id
-        });
-      } else if (x.t === "clear") {
-        if (st.layers.length) await io.call("hide", {});
-      }
-      if (x.t !== "pick") await a.refresh();
-    } catch (e) {
-      a.onError(e);
-    }
-    a.onChange();
-  }
-  const a = {
-    onChange: () => {
-    },
-    onError: (_e) => {
-    },
-    getLayout(ctx) {
-      last = layoutOgraf(st, ctx.cols, ctx.rows, ctx.dials, ctx.page);
-      return last;
-    },
-    onKey(row, col, down) {
-      if (!down) return;
-      const x = last?.act[row]?.[col];
-      if (x) void run(x);
-    },
-    onDial(i, delta) {
-      if (i !== 0) return;
-      st.sel = stepTemplate(st, delta);
-      a.onChange();
-    },
-    onDialPress(i, down) {
-      const x = last?.dialAct[i];
-      if (down && x) void run(x);
-    },
-    async refresh() {
-      try {
-        const [tpl, lay] = await Promise.all([
-          io.getParam("templates"),
-          io.getParam("layers")
-        ]);
-        st.templates = arr(tpl).map((t2) => ({
-          id: t2.id,
-          label: t2.label || t2.id,
-          stepCount: t2.stepCount ?? 1
-        }));
-        st.layers = arr(lay);
-        if (st.sel && !st.templates.some((t2) => t2.id === st.sel)) st.sel = null;
-        st.sel ??= st.layers[0]?.id ?? st.templates[0]?.id ?? null;
-        a.onChange();
-      } catch (e) {
-        a.onError(e);
-      }
-    }
-  };
-  return a;
-}
-
-// nodes/omp-xy-panel/ui/logic.js
-(() => {
-  const ROOT = "";
-  function normSources(list) {
-    return (list || []).map((s) => ({
-      kind: "source",
-      id: s.senderId,
-      label: s.label || s.senderId,
-      nodeId: s.nodeId,
-      nodeLabel: s.nodeLabel || s.nodeId,
-      mediaType: s.mediaType || "",
-      tags: (s.tags || []).map((t2) => t2.tag),
-      online: s.online !== false
-    }));
-  }
-  function normSinks(list) {
-    return (list || []).map((s) => ({
-      kind: "sink",
-      id: s.receiverId,
-      label: s.label || s.receiverId,
-      nodeId: s.nodeId,
-      nodeLabel: s.nodeLabel || s.nodeId,
-      mediaType: s.mediaType || "",
-      tags: (s.tags || []).map((t2) => t2.tag),
-      online: s.online !== false
-    }));
-  }
-  function stripInstanceId(s) {
-    return String(s ?? "").replace(/\s*\([0-9a-f]{8}\)/g, "");
-  }
-  function nodeNames(points) {
-    const raw = /* @__PURE__ */ new Map();
-    for (const p of points) raw.set(p.nodeId, p.nodeLabel);
-    const count = /* @__PURE__ */ new Map();
-    for (const l of raw.values()) {
-      const k = stripInstanceId(l);
-      count.set(k, (count.get(k) || 0) + 1);
-    }
-    const out = /* @__PURE__ */ new Map();
-    for (const [id, l] of raw) out.set(id, count.get(stripInstanceId(l)) > 1 ? l : stripInstanceId(l));
-    return out;
-  }
-  function shortLabel(p, nodeName) {
-    const l = stripInstanceId(p.label);
-    const n = stripInstanceId(nodeName);
-    if (n && l.startsWith(n) && l.length > n.length) return l.slice(n.length).trim() || l;
-    return l;
-  }
-  function fullName(p, nodeName) {
-    const n = nodeName === void 0 ? stripInstanceId(p.nodeLabel) : nodeName;
-    const l = n && stripInstanceId(n) !== n ? String(p.label ?? "") : stripInstanceId(p.label);
-    return n && l.startsWith(n) ? l : n && l.startsWith(stripInstanceId(n)) ? l : `${n} \xB7 ${l}`;
-  }
-  function groupPointsByNode(points) {
-    const m = /* @__PURE__ */ new Map();
-    for (const p of points) {
-      if (!m.has(p.nodeId)) m.set(p.nodeId, []);
-      m.get(p.nodeId).push(p);
-    }
-    return m;
-  }
-  function flattenGroup(groups, groupId, seen = /* @__PURE__ */ new Set()) {
-    const g = groups[groupId];
-    if (!g || seen.has(groupId)) return [];
-    seen.add(groupId);
-    const out = [
-      ...g.nodeIds || []
-    ];
-    for (const c of g.groupIds || []) out.push(...flattenGroup(groups, c, seen));
-    return out;
-  }
-  function buildModel({ nodes, groupTree, workflows, virtual }) {
-    const groups = groupTree && groupTree.groups || {};
-    const known = /* @__PURE__ */ new Set([
-      ...(nodes || []).map((n) => n.id),
-      ...(virtual || []).map((v) => v.id)
-    ]);
-    const nodeLabel = new Map((nodes || []).map((n) => [
-      n.id,
-      n.label || n.id
-    ]));
-    const folders = /* @__PURE__ */ new Map();
-    const rootIds = [];
-    const assigned = /* @__PURE__ */ new Set();
-    const keep = (ids) => [
-      ...new Set(ids)
-    ].filter((id) => known.has(id));
-    const groupByWf = /* @__PURE__ */ new Map();
-    for (const g of Object.values(groups)) if (g.workflowId) groupByWf.set(g.workflowId, g);
-    const hiddenGroups = /* @__PURE__ */ new Set();
-    for (const wf of workflows || []) {
-      const label = wf.definition && wf.definition.title || wf.name || wf.id;
-      const wfNodes = [
-        ...(virtual || []).filter((v) => v.workflowId === wf.id).map((v) => v.id),
-        ...Object.values(wf.runtime || {}).map((r) => r && r.nodeId).filter(Boolean)
-      ];
-      const linked = groupByWf.get(wf.id);
-      let nodeIds = wfNodes;
-      let folderIds = [];
-      if (linked) {
-        hiddenGroups.add(linked.id);
-        nodeIds = [
-          ...linked.nodeIds || [],
-          ...wfNodes
-        ];
-        folderIds = (linked.groupIds || []).filter((id) => groups[id]).map((id) => "grp:" + id);
-      }
-      nodeIds = keep(nodeIds);
-      nodeIds.forEach((id) => assigned.add(id));
-      folders.set("wf:" + wf.id, {
-        id: "wf:" + wf.id,
-        label,
-        kind: "workflow",
-        folderIds,
-        nodeIds
-      });
-      rootIds.push("wf:" + wf.id);
-    }
-    for (const g of Object.values(groups)) {
-      folders.set("grp:" + g.id, {
-        id: "grp:" + g.id,
-        label: g.label || g.id,
-        kind: "group",
-        folderIds: (g.groupIds || []).filter((id) => groups[id]).map((id) => "grp:" + id),
-        nodeIds: keep(g.nodeIds || [])
-      });
-    }
-    for (const g of Object.values(groups)) {
-      for (const id of flattenGroup(groups, g.id)) if (known.has(id)) assigned.add(id);
-      if (g.parentId === null || g.parentId === void 0) {
-        if (!hiddenGroups.has(g.id)) rootIds.push("grp:" + g.id);
-      }
-    }
-    const unassignedIds = [
-      ...known
-    ].filter((id) => !assigned.has(id));
-    folders.set("unassigned", {
-      id: "unassigned",
-      label: "",
-      kind: "unassigned",
-      folderIds: [],
-      nodeIds: unassignedIds
-    });
-    rootIds.push("unassigned");
-    return {
-      folders,
-      rootIds,
-      nodeLabel
-    };
-  }
-  function interfacePoints(resolved, sources, labels) {
-    const bySender = new Map((sources || []).map((s) => [
-      s.id,
-      s
-    ]));
-    const outSources = [];
-    const inSinks = [];
-    const virtual = [];
-    for (const ifc of resolved || []) {
-      if (!ifc || !ifc.workflowId) continue;
-      for (const o of ifc.outputs || []) {
-        const nodeId = `ifc-out:${ifc.workflowId}:${o.name}`;
-        const nodeLabel = `${labels && labels.out || "Output"}: ${o.label || o.name}`;
-        let any = false;
-        for (const m of o.members || []) {
-          const orig = bySender.get(m.portId);
-          if (!orig) continue;
-          outSources.push({
-            ...orig,
-            nodeId,
-            nodeLabel
-          });
-          any = true;
-        }
-        if (any) virtual.push({
-          id: nodeId,
-          workflowId: ifc.workflowId
-        });
-      }
-      for (const i of ifc.inputs || []) {
-        const nodeId = `ifc-in:${ifc.workflowId}:${i.name}`;
-        const nodeLabel = `${labels && labels.in || "Input"}: ${i.label || i.name}`;
-        inSinks.push({
-          kind: "sink",
-          id: nodeId,
-          label: nodeLabel,
-          nodeId,
-          nodeLabel,
-          mediaType: "",
-          tags: [],
-          online: i.available !== false,
-          ifc: {
-            workflowId: ifc.workflowId,
-            name: i.name
-          },
-          feedSenderIds: i.feedSenderIds || []
-        });
-        virtual.push({
-          id: nodeId,
-          workflowId: ifc.workflowId
-        });
-      }
-    }
-    return {
-      sources: outSources,
-      sinks: inSinks,
-      virtual
-    };
-  }
-  function folderNodeIds(model, folderId, seen = /* @__PURE__ */ new Set()) {
-    const f = model.folders.get(folderId);
-    if (!f || seen.has(folderId)) return [];
-    seen.add(folderId);
-    const out = [
-      ...f.nodeIds
-    ];
-    for (const c of f.folderIds) out.push(...folderNodeIds(model, c, seen));
-    return [
-      ...new Set(out)
-    ];
-  }
-  function levelContents(model, path, pointsByNode) {
-    const countOf = (fid) => folderNodeIds(model, fid).reduce((n, id) => n + (pointsByNode.get(id) || []).length, 0);
-    const folderEntry = (fid) => {
-      const f2 = model.folders.get(fid);
-      return {
-        id: fid,
-        label: f2.label,
-        kind: f2.kind,
-        count: countOf(fid)
-      };
-    };
-    const crumbs = path.map((fid) => ({
-      id: fid,
-      label: (model.folders.get(fid) || {}).label || fid,
-      kind: (model.folders.get(fid) || {}).kind
-    }));
-    if (path.length === 0) {
-      return {
-        crumbs,
-        folders: model.rootIds.map(folderEntry).filter((f2) => f2.count > 0),
-        nodes: []
-      };
-    }
-    const f = model.folders.get(path[path.length - 1]);
-    if (!f) return {
-      crumbs,
-      folders: [],
-      nodes: []
-    };
-    return {
-      crumbs,
-      folders: f.folderIds.map(folderEntry).filter((e) => e.count > 0),
-      nodes: f.nodeIds.filter((id) => (pointsByNode.get(id) || []).length > 0).map((id) => ({
-        id,
-        label: model.nodeLabel.get(id) || id,
-        points: pointsByNode.get(id)
-      }))
-    };
-  }
-  function folderLabel(folder, t2) {
-    return folder.kind === "unassigned" ? t2("unassigned") : folder.label;
-  }
-  function matchesQuery(p, q) {
-    q = (q || "").trim().toLowerCase();
-    if (!q) return true;
-    return [
-      p.label,
-      p.nodeLabel,
-      ...p.tags
-    ].some((s) => String(s).toLowerCase().includes(q));
-  }
-  function filterPoints(points, { media, query }) {
-    return points.filter((p) => (!media || p.mediaType === media) && matchesQuery(p, query));
-  }
-  function compatible2(source, sink) {
-    if (!source || !sink) return false;
-    if (!source.mediaType || !sink.mediaType) return true;
-    return source.mediaType === sink.mediaType;
-  }
-  function routeMap(edges) {
-    const m = /* @__PURE__ */ new Map();
-    for (const e of edges || []) m.set(e.toReceiver, e.fromSender);
-    return m;
-  }
-  function sharedTags(a, b) {
-    const set = new Set(b.tags);
-    return a.tags.filter((t2) => !t2.startsWith("media.") && set.has(t2));
-  }
-  function planTagRoutes(sources, sinks, { fallbackOrder = false, byTags = true } = {}) {
-    const routes = [];
-    const unmatched = [];
-    const used = /* @__PURE__ */ new Set();
-    const live = sources.filter((s) => s.online);
-    for (const sink of sinks) {
-      let best = null;
-      let bestScore = 0;
-      for (const s of byTags ? live : []) {
-        if (!s.mediaType || s.mediaType !== sink.mediaType) continue;
-        const n = sharedTags(s, sink).length;
-        if (n === 0) continue;
-        if (!best || n > bestScore || n === bestScore && used.has(best.id) && !used.has(s.id)) {
-          best = s;
-          bestScore = n;
-        }
-      }
-      if (best && bestScore > 0) {
-        used.add(best.id);
-        routes.push({
-          from: best,
-          to: sink,
-          reason: "tag",
-          tags: sharedTags(best, sink)
-        });
-      } else {
-        unmatched.push(sink);
-      }
-    }
-    if (!fallbackOrder && byTags) return {
-      routes,
-      unmatched
-    };
-    const stillUnmatched = [];
-    for (const sink of unmatched) {
-      const cand = live.find((s) => !used.has(s.id) && s.mediaType && s.mediaType === sink.mediaType);
-      if (cand) {
-        used.add(cand.id);
-        routes.push({
-          from: cand,
-          to: sink,
-          reason: "order",
-          tags: []
-        });
-      } else stillUnmatched.push(sink);
-    }
-    return {
-      routes,
-      unmatched: stillUnmatched
-    };
-  }
-  const BOUQUET_LAYOUT = "xy-bouquets";
-  function refFor(p) {
-    return {
-      nodeId: p.nodeId,
-      nodeLabel: p.nodeLabel,
-      label: p.label
-    };
-  }
-  function resolveRef(ref, points) {
-    if (!ref) return null;
-    return points.find((p) => p.nodeId === ref.nodeId && p.label === ref.label) || points.find((p) => p.nodeLabel === ref.nodeLabel && p.label === ref.label) || null;
-  }
-  function describeRef(ref) {
-    const l = String(ref.label ?? "");
-    return l.startsWith(ref.nodeLabel) ? l : `${ref.nodeLabel} \xB7 ${l}`;
-  }
-  function parseBouquets(blob) {
-    const list = blob && Array.isArray(blob.bouquets) ? blob.bouquets : [];
-    return list.filter((b) => b && typeof b.id === "string" && typeof b.name === "string" && (b.kind === "routes" || b.kind === "tags" || b.kind === "bundle" && Array.isArray(b.items)));
-  }
-  function newId() {
-    return "b" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  }
-  function routesBouquet(name, pairs) {
-    return {
-      id: newId(),
-      name,
-      kind: "routes",
-      routes: pairs.map(({ from, to }) => ({
-        from: refFor(from),
-        to: refFor(to)
-      }))
-    };
-  }
-  function tagsBouquet(name, sourceNode, sinkNode, fallbackOrder) {
-    return {
-      id: newId(),
-      name,
-      kind: "tags",
-      source: {
-        nodeId: sourceNode.id,
-        nodeLabel: sourceNode.label
-      },
-      sink: {
-        nodeId: sinkNode.id,
-        nodeLabel: sinkNode.label
-      },
-      fallbackOrder: !!fallbackOrder
-    };
-  }
-  function resolveBouquet(b, sources, sinks) {
-    const routes = [];
-    const missing = [];
-    if (b.kind === "routes") {
-      for (const r of b.routes || []) {
-        const from = resolveRef(r.from, sources);
-        const to = resolveRef(r.to, sinks);
-        if (!from) missing.push(describeRef(r.from));
-        else if (!to) missing.push(describeRef(r.to));
-        else if (!compatible2(from, to)) missing.push(describeRef(r.to));
-        else routes.push({
-          from,
-          to,
-          reason: "bouquet",
-          tags: []
-        });
-      }
-    } else {
-      const src = sources.filter((s) => s.nodeId === b.source.nodeId || s.nodeLabel === b.source.nodeLabel);
-      const snk = sinks.filter((s) => s.nodeId === b.sink.nodeId || s.nodeLabel === b.sink.nodeLabel);
-      if (!src.length) missing.push(b.source.nodeLabel);
-      if (!snk.length) missing.push(b.sink.nodeLabel);
-      if (src.length && snk.length) {
-        const plan3 = planTagRoutes(src, snk, {
-          fallbackOrder: b.fallbackOrder
-        });
-        routes.push(...plan3.routes);
-        for (const u of plan3.unmatched) missing.push(fullName(u));
-      }
-    }
-    return {
-      routes,
-      missing
-    };
-  }
-  function bundleBouquet(name, points, mode) {
-    return {
-      id: newId(),
-      name,
-      kind: "bundle",
-      mode: mode === "tags" ? "tags" : "order",
-      items: points.map((p) => ({
-        ...refFor(p),
-        mediaType: p.mediaType
-      }))
-    };
-  }
-  function planBundle(b, sources, sinks, mode) {
-    const how = (mode || b.mode) === "tags" ? "tags" : "order";
-    const routes = [];
-    const missing = [];
-    const slot = /* @__PURE__ */ new Map();
-    const used = /* @__PURE__ */ new Set();
-    for (const item of b.items || []) {
-      const from = resolveRef(item, sources);
-      const media = item.mediaType || from && from.mediaType || "";
-      const n = slot.get(media) || 0;
-      slot.set(media, n + 1);
-      if (!from) {
-        missing.push(describeRef(item));
-        continue;
-      }
-      if (!from.online) {
-        missing.push(describeRef(item) + " (offline)");
-        continue;
-      }
-      const cands = sinks.filter((s) => s.mediaType === media);
-      let to = null;
-      let tags = [];
-      if (how === "order") {
-        to = cands[n] || null;
-      } else {
-        let score = 0;
-        for (const s of cands) {
-          if (used.has(s.id)) continue;
-          const sh = sharedTags(from, s);
-          if (sh.length > score) {
-            to = s;
-            score = sh.length;
-            tags = sh;
-          }
-        }
-      }
-      if (!to || used.has(to.id)) {
-        missing.push(describeRef(item));
-        continue;
-      }
-      used.add(to.id);
-      routes.push({
-        from,
-        to,
-        reason: how === "tags" ? "tag" : "order",
-        tags
-      });
-    }
-    return {
-      routes,
-      missing
-    };
-  }
-  globalThis.OmpXyLogic = {
-    ROOT,
-    BOUQUET_LAYOUT,
-    normSources,
-    normSinks,
-    stripInstanceId,
-    nodeNames,
-    shortLabel,
-    fullName,
-    groupPointsByNode,
-    flattenGroup,
-    buildModel,
-    interfacePoints,
-    folderNodeIds,
-    levelContents,
-    folderLabel,
-    matchesQuery,
-    filterPoints,
-    compatible: compatible2,
-    routeMap,
-    sharedTags,
-    planTagRoutes,
-    refFor,
-    resolveRef,
-    parseBouquets,
-    routesBouquet,
-    tagsBouquet,
-    bundleBouquet,
-    planBundle,
-    resolveBouquet
-  };
-})();
-
-// ui/shell/streamdeck/adapters/xy-panel-logic.ts
-var L = () => globalThis.OmpXyLogic;
-var MEDIA_CYCLE = [
-  "",
-  "video",
-  "audio",
-  "data"
-];
-var MEDIA_LABEL = {
-  "": "Alle",
-  video: "Video",
-  audio: "Audio",
-  data: "Daten"
-};
-var strip = (s) => String(s ?? "").replace(/\s*\([0-9a-f]{8}\)/g, "");
-var pointName = (p) => {
-  const n = strip(p.nodeLabel).replace(/^omp-/, "");
-  const l = strip(p.label);
-  return l.startsWith(strip(p.nodeLabel)) && l.length > strip(p.nodeLabel).length ? l.slice(strip(p.nodeLabel).length).trim() || l : l;
-};
-function compatible(a, b) {
-  if (!a || !b) return false;
-  if (!a.mediaType || !b.mediaType) return true;
-  return a.mediaType === b.mediaType;
-}
-var visible = (pts, media) => pts.filter((p) => !media || p.mediaType === media);
-function stepSelection(pts, cur, delta) {
-  if (!pts.length) return null;
-  const i = pts.findIndex((p) => p.id === cur);
-  const n = i < 0 ? delta > 0 ? 0 : pts.length - 1 : Math.min(pts.length - 1, Math.max(0, i + (delta > 0 ? 1 : -1)));
-  return pts[n].id;
-}
-var nodeOf = (p) => strip(p.nodeLabel).replace(/^omp-/, "") || "?";
-function categories(pts) {
-  return [
-    ...new Set(pts.map(nodeOf))
-  ];
-}
-function filtered(pts, media, cat) {
-  return visible(pts, media).filter((p) => !cat || nodeOf(p) === cat);
-}
-function keyName(p, all) {
-  return all.filter((x) => nodeOf(x) === nodeOf(p)).length === 1 ? nodeOf(p) : pointName(p);
-}
-function columnControls(s) {
-  const c = controlList2(s);
-  const by = (l) => c.find((x) => x.key.label === l);
-  return [
-    by("TAKE"),
-    by("Trennen"),
-    by("AUTO"),
-    by("Medium")
-  ];
-}
-function controlList2(s) {
-  const canTake = !!s.selSrc && !!s.selDst;
-  return [
-    {
-      key: {
-        label: "TAKE",
-        sub: s.draft ? `\u25CF ${s.draft.length}` : void 0,
-        state: canTake ? "onair" : "off",
-        dim: !canTake
-      },
-      act: {
-        t: "take"
-      }
-    },
-    {
-      key: {
-        label: "AUTO",
-        sub: s.auto ? "an" : "aus",
-        state: s.auto ? "preset" : "off"
-      },
-      act: {
-        t: "auto"
-      }
-    },
-    {
-      key: {
-        label: "Medium",
-        sub: MEDIA_LABEL[s.media]
-      },
-      act: {
-        t: "media"
-      }
-    },
-    {
-      key: {
-        label: "Trennen",
-        dim: !s.selDst
-      },
-      act: {
-        t: "disc"
-      }
-    },
-    {
-      key: {
-        label: "\u25C0 Quellen"
-      },
-      act: {
-        t: "scroll",
-        row: "src",
-        dir: -1
-      }
-    },
-    {
-      key: {
-        label: "Quellen \u25B6"
-      },
-      act: {
-        t: "scroll",
-        row: "src",
-        dir: 1
-      }
-    },
-    {
-      key: {
-        label: "\u25C0 Ziele"
-      },
-      act: {
-        t: "scroll",
-        row: "dst",
-        dir: -1
-      }
-    },
-    {
-      key: {
-        label: "Ziele \u25B6"
-      },
-      act: {
-        t: "scroll",
-        row: "dst",
-        dir: 1
-      }
-    }
-  ];
-}
-function plan(ctrls, cols, rows, reserve) {
-  const ctrlRows = rows >= 3 ? rows - 2 : rows;
-  const cap = Math.max(1, ctrlRows * cols - (reserve ? 1 : 0));
-  const chunks = Math.max(1, Math.ceil(ctrls / cap));
-  const pages = rows >= 3 ? chunks : rows === 2 ? 1 + chunks : 2 + chunks;
-  return {
-    cap,
-    chunks,
-    pages
-  };
-}
-var pathOf = (s, side) => (side === "src" ? s.srcPath : s.dstPath) ?? [];
-var catOf = (s, side) => (side === "src" ? s.srcCat : s.dstCat) ?? null;
-var allOf = (s, side) => side === "src" ? s.sources : s.sinks;
-function scoped(s, side) {
-  const all = allOf(s, side);
-  const path = pathOf(s, side);
-  if (!path.length || !s.model) return all;
-  const ids = new Set(L().folderNodeIds(s.model, path[path.length - 1]));
-  return all.filter((p) => p.nodeId !== void 0 && ids.has(p.nodeId));
-}
-var sideList = (s, side) => filtered(scoped(s, side), s.media, catOf(s, side));
-function validPath(model, path) {
-  if (!model) return [];
-  const i = path.findIndex((f) => !model.folders.has(f));
-  return i >= 0 ? path.slice(0, i) : path;
-}
-var folderTitle = (f) => f.kind === "unassigned" ? "Nicht zugewiesen" : f.label;
-function topEntries(s, side) {
-  const out = [];
-  const cat = catOf(s, side);
-  const path = pathOf(s, side);
-  const media = visible(allOf(s, side), s.media);
-  const model = s.model;
-  const byNode = /* @__PURE__ */ new Map();
-  for (const p of media) if (p.nodeId !== void 0) byNode.set(p.nodeId, [
-    ...byNode.get(p.nodeId) ?? [],
-    p
-  ]);
-  const level = model ? L().levelContents(model, path, byNode) : null;
-  const folders = level?.folders ?? [];
-  const folderKeys = () => folders.map((f) => ({
-    key: {
-      label: folderTitle(f),
-      sub: f.kind === "workflow" ? "Workflow" : f.kind === "group" ? "Gruppe" : "Ordner"
-    },
-    act: {
-      t: "folder",
-      side,
-      id: f.id
-    }
-  }));
-  if (!path.length) {
-    out.push({
-      key: {
-        label: "Alle",
-        sub: "Kategorie",
-        state: cat === null ? "preset" : "off"
-      },
-      act: {
-        t: "cat",
-        side,
-        name: null
-      }
-    });
-    if (folders.some((f) => f.kind !== "unassigned")) out.push(...folderKeys());
-    else for (const n of categories(media)) out.push({
-      key: {
-        label: n,
-        sub: "Kategorie",
-        state: n === cat ? "preset" : "off"
-      },
-      act: {
-        t: "cat",
-        side,
-        name: n
-      }
-    });
-    return out;
-  }
-  const here = level?.crumbs[level.crumbs.length - 1];
-  out.push({
-    key: {
-      label: "\u2191 Hoch",
-      sub: path.length > 1 ? "Ebene" : "Home"
-    },
-    act: {
-      t: "up",
-      side
-    }
-  });
-  out.push({
-    key: {
-      label: here ? folderTitle(here) : "Ordner",
-      sub: "Ebene",
-      state: cat === null ? "preset" : "off"
-    },
-    act: {
-      t: "cat",
-      side,
-      name: null
-    }
-  });
-  out.push(...folderKeys());
-  const direct = new Set((level?.nodes ?? []).map((n) => n.id));
-  const inLevel = media.filter((p) => p.nodeId !== void 0 && direct.has(p.nodeId));
-  for (const n of categories(inLevel)) out.push({
-    key: {
-      label: n,
-      sub: "Node",
-      state: n === cat ? "preset" : "off"
-    },
-    act: {
-      t: "cat",
-      side,
-      name: n
-    }
-  });
-  return out;
-}
-function layoutColumns(s, cols, rows, dialCount, pages) {
-  const midC = Math.floor((cols - 1) / 2);
-  const w = {
-    src: midC,
-    dst: cols - 1 - midC
-  };
-  const x0 = {
-    src: 0,
-    dst: midC + 1
-  };
-  const keys = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const act = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const sel = s.sources.find((x) => x.id === s.selSrc);
-  const nameOf = new Map(s.sources.map((x) => [
-    x.id,
-    keyName(x, s.sources)
-  ]));
-  const reserved = (r, c) => pages > 1 && r === rows - 1 && c === cols - 1;
-  for (const side of [
-    "src",
-    "dst"
-  ]) {
-    const all = allOf(s, side);
-    const cat = catOf(s, side);
-    const catOff = (side === "src" ? s.srcCatOff : s.dstCatOff) ?? 0;
-    const off = side === "src" ? s.srcOff : s.dstOff;
-    const W = w[side], X = x0[side];
-    const top = topEntries(s, side);
-    const catPer = top.length > W ? Math.max(1, W - 1) : W;
-    const co = Math.min(catOff, Math.max(0, top.length - 1));
-    top.slice(co, co + catPer).forEach((e, i) => {
-      keys[0][X + i] = e.key;
-      act[0][X + i] = e.act;
-    });
-    if (top.length > W) {
-      keys[0][X + W - 1] = {
-        label: "mehr \u25B6",
-        sub: `${Math.min(top.length, co + catPer)}/${top.length}`
-      };
-      act[0][X + W - 1] = {
-        t: "more",
-        side,
-        what: "cat"
-      };
-    }
-    const pts = sideList(s, side);
-    const free = [];
-    for (let r = 1; r < rows; r++) for (let i = 0; i < W; i++) if (!reserved(r, X + i)) free.push([
-      r,
-      X + i
-    ]);
-    const per = pts.length > free.length ? Math.max(1, free.length - 1) : free.length;
-    const o = Math.min(off, Math.max(0, pts.length - 1));
-    pts.slice(o, o + per).forEach((pt, i) => {
-      const [r, c] = free[i];
-      if (side === "src") {
-        keys[r][c] = {
-          label: keyName(pt, all),
-          sub: cat || keyName(pt, all) === nodeOf(pt) ? void 0 : nodeOf(pt),
-          state: pt.id === s.selSrc ? "preset" : "off",
-          dim: !pt.online
-        };
-      } else {
-        const from = s.routes[pt.id];
-        const routedFromSel = !!from && from === s.selSrc;
-        keys[r][c] = {
-          label: keyName(pt, all),
-          sub: from ? nameOf.get(from) ?? "?" : "\u2014",
-          state: pt.id === s.selDst ? "cue" : routedFromSel ? "onair" : "off",
-          dim: !pt.online || !!sel && !compatible(sel, pt)
-        };
-      }
-      act[r][c] = {
-        t: side,
-        id: pt.id
-      };
-    });
-    if (pts.length > free.length) {
-      const [r, c] = free[free.length - 1];
-      keys[r][c] = {
-        label: "mehr \u25B6",
-        sub: `${Math.min(pts.length, o + per)}/${pts.length}`
-      };
-      act[r][c] = {
-        t: "more",
-        side,
-        what: "pt"
-      };
-    }
-  }
-  columnControls(s).slice(0, rows).forEach((it, r) => {
-    keys[r][midC] = it.key;
-    act[r][midC] = it.act;
-  });
-  return {
-    keys,
-    act,
-    dials: dialsFor2(s, dialCount),
-    pages
-  };
-}
-var hasRecCells = (s, cols, rows) => s.canSaveBouquets === true && cols * rows >= 8;
-var bouquetCapacity = (s, cols, rows) => Math.max(1, cols * rows - (hasRecCells(s, cols, rows) ? 4 : 2));
-var bouquetPages = (s, cols, rows) => {
-  const n = s.bouquets?.length ?? 0;
-  return n ? Math.ceil(n / bouquetCapacity(s, cols, rows)) : hasRecCells(s, cols, rows) ? 1 : 0;
-};
-function bouquetLayout(s, cols, rows, dialCount, bqPage, pages) {
-  const keys = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const act = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const cap = bouquetCapacity(s, cols, rows);
-  const rec = hasRecCells(s, cols, rows);
-  const list = s.bouquets ?? [];
-  const hasDst = !!s.sinks.find((x) => x.id === s.selDst);
-  keys[0][0] = {
-    label: "\u21B6 Zur\xFCck",
-    sub: s.undoSecs ? `${s.undoSecs} s` : void 0,
-    dim: !s.undoSecs
-  };
-  act[0][0] = {
-    t: "undo"
-  };
-  if (rec) {
-    if (s.draft) {
-      keys[0][1] = {
-        label: "\u25A0 Speichern",
-        sub: `${s.draft.length} Schaltung(en)`,
-        state: "onair",
-        dim: !s.draft.length
-      };
-      act[0][1] = {
-        t: "recSave"
-      };
-      keys[0][2] = {
-        label: "\u2715 Verwerfen"
-      };
-      act[0][2] = {
-        t: "recDrop"
-      };
-    } else {
-      keys[0][1] = {
-        label: "\u25CF Aufzeichnen",
-        sub: "Take sammelt"
-      };
-      act[0][1] = {
-        t: "rec"
-      };
-    }
-  }
-  const skip = (r, c) => r === 0 && (c === 0 || rec && c <= 2) || r === rows - 1 && c === cols - 1;
-  let n = 0;
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      if (skip(r, c)) continue;
-      const b = list[bqPage * cap + n++];
-      if (!b) continue;
-      const run = s.lastRun && s.lastRun.id === b.id ? s.lastRun : null;
-      const bundle = b.kind === "bundle";
-      keys[r][c] = {
-        label: String(b.name),
-        sub: run ? run.bad ? `${run.ok} ok, ${run.bad} Fehler` : `${run.ok} geschaltet` : bundle ? hasDst ? `B\xFCndel ${b.items?.length ?? 0}` : "B\xFCndel: Ziel w\xE4hlen" : b.kind === "tags" ? "per Tags" : `${b.routes?.length ?? 0} Schaltungen`,
-        state: run ? run.bad ? "error" : "onair" : "off",
-        dim: bundle && !hasDst
-      };
-      act[r][c] = {
-        t: "bq",
-        id: b.id
-      };
-    }
-  }
-  return {
-    keys,
-    act,
-    dials: dialsFor2(s, dialCount),
-    pages
-  };
-}
-function levelEntry(s, side) {
-  const list = topEntries(s, side);
-  if (!list.length) return null;
-  const i = Math.min(Math.max(0, (side === "src" ? s.srcCur : s.dstCur) ?? 0), list.length - 1);
-  return {
-    ...list[i],
-    index: i,
-    count: list.length
-  };
-}
-function dialsFor2(s, dialCount) {
-  const dials = [];
-  if (dialCount > 0) {
-    const ss = s.sources.find((x) => x.id === s.selSrc), sd = s.sinks.find((x) => x.id === s.selDst);
-    const lv = (side, label) => {
-      const e = levelEntry(s, side);
-      return {
-        label,
-        value: e ? String(e.key.label) : "\u2013",
-        fill: e && e.count > 1 ? (e.index + 1) / e.count : void 0
-      };
-    };
-    dials.push(s.levelMode ? lv("src", "Ebene Q") : {
-      label: "Quelle",
-      value: ss ? pointName(ss) : "\u2013"
-    });
-    if (dialCount > 1) dials.push(s.levelMode ? lv("dst", "Ebene Z") : {
-      label: "Ziel",
-      value: sd ? pointName(sd) : "\u2013"
-    });
-    if (dialCount > 2) dials.push(s.levelMode ? {
-      label: "Modus",
-      value: "Ebene"
-    } : {
-      label: "Medium",
-      value: MEDIA_LABEL[s.media]
-    });
-    if (dialCount > 3) dials.push({
-      label: "AUTO",
-      value: s.auto ? "an" : "aus",
-      dim: !s.auto
-    });
-    if (dialCount > 5) {
-      dials.push(lv("src", "Ebene Q"));
-      dials.push(lv("dst", "Ebene Z"));
-    }
-  }
-  return dials;
-}
-function layoutXy(s, cols, rows, dialCount, page) {
-  const bq = bouquetPages(s, cols, rows);
-  if (cols >= 5 && rows >= 3) {
-    const pages = 1 + bq;
-    const p2 = Math.min(Math.max(0, page), pages - 1);
-    return p2 === 0 ? layoutColumns(s, cols, rows, dialCount, pages) : bouquetLayout(s, cols, rows, dialCount, p2 - 1, pages);
-  }
-  const ctrls = controlList2(s);
-  let pl = plan(ctrls.length, cols, rows, false);
-  const reserve = pl.pages > 1 || bq > 0;
-  if (reserve) pl = plan(ctrls.length, cols, rows, true);
-  const total = pl.pages + bq;
-  if (page >= pl.pages && bq > 0) return bouquetLayout(s, cols, rows, dialCount, Math.min(page, total - 1) - pl.pages, total);
-  const p = Math.min(Math.max(0, page), pl.pages - 1);
-  const slots = Math.max(1, rows < 3 ? cols - (reserve ? 1 : 0) : cols);
-  const keys = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const act = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const srcs = visible(s.sources, s.media);
-  const dsts = visible(s.sinks, s.media);
-  const sel = s.sources.find((x) => x.id === s.selSrc);
-  const nameOf = new Map(s.sources.map((x) => [
-    x.id,
-    pointName(x)
-  ]));
-  const srcRow = (r) => {
-    srcs.slice(s.srcOff, s.srcOff + slots).forEach((pt, c) => {
-      keys[r][c] = {
-        label: pointName(pt),
-        sub: strip(pt.nodeLabel).replace(/^omp-/, ""),
-        state: pt.id === s.selSrc ? "preset" : "off",
-        dim: !pt.online
-      };
-      act[r][c] = {
-        t: "src",
-        id: pt.id
-      };
-    });
-  };
-  const dstRow = (r) => {
-    dsts.slice(s.dstOff, s.dstOff + slots).forEach((pt, c) => {
-      const from = s.routes[pt.id];
-      const routedFromSel = !!from && from === s.selSrc;
-      keys[r][c] = {
-        label: pointName(pt),
-        sub: from ? nameOf.get(from) ?? "?" : "\u2014",
-        state: pt.id === s.selDst ? "cue" : routedFromSel ? "onair" : "off",
-        dim: !pt.online || !!sel && !compatible(sel, pt)
-      };
-      act[r][c] = {
-        t: "dst",
-        id: pt.id
-      };
-    });
-  };
-  const ctrlRowsAt = (from, count, chunk) => {
-    ctrls.slice(chunk * pl.cap, chunk * pl.cap + pl.cap).forEach((it, i) => {
-      const r = from + Math.floor(i / cols), c = i % cols;
-      if (r < from + count) {
-        keys[r][c] = it.key;
-        act[r][c] = it.act;
-      }
-    });
-  };
-  if (rows >= 3) {
-    srcRow(0);
-    dstRow(1);
-    ctrlRowsAt(2, rows - 2, p);
-  } else if (rows === 2) {
-    if (p === 0) {
-      srcRow(0);
-      dstRow(1);
-    } else ctrlRowsAt(0, 2, p - 1);
-  } else if (p === 0) srcRow(0);
-  else if (p === 1) dstRow(0);
-  else ctrlRowsAt(0, 1, p - 2);
-  const dials = dialsFor2(s, dialCount);
-  return {
-    keys,
-    act,
-    dials,
-    pages: total
-  };
-}
-
-// ui/shell/streamdeck/adapters/xy-panel.ts
-var L2 = () => globalThis.OmpXyLogic;
-var SLOW_MS = 15e3;
-function coreIO(panelId = "") {
-  const panelHdr = panelId ? {
-    "X-OMP-Panel": panelId
-  } : {};
-  const jget = async (u) => {
-    const r = await apiFetch(u);
-    if (!r.ok) throw new Error(`${u}: ${r.status}`);
-    return r.json();
-  };
-  const norm = (list, idKey) => (list || []).map((s) => ({
-    id: String(s[idKey]),
-    label: s.label || String(s[idKey]),
-    nodeLabel: s.nodeLabel || s.nodeId || "",
-    mediaType: s.mediaType || "",
-    online: s.online !== false,
-    nodeId: s.nodeId,
-    tags: (s.tags || []).map((t2) => t2.tag)
-  }));
-  const jgetOpt = async (u) => {
-    try {
-      const r = await apiFetch(u);
-      return r.ok ? await r.json() : null;
-    } catch {
-      return null;
-    }
-  };
-  let slow = null;
-  return {
-    async load() {
-      const [graph, sources, sinks] = await Promise.all([
-        jget("/api/v1/graph"),
-        jget("/api/v1/sources"),
-        jget("/api/v1/sinks")
-      ]);
-      const routes = {};
-      for (const e of graph.edges || []) routes[e.toReceiver] = e.fromSender;
-      if (!slow || Date.now() - slow.at > SLOW_MS) {
-        const [layout, workflows, bq, me] = await Promise.all([
-          jgetOpt("/api/v1/layouts/default"),
-          jgetOpt("/api/v1/workflows"),
-          jgetOpt("/api/v1/layouts/xy-bouquets"),
-          jgetOpt("/api/v1/auth/whoami")
-        ]);
-        slow = {
-          at: Date.now(),
-          groupTree: layout && layout.groups || {
-            groups: {}
-          },
-          workflows: Array.isArray(workflows) ? workflows : [],
-          bouquets: L2()?.parseBouquets(bq) ?? [],
-          canSave: !!me && (me.canConfigure ?? me.isAdmin) === true
-        };
-      }
-      return {
-        sources: norm(sources, "senderId"),
-        sinks: norm(sinks, "receiverId"),
-        routes,
-        nodes: graph.nodes || [],
-        groupTree: slow.groupTree,
-        workflows: slow.workflows,
-        bouquets: slow.bouquets,
-        canSave: slow.canSave
-      };
-    },
-    async saveBouquet(b) {
-      const blob = await jgetOpt("/api/v1/layouts/xy-bouquets") ?? {
-        version: 1,
-        bouquets: []
-      };
-      const list = Array.isArray(blob.bouquets) ? blob.bouquets : [];
-      const r = await apiFetch("/api/v1/layouts/xy-bouquets", {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          ...blob,
-          version: blob.version ?? 1,
-          bouquets: [
-            ...list,
-            b
-          ]
-        })
-      });
-      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
-      slow = null;
-    },
-    async connect(from, to) {
-      const r = await apiFetch("/api/v1/graph/edges", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...panelHdr
-        },
-        body: JSON.stringify({
-          from,
-          to
-        })
-      });
-      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
-    },
-    async disconnect(to) {
-      const r = await apiFetch(`/api/v1/graph/edges/${encodeURIComponent(to)}`, {
-        method: "DELETE",
-        headers: panelHdr
-      });
-      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
-    }
-  };
-}
-var UNDO_MS = 6e4;
-function xyPanelAdapter(io) {
-  const st = {
-    sources: [],
-    sinks: [],
-    routes: {},
-    selSrc: null,
-    selDst: null,
-    media: "",
-    auto: true,
-    srcOff: 0,
-    dstOff: 0,
-    srcPath: [],
-    dstPath: [],
-    bouquets: []
-  };
-  let last = null;
-  let undo = null;
-  let lastRunTimer;
-  const pushUndo = (tos) => {
-    undo = {
-      at: Date.now(),
-      prev: tos.map((to) => ({
-        to,
-        from: st.routes[to] ?? null
-      }))
-    };
-  };
-  const undoSecs = () => {
-    if (!undo || Date.now() - undo.at > UNDO_MS) return 0;
-    return Math.max(1, Math.ceil((UNDO_MS - (Date.now() - undo.at)) / 1e3));
-  };
-  async function take() {
-    const from = st.sources.find((x) => x.id === st.selSrc), to = st.sinks.find((x) => x.id === st.selDst);
-    if (!from || !to) return;
-    if (!compatible(from, to)) return;
-    if (st.draft) {
-      if (!st.draft.some((d) => d.from.id === from.id && d.to.id === to.id)) st.draft.push({
-        from,
-        to
-      });
-      st.selDst = null;
-      return;
-    }
-    pushUndo([
-      to.id
-    ]);
-    await io.connect(from.id, to.id);
-    st.selDst = null;
-    await a.refresh();
-  }
-  async function runBouquet(id) {
-    const b = (st.bouquets ?? []).find((x) => x.id === id);
-    if (!b) return;
-    const logic = L2();
-    let plan3;
-    if (b.kind === "bundle") {
-      const dst = st.sinks.find((x) => x.id === st.selDst);
-      if (!dst) throw new Error(`${b.name}: erst ein Ziel w\xE4hlen (dessen Node ist das B\xFCndel-Ziel)`);
-      plan3 = logic.planBundle(b, st.sources.map(withTags), st.sinks.filter((x) => x.nodeId === dst.nodeId).map(withTags));
-    } else plan3 = logic.resolveBouquet(b, st.sources.map(withTags), st.sinks.map(withTags));
-    if (plan3.routes.length) pushUndo(plan3.routes.map((r) => r.to.id));
-    let ok = 0;
-    const bad = [];
-    for (const r of plan3.routes) {
-      try {
-        await io.connect(r.from.id, r.to.id);
-        ok++;
-      } catch (e) {
-        bad.push(`${r.to.label} (${e instanceof Error ? e.message : e})`);
-      }
-    }
-    st.lastRun = {
-      id,
-      ok,
-      bad: bad.length + plan3.missing.length
-    };
-    clearTimeout(lastRunTimer);
-    lastRunTimer = setTimeout(() => {
-      st.lastRun = null;
-      a.onChange();
-    }, 4e3);
-    await a.refresh();
-    if (bad.length || plan3.missing.length) {
-      a.onError(new Error(`${b.name}: ${ok} geschaltet, nicht auffindbar/nicht schaltbar: ${[
-        ...plan3.missing,
-        ...bad
-      ].join("; ")}`));
-    }
-  }
-  async function saveDraft() {
-    const d = st.draft;
-    if (!d || !d.length || !io.saveBouquet) return;
-    const now = /* @__PURE__ */ new Date();
-    const name = `Deck ${now.toLocaleTimeString("de-DE", {
-      hour12: false
-    })}`;
-    await io.saveBouquet(L2().routesBouquet(name, d.map(({ from, to }) => ({
-      from: withTags(from),
-      to: withTags(to)
-    }))));
-    st.draft = null;
-    await a.refresh();
-  }
-  async function doUndo() {
-    if (!undoSecs() || !undo) return;
-    const e = undo;
-    undo = null;
-    const bad = [];
-    for (const p of e.prev) {
-      try {
-        if (p.from) await io.connect(p.from, p.to);
-        else await io.disconnect(p.to);
-      } catch (err) {
-        bad.push(err instanceof Error ? err.message : String(err));
-      }
-    }
-    await a.refresh();
-    if (bad.length) a.onError(new Error(`R\xFCckg\xE4ngig fehlgeschlagen: ${bad.join("; ")}`));
-  }
-  const withTags = (p) => ({
-    ...p,
-    tags: p.tags ?? [],
-    nodeId: p.nodeId ?? p.nodeLabel
-  });
-  async function run(x) {
-    try {
-      if (x.t === "src") {
-        st.selSrc = x.id;
-        if (st.auto && st.selDst && st.routes[st.selDst] !== x.id) await take();
-      } else if (x.t === "dst") {
-        st.selDst = x.id;
-        if (st.auto && st.selSrc && st.routes[x.id] !== st.selSrc) await take();
-      } else if (x.t === "take") await take();
-      else if (x.t === "disc") {
-        if (st.selDst) {
-          pushUndo([
-            st.selDst
-          ]);
-          await io.disconnect(st.selDst);
-          st.selDst = null;
-          await a.refresh();
-        }
-      } else if (x.t === "auto") st.auto = !st.auto;
-      else if (x.t === "media") {
-        st.media = MEDIA_CYCLE[(MEDIA_CYCLE.indexOf(st.media) + 1) % MEDIA_CYCLE.length];
-        st.srcOff = st.dstOff = st.srcCatOff = st.dstCatOff = 0;
-        st.srcCat = st.dstCat = null;
-      } else if (x.t === "cat") {
-        if (x.side === "src") st.srcCat = x.name, st.srcOff = 0;
-        else st.dstCat = x.name, st.dstOff = 0;
-      } else if (x.t === "folder") {
-        const path = (x.side === "src" ? st.srcPath : st.dstPath) ?? [];
-        setSide(x.side, [
-          ...path,
-          x.id
-        ]);
-      } else if (x.t === "up") {
-        const path = (x.side === "src" ? st.srcPath : st.dstPath) ?? [];
-        setSide(x.side, path.slice(0, -1));
-      } else if (x.t === "bq") await runBouquet(x.id);
-      else if (x.t === "undo") await doUndo();
-      else if (x.t === "rec") st.draft = [];
-      else if (x.t === "recDrop") st.draft = null;
-      else if (x.t === "recSave") await saveDraft();
-      else if (x.t === "more") {
-        const w = Math.max(1, Math.floor(((a.cols || 9) - 1) / 2));
-        const n = x.what === "cat" ? topEntries(st, x.side).length : sideList(st, x.side).length;
-        const key = x.what === "cat" ? x.side === "src" ? "srcCatOff" : "dstCatOff" : x.side === "src" ? "srcOff" : "dstOff";
-        const next = (st[key] ?? 0) + (x.what === "cat" ? Math.max(1, w - 1) : Math.max(1, (a.rows - 1) * w - 1));
-        st[key] = next >= n ? 0 : next;
-      } else if (x.t === "scroll") {
-        const side = x.row;
-        const n = sideList(st, side).length;
-        const step = Math.max(1, (a.cols || 8) - 1);
-        const key = side === "src" ? "srcOff" : "dstOff";
-        st[key] = Math.min(Math.max(0, n - 1), Math.max(0, st[key] + x.dir * step));
-      }
-    } catch (e) {
-      a.onError(e);
-    }
-    a.onChange();
-  }
-  function setSide(side, path) {
-    if (side === "src") st.srcPath = path, st.srcCat = null, st.srcOff = 0, st.srcCatOff = 0;
-    else st.dstPath = path, st.dstCat = null, st.dstOff = 0, st.dstCatOff = 0;
-  }
-  const a = {
-    cols: 0,
-    rows: 0,
-    dials: 0,
-    onChange: () => {
-    },
-    onError: (_e) => {
-    },
-    getLayout(ctx) {
-      a.cols = ctx.cols;
-      a.rows = ctx.rows;
-      a.dials = ctx.dials;
-      st.undoSecs = undoSecs();
-      last = layoutXy(st, ctx.cols, ctx.rows, ctx.dials, ctx.page);
-      return last;
-    },
-    onKey(row, col, down) {
-      if (!down) return;
-      const x = last?.act[row]?.[col];
-      if (x) void run(x);
-    },
-    onDial(i, delta) {
-      const side = i === 4 ? "src" : i === 5 ? "dst" : st.levelMode && i < 2 ? i === 0 ? "src" : "dst" : null;
-      if (side) {
-        const n = topEntries(st, side).length;
-        const key = side === "src" ? "srcCur" : "dstCur";
-        st[key] = Math.min(Math.max(0, n - 1), Math.max(0, (st[key] ?? 0) + (delta > 0 ? 1 : -1)));
-        a.onChange();
-        return;
-      }
-      if (i === 0) st.selSrc = stepSelection(sideList(st, "src"), st.selSrc, delta);
-      else if (i === 1) st.selDst = stepSelection(sideList(st, "dst"), st.selDst, delta);
-      else if (i === 2) void run({
-        t: "media"
-      });
-      a.onChange();
-    },
-    onDialPress(i, down) {
-      if (!down) return;
-      const side = i === 4 ? "src" : i === 5 ? "dst" : st.levelMode && i < 2 ? i === 0 ? "src" : "dst" : null;
-      if (side) {
-        const e = levelEntry(st, side);
-        if (e) {
-          if (side === "src") st.srcCur = 0;
-          else st.dstCur = 0;
-          void run(e.act);
-        }
-      } else if (i === 1) void run({
-        t: "take"
-      });
-      else if (i === 2 && a.dials < 6) {
-        st.levelMode = !st.levelMode;
-        a.onChange();
-      } else if (i === 3) void run({
-        t: "auto"
-      });
-    },
-    dispose() {
-      clearTimeout(lastRunTimer);
-    },
-    async refresh() {
-      try {
-        const d = await io.load();
-        st.sources = d.sources;
-        st.sinks = d.sinks;
-        st.routes = d.routes;
-        if (d.nodes) {
-          const model = L2()?.buildModel({
-            nodes: d.nodes,
-            groupTree: d.groupTree,
-            workflows: d.workflows
-          });
-          st.model = model && model.rootIds.length > 1 ? model : null;
-          st.srcPath = validPath(st.model, st.srcPath ?? []);
-          st.dstPath = validPath(st.model, st.dstPath ?? []);
-        }
-        st.bouquets = d.bouquets ?? [];
-        st.canSaveBouquets = d.canSave === true && !!io.saveBouquet;
-        if (st.selSrc && !st.sources.some((x) => x.id === st.selSrc)) st.selSrc = null;
-        if (st.selDst && !st.sinks.some((x) => x.id === st.selDst)) st.selDst = null;
-        a.onChange();
-      } catch (e) {
-        a.onError(e);
-      }
-    }
-  };
-  return a;
-}
-
-// ui/shell/streamdeck/adapters/video-mixer-logic.ts
-var TRANS_TYPES = [
-  "mix",
-  "vfade",
-  "fadecut",
-  "cutfade"
-];
-var TRANS_RATES = [
-  6,
-  12,
-  25,
-  50
-];
-var TYPE_LABEL = {
-  mix: "MIX",
-  vfade: "V-FADE",
-  fadecut: "FADE-CUT",
-  cutfade: "CUT-FADE"
-};
-function deckLabel(label) {
-  return label.replace(/^omp-/, "").replace(/\s+Sender\s*\d+$/i, "");
-}
-function plan2(entries, ctrls, cols, rows, reserve) {
-  const srcCap = Math.max(1, reserve ? cols - 1 : cols);
-  const srcPages = Math.max(1, Math.ceil(entries / srcCap));
-  const ctrlRows = rows >= 3 ? rows - 2 : rows;
-  const ctrlCap = Math.max(1, ctrlRows * cols - (reserve ? 1 : 0));
-  const ctrlChunks = Math.max(1, Math.ceil(ctrls / ctrlCap));
-  const pages = rows >= 3 ? Math.max(srcPages, ctrlChunks) : rows === 2 ? srcPages + ctrlChunks : 2 * srcPages + ctrlChunks;
-  return {
-    srcCap,
-    srcPages,
-    ctrlCap,
-    ctrlChunks,
-    pages
-  };
-}
-function controlItems(s) {
-  const items = [
-    {
-      key: {
-        label: "CUT"
-      },
-      act: {
-        method: "crosspoint.cut"
-      }
-    },
-    {
-      key: {
-        label: "AUTO"
-      },
-      act: {
-        method: "crosspoint.autoTrans"
-      }
-    },
-    {
-      key: {
-        label: "DSK",
-        state: s.keyer ? "onair" : "off"
-      },
-      act: {
-        method: "keyer.setEnabled",
-        body: {
-          enabled: !s.keyer
-        }
-      }
-    },
-    {
-      key: {
-        label: "\xDCbergang",
-        sub: TYPE_LABEL[s.transType] ?? s.transType
-      },
-      act: {
-        method: "crosspoint.setTransType",
-        body: {
-          type: TRANS_TYPES[(TRANS_TYPES.indexOf(s.transType) + 1) % TRANS_TYPES.length]
-        }
-      }
-    },
-    {
-      key: {
-        label: "Rate",
-        sub: s.transRate ? `${s.transRate} f` : "\u2013"
-      },
-      act: {
-        method: "crosspoint.setTransRate",
-        body: {
-          frames: TRANS_RATES[(TRANS_RATES.indexOf(s.transRate) + 1) % TRANS_RATES.length]
-        }
-      }
-    },
-    // Standbild des PGM-Bildes aufnehmen; es erscheint danach als angeheftete Quelle (auch als Taste).
-    {
-      key: {
-        label: "FREEZE",
-        sub: "Standbild"
-      },
-      act: {
-        method: "freeze.capture"
-      }
-    }
-  ];
-  for (const p of s.pipPresets) {
-    const on = s.pipEnabled && s.activePip === p.id;
-    items.push({
-      key: {
-        label: p.name || p.id,
-        sub: "PIP",
-        state: on ? "cue" : "off"
-      },
-      act: on ? {
-        method: "pip.setEnabled",
-        body: {
-          enabled: false
-        }
-      } : {
-        method: "pip.applyPreset",
-        body: {
-          id: p.id
-        }
-      }
-    });
-  }
-  for (const sl of s.pipSlots ?? []) {
-    if (!sl.enabled) continue;
-    items.push({
-      key: {
-        label: `PIP ${sl.slot + 1}`,
-        sub: "Fokus",
-        state: sl.focused ? "cue" : "off"
-      },
-      act: {
-        method: "pip.toggleFocus",
-        body: {
-          slot: sl.slot
-        }
-      }
-    });
-  }
-  return items;
-}
-function layoutVideoMixer(s, cols, rows, page) {
-  const ctrls = controlItems(s);
-  let pl = plan2(s.entries.length, ctrls.length, cols, rows, false);
-  const reserve = pl.pages > 1;
-  if (reserve) pl = plan2(s.entries.length, ctrls.length, cols, rows, true);
-  const p = Math.min(Math.max(0, page), pl.pages - 1);
-  const keys = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const act = Array.from({
-    length: rows
-  }, () => Array(cols).fill(null));
-  const srcRow = (r, bus, sp) => {
-    const slice = s.entries.slice(sp * pl.srcCap, sp * pl.srcCap + pl.srcCap);
-    slice.forEach((e, c) => {
-      const cur = bus === "pgm" ? s.program : s.preset;
-      const live = e.senderId === cur;
-      const flag = e.problem ? e.problem === "error" ? " \u2716" : " !" : "";
-      keys[r][c] = {
-        label: deckLabel(e.label) || "BLK",
-        sub: bus.toUpperCase() + flag,
-        state: live ? bus === "pgm" ? "onair" : "preset" : e.problem === "error" ? "error" : "off"
-      };
-      act[r][c] = {
-        method: bus === "pgm" ? "crosspoint.take" : "crosspoint.select",
-        body: {
-          senderId: e.senderId
-        }
-      };
-    });
-  };
-  const ctrlRows = (from, count, chunk) => {
-    ctrls.slice(chunk * pl.ctrlCap, chunk * pl.ctrlCap + pl.ctrlCap).forEach((it, i) => {
-      const r = from + Math.floor(i / cols), c = i % cols;
-      if (r < from + count) {
-        keys[r][c] = it.key;
-        act[r][c] = it.act;
-      }
-    });
-  };
-  if (rows >= 3) {
-    srcRow(0, "pgm", p % pl.srcPages);
-    srcRow(1, "pre", p % pl.srcPages);
-    ctrlRows(2, rows - 2, p % pl.ctrlChunks);
-  } else if (rows === 2) {
-    if (p < pl.srcPages) {
-      srcRow(0, "pgm", p);
-      srcRow(1, "pre", p);
-    } else ctrlRows(0, 2, p - pl.srcPages);
-  } else if (p < 2 * pl.srcPages) srcRow(0, p % 2 === 0 ? "pgm" : "pre", Math.floor(p / 2));
-  else ctrlRows(0, 1, p - 2 * pl.srcPages);
-  return {
-    keys,
-    act,
-    pages: pl.pages
-  };
-}
-
-// ui/shell/streamdeck/adapters/video-mixer.ts
-function videoMixerAdapter(api) {
-  let last = null;
-  return {
-    getLayout(ctx) {
-      const s = api.state();
-      if (!s) return {
-        keys: [
-          [
-            {
-              label: "\u2026",
-              dim: true
-            }
-          ]
-        ]
-      };
-      last = layoutVideoMixer(s, ctx.cols, ctx.rows, ctx.page);
-      return last;
-    },
-    onKey(row, col, down) {
-      if (!down) return;
-      const a = last?.act[row]?.[col];
-      if (a) void api.call(a.method, a.body);
-    }
-  };
-}
-
-// ui/shell/streamdeck/adapters/index.ts
-var FACTORIES = {
-  "omp-video-mixer-me-panel": (el) => {
-    const api = el.deckApi;
-    return api ? videoMixerAdapter(api) : null;
-  },
-  "omp-xy-panel": (_el, nodeId) => xyPanelAdapter(coreIO(nodeId)),
-  "omp-ograf-panel": (_el, nodeId) => ografAdapter(proxyIO(nodeId)),
-  "omp-device-hub-panel": (_el, nodeId) => deviceHubAdapter(proxyIO(nodeId)),
-  "omp-audio-mixer-panel": (_el, nodeId) => audioMixerAdapter(proxyIO(nodeId))
-};
-function adapterFor(el, nodeId) {
-  return adapterOf(el) ?? FACTORIES[el.localName]?.(el, nodeId) ?? null;
-}
-
-// ui/shell/streamdeck/broker-logic.ts
-function tabSlots(cols, tabCount) {
-  const all = cols - 1;
-  return tabCount > all ? Math.max(1, all - 1) : all;
-}
-function composeLayout(model, tabs, active, tabPage, content, contentPage) {
-  const { cols, rows } = model;
-  const keys = Array(cols * rows).fill(null);
-  const presses = Array(cols * rows).fill({
-    kind: "none"
-  });
-  keys[0] = {
-    icon: "\u2302",
-    label: "Home",
-    state: active === null ? "preset" : "off"
-  };
-  presses[0] = {
-    kind: "home"
-  };
-  const slots = tabSlots(cols, tabs.length);
-  const tabPages = Math.max(1, Math.ceil(tabs.length / slots));
-  const tp = Math.min(Math.max(0, tabPage), tabPages - 1);
-  tabs.slice(tp * slots, tp * slots + slots).forEach((tab, i) => {
-    keys[1 + i] = {
-      label: tab.label,
-      state: tab.id === active ? "preset" : "off"
-    };
-    presses[1 + i] = {
-      kind: "tab",
-      id: tab.id
-    };
-  });
-  if (tabs.length > cols - 1 && cols >= 3) {
-    keys[cols - 1] = {
-      icon: "\u21C4",
-      label: `${tp + 1}/${tabPages}`
-    };
-    presses[cols - 1] = {
-      kind: "tabPage"
-    };
-  }
-  const contentRows = rows - 1;
-  let contentPages = 1;
-  let dials = [];
-  if (active === null) {
-    const shown = new Set(tabs.slice(tp * slots, tp * slots + slots).map((x) => x.id));
-    tabs.filter((x) => !shown.has(x.id)).slice(0, cols * contentRows).forEach((tab, i) => {
-      const idx = cols + i;
-      keys[idx] = {
-        label: tab.label,
-        state: "off"
-      };
-      presses[idx] = {
-        kind: "tab",
-        id: tab.id
-      };
-    });
-  } else if (content) {
-    for (let r = 0; r < contentRows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const k = content.keys[r]?.[c];
-        if (k) {
-          keys[(r + 1) * cols + c] = k;
-          presses[(r + 1) * cols + c] = {
-            kind: "content",
-            row: r,
-            col: c
-          };
-        }
-      }
-    }
-    contentPages = Math.max(1, content.pages ?? 1);
-    if (contentPages > 1) {
-      const last = cols * rows - 1;
-      keys[last] = {
-        icon: "\u21C4",
-        label: `${Math.min(contentPage, contentPages - 1) + 1}/${contentPages}`
-      };
-      presses[last] = {
-        kind: "contentPage"
-      };
-    }
-    dials = content.dials ?? [];
-  } else {
-    keys[cols] = {
-      label: "\u2026",
-      dim: true
-    };
-  }
-  return {
-    keys,
-    presses,
-    dials,
-    tabPages,
-    contentPages
-  };
-}
-var DialCoalescer = class {
-  #sum = /* @__PURE__ */ new Map();
-  add(i, delta) {
-    this.#sum.set(i, (this.#sum.get(i) ?? 0) + delta);
-  }
-  take() {
-    const out = [
-      ...this.#sum
-    ].filter(([, d]) => d !== 0);
-    this.#sum.clear();
-    return out;
-  }
-};
-
-// ui/shell/streamdeck/models.ts
-var VENDOR_ID = 4057;
-function rotationMatrix(r, w, h) {
-  if (r === 180) return [
-    -1,
-    0,
-    0,
-    -1,
-    w,
-    h
-  ];
-  if (r === 90) return [
-    0,
-    -1,
-    1,
-    0,
-    0,
-    w
-  ];
-  return [
-    1,
-    0,
-    0,
-    1,
-    0,
-    0
-  ];
-}
-function rotatedSize(r, w, h) {
-  return r === 90 ? [
-    h,
-    w
-  ] : [
-    w,
-    h
-  ];
-}
-var key15 = {
-  cols: 5,
-  rows: 3,
-  keySize: 72,
-  rotation: 180,
-  dials: 0
-};
-var xl = {
-  cols: 8,
-  rows: 4,
-  keySize: 96,
-  rotation: 180,
-  dials: 0
-};
-var MODELS = [
-  {
-    pid: 108,
-    name: "Stream Deck XL",
-    ...xl
-  },
-  {
-    pid: 143,
-    name: "Stream Deck XL 2022",
-    ...xl
-  },
-  {
-    pid: 109,
-    name: "Stream Deck 2019",
-    ...key15
-  },
-  {
-    pid: 128,
-    name: "Stream Deck MK.2",
-    ...key15
-  },
-  {
-    pid: 165,
-    name: "Stream Deck MK.2 Scissor",
-    ...key15
-  },
-  {
-    pid: 132,
-    name: "Stream Deck +",
-    cols: 4,
-    rows: 2,
-    keySize: 120,
-    // Hersteller: „keine Drehung“; Vorlage dreht. Am Gerät zu klären (40.2-Gerätetest).
-    rotation: 0,
-    dials: 4,
-    strip: {
-      w: 800,
-      h: 100
-    }
-  },
-  {
-    // Hersteller-HID-Seite „Stream Deck + XL“ (2026-10-13): 9×4 Tasten 112 px, 6 Dials,
-    // Streifen 1200×100; alle Bilder (Tasten, Streifen) 90° gegen den Uhrzeigersinn gedreht.
-    pid: 198,
-    name: "Stream Deck + XL",
-    cols: 9,
-    rows: 4,
-    keySize: 112,
-    rotation: 90,
-    dials: 6,
-    strip: {
-      w: 1200,
-      h: 100
-    }
-  }
-];
-function modelForPid(pid) {
-  return MODELS.find((m) => m.pid === pid);
-}
-function keyCount(m) {
-  return m.cols * m.rows;
-}
-
-// ui/shell/streamdeck/plot-draw.ts
-function drawEq(g, s, W, H, p) {
-  const pad = Math.max(4, H * 0.06);
-  const X = (f) => pad + Math.log10(f / 20) / 3 * (W - 2 * pad);
-  const Y = (db) => H / 2 - db / 18 * (H / 2 - pad);
-  g.lineWidth = 1;
-  g.strokeStyle = p.grid;
-  for (const f of [
-    100,
-    1e3,
-    1e4
-  ]) {
-    g.beginPath();
-    g.moveTo(X(f), pad);
-    g.lineTo(X(f), H - pad);
-    g.stroke();
-  }
-  for (const d of [
-    -12,
-    -6,
-    6,
-    12
-  ]) {
-    g.beginPath();
-    g.moveTo(pad, Y(d));
-    g.lineTo(W - pad, Y(d));
-    g.stroke();
-  }
-  g.strokeStyle = p.dim;
-  g.beginPath();
-  g.moveTo(pad, Y(0));
-  g.lineTo(W - pad, Y(0));
-  g.stroke();
-  g.lineWidth = Math.max(2, H * 0.025);
-  g.strokeStyle = s.bypass ? p.dim : p.accent;
-  g.lineJoin = "round";
-  g.beginPath();
-  const n = Math.max(40, Math.round(W / 4));
-  for (let i = 0; i <= n; i++) {
-    const f = 20 * Math.pow(1e3, i / n);
-    const y = Y(Math.max(-18, Math.min(18, eqResponseDb(s, f))));
-    if (i) g.lineTo(X(f), y);
-    else g.moveTo(X(f), y);
-  }
-  g.stroke();
-  s.bands.forEach((b, i) => {
-    g.beginPath();
-    g.arc(X(b.f), Y(Math.max(-18, Math.min(18, b.g))), Math.max(3, H * 0.035), 0, Math.PI * 2);
-    g.fillStyle = i === s.focus ? p.text : "transparent";
-    g.fill();
-    g.lineWidth = 1.5;
-    g.strokeStyle = p.text;
-    g.stroke();
-  });
-}
-function drawDyn(g, s, W, H, p) {
-  const pad = Math.max(4, Math.min(W, H) * 0.08);
-  const side = Math.min(W - 2 * pad, H - 2 * pad);
-  const x0 = (W - side) / 2, y0 = (H - side) / 2;
-  const lo = -60, hi = 0;
-  const X = (db) => x0 + (Math.max(lo, Math.min(hi, db)) - lo) / (hi - lo) * side;
-  const Y = (db) => y0 + side - (Math.max(lo, Math.min(hi, db)) - lo) / (hi - lo) * side;
-  g.lineWidth = 1;
-  g.strokeStyle = p.grid;
-  for (const d of [
-    -48,
-    -36,
-    -24,
-    -12
-  ]) {
-    g.beginPath();
-    g.moveTo(X(d), y0);
-    g.lineTo(X(d), y0 + side);
-    g.stroke();
-    g.beginPath();
-    g.moveTo(x0, Y(d));
-    g.lineTo(x0 + side, Y(d));
-    g.stroke();
-  }
-  g.strokeStyle = p.dim;
-  g.strokeRect(x0, y0, side, side);
-  g.beginPath();
-  g.moveTo(X(lo), Y(lo));
-  g.lineTo(X(hi), Y(hi));
-  g.stroke();
-  if (s.gateOn && s.gateThr > lo) {
-    g.strokeStyle = p.dim;
-    g.setLineDash([
-      4,
-      3
-    ]);
-    g.beginPath();
-    g.moveTo(X(s.gateThr), y0);
-    g.lineTo(X(s.gateThr), y0 + side);
-    g.stroke();
-    g.setLineDash([]);
-  }
-  g.lineWidth = Math.max(2, side * 0.03);
-  g.strokeStyle = s.on ? p.accent : p.dim;
-  g.beginPath();
-  for (let i = 0; i <= 60; i++) {
-    const x = lo + i / 60 * (hi - lo);
-    const y = compOutDb(s, x);
-    if (i) g.lineTo(X(x), Y(y));
-    else g.moveTo(X(x), Y(y));
-  }
-  g.stroke();
-  g.beginPath();
-  g.arc(X(s.thr), Y(compOutDb(s, s.thr)), Math.max(3, side * 0.035), 0, Math.PI * 2);
-  g.fillStyle = p.text;
-  g.fill();
-}
-function drawPlotSlice(g, sl, cellW, cellH, p, alpha = 1) {
-  g.save();
-  g.beginPath();
-  g.rect(0, 0, cellW, cellH);
-  g.clip();
-  g.translate(-sl.cx * cellW, -sl.cy * cellH);
-  g.globalAlpha = alpha;
-  const W = sl.cw * cellW, H = sl.ch * cellH;
-  if (sl.spec.kind === "eq") drawEq(g, sl.spec, W, H, p);
-  else drawDyn(g, sl.spec, W, H, p);
-  g.restore();
-}
-
-// ui/shell/streamdeck/draw.ts
-var STATE_TOKEN = {
-  onair: "--omp-onair",
-  preset: "--omp-preset",
-  cue: "--omp-cue",
-  off: "--omp-surface-raised",
-  error: "--omp-error"
-};
-var FALLBACK = {
-  "--omp-onair": "#e53935",
-  "--omp-preset": "#43a047",
-  "--omp-cue": "#fb8c00",
-  "--omp-error": "#ef5350",
-  "--omp-surface": "#0f1522",
-  "--omp-surface-raised": "#172033",
-  "--omp-bg": "#080c16",
-  "--omp-text": "#eaf0fa",
-  "--omp-text-dim": "#93a1ba",
-  "--omp-accent-cyan": "#19d3f3"
-};
-function resolveColor(c) {
-  if (!c.startsWith("--")) return c;
-  const v = typeof document !== "undefined" ? getComputedStyle(document.documentElement).getPropertyValue(c).trim() : "";
-  return v || FALLBACK[c] || "#000";
-}
-function wrap(g, text, maxW, maxLines) {
-  const words = text.split(/\s+/).filter(Boolean);
-  const lines = [];
-  let cur = "";
-  for (const w of words) {
-    const next = cur ? `${cur} ${w}` : w;
-    if (g.measureText(next).width <= maxW || !cur) cur = next;
-    else {
-      lines.push(cur);
-      cur = w;
-    }
-  }
-  if (cur) lines.push(cur);
-  if (lines.length > maxLines) {
-    lines.length = maxLines;
-    let l = lines[maxLines - 1];
-    while (l.length > 1 && g.measureText(`${l}\u2026`).width > maxW) l = l.slice(0, -1);
-    lines[maxLines - 1] = `${l}\u2026`;
-  }
-  return lines.map((l) => {
-    while (l.length > 1 && g.measureText(l).width > maxW) l = l.slice(0, -2) + "\u2026";
-    return l;
-  });
-}
-function wrapHard(g, text, maxW) {
-  const lines = [];
-  let cur = "";
-  const push = () => {
-    if (cur) lines.push(cur);
-    cur = "";
-  };
-  for (const w of text.split(/\s+/).filter(Boolean)) {
-    const next = cur ? `${cur} ${w}` : w;
-    if (g.measureText(next).width <= maxW) {
-      cur = next;
-      continue;
-    }
-    push();
-    if (g.measureText(w).width <= maxW) {
-      cur = w;
-      continue;
-    }
-    for (const ch of w) {
-      if (g.measureText(cur + ch).width > maxW && cur) push();
-      cur += ch;
-    }
-  }
-  push();
-  return lines;
-}
-function fitText(g, text, maxW, maxH, maxFs, minFs, weight) {
-  let lines = [];
-  let fs = maxFs;
-  for (const noSplit of [
-    true,
-    false
-  ]) {
-    for (fs = maxFs; fs >= minFs; fs -= 1) {
-      g.font = `${weight} ${fs}px sans-serif`;
-      if (noSplit && text.split(/\s+/).some((w) => g.measureText(w).width > maxW)) continue;
-      lines = wrapHard(g, text, maxW);
-      if (lines.length * fs * 1.12 <= maxH) return {
-        lines,
-        fs
-      };
-    }
-  }
-  fs = minFs;
-  g.font = `${weight} ${fs}px sans-serif`;
-  lines = wrapHard(g, text, maxW);
-  const n = Math.max(1, Math.floor(maxH / (fs * 1.12)));
-  if (lines.length > n) {
-    lines.length = n;
-    let l = lines[n - 1];
-    while (l.length > 1 && g.measureText(`${l}\u2026`).width > maxW) l = l.slice(0, -1);
-    lines[n - 1] = `${l}\u2026`;
-  }
-  return {
-    lines,
-    fs
-  };
-}
-async function toJpeg(c) {
-  const b = await c.convertToBlob({
-    type: "image/jpeg",
-    quality: 0.92
-  });
-  return new Uint8Array(await b.arrayBuffer());
-}
-function palette() {
-  return {
-    bg: resolveColor("--omp-surface"),
-    grid: "rgba(255,255,255,0.12)",
-    dim: resolveColor("--omp-text-dim"),
-    line: resolveColor("--omp-text"),
-    accent: resolveColor("--omp-accent-cyan"),
-    text: resolveColor("--omp-text")
-  };
-}
-function drawKey(def, m) {
-  const s = m.keySize;
-  const c = new OffscreenCanvas(s, s);
-  const g = c.getContext("2d");
-  g.setTransform(...rotationMatrix(m.rotation, s, s));
-  g.fillStyle = resolveColor("--omp-bg");
-  g.fillRect(0, 0, s, s);
-  if (!def) return c;
-  if (def.plot) {
-    g.fillStyle = resolveColor("--omp-surface");
-    g.fillRect(0, 0, s, s);
-    drawPlotSlice(g, def.plot, s, s, palette());
-    return c;
-  }
-  const accent = def.color ? resolveColor(def.color) : def.state ? resolveColor(STATE_TOKEN[def.state]) : "";
-  const lit = def.state === "onair" || def.state === "preset" || def.state === "cue" || def.state === "error";
-  g.fillStyle = lit && accent ? accent : resolveColor("--omp-surface-raised");
-  g.fillRect(2, 2, s - 4, s - 4);
-  if (!lit && accent) {
-    g.fillStyle = accent;
-    g.fillRect(2, 2, s - 4, Math.max(4, Math.round(s * 0.06)));
-  }
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.fillStyle = resolveColor("--omp-text");
-  g.fillStyle = resolveColor("--omp-text");
-  const maxW = s - 10;
-  let top = 6;
-  let bottom = s - 6;
-  if (def.icon) {
-    g.font = `${Math.round(s * 0.3)}px sans-serif`;
-    g.fillText(def.icon, s / 2, top + s * 0.16);
-    top += s * 0.3;
-  }
-  if (def.sub) {
-    const sub = fitText(g, def.sub, maxW, s * 0.2, Math.round(s * 0.15), Math.round(s * 0.1), "");
-    g.fillStyle = lit ? "rgba(255,255,255,0.85)" : resolveColor("--omp-text-dim");
-    const lh = sub.fs * 1.12;
-    sub.lines.forEach((l, i) => g.fillText(l, s / 2, bottom - (sub.lines.length - i - 0.5) * lh));
-    bottom -= sub.lines.length * lh + 2;
-  }
-  if (def.label) {
-    g.fillStyle = resolveColor("--omp-text");
-    const lab = fitText(g, def.label, maxW, Math.max(s * 0.2, bottom - top), Math.round(s * (def.icon ? 0.19 : 0.24)), Math.round(s * 0.11), "bold");
-    const lh = lab.fs * 1.12;
-    const y0 = top + (bottom - top - lab.lines.length * lh) / 2 + lh / 2;
-    lab.lines.forEach((l, i) => g.fillText(l, s / 2, y0 + i * lh));
-  }
-  if (def.dim) {
-    g.fillStyle = "rgba(0,0,0,0.6)";
-    g.fillRect(0, 0, s, s);
-  }
-  return c;
-}
-function drawDial(def, w, h, rotation = 0) {
-  const [cw, ch] = rotatedSize(rotation, w, h);
-  const c = new OffscreenCanvas(cw, ch);
-  const g = c.getContext("2d");
-  g.setTransform(...rotationMatrix(rotation, w, h));
-  g.fillStyle = resolveColor("--omp-surface");
-  g.fillRect(0, 0, w, h);
-  if (!def) return c;
-  if (def.plot) drawPlotSlice(g, def.plot, w, h, palette(), 0.6);
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  g.fillStyle = resolveColor("--omp-text-dim");
-  g.font = `${Math.round(h * 0.2)}px sans-serif`;
-  g.fillText(wrap(g, def.label, w - 12, 1)[0] ?? "", w / 2, h * 0.2);
-  g.fillStyle = resolveColor("--omp-text");
-  g.font = `bold ${Math.round(h * 0.3)}px sans-serif`;
-  g.fillText(wrap(g, def.value, w - 12, 1)[0] ?? "", w / 2, h * 0.52);
-  if (def.fill !== void 0) {
-    const f = Math.max(0, Math.min(1, def.fill));
-    g.fillStyle = resolveColor("--omp-surface-raised");
-    g.fillRect(12, h * 0.8, w - 24, h * 0.1);
-    g.fillStyle = resolveColor("--omp-accent-cyan");
-    g.fillRect(12, h * 0.8, (w - 24) * f, h * 0.1);
-  }
-  if (def.dim) {
-    g.fillStyle = "rgba(0,0,0,0.6)";
-    g.fillRect(0, 0, w, h);
-  }
-  return c;
-}
-var canvasRasterizer = {
-  key: (d, m) => toJpeg(drawKey(d, m)),
-  dial: (d, w, h, rot) => toJpeg(drawDial(d, w, h, rot))
-};
-
-// ui/shell/streamdeck/render-logic.ts
-function fingerprint(def) {
-  if (!def) return "-";
-  const o = def;
-  return JSON.stringify(Object.keys(o).sort().filter((k) => o[k] !== void 0).map((k) => [
-    k,
-    o[k]
-  ]));
-}
-var DeckRenderer = class {
-  target;
-  raster;
-  opts;
-  #keys;
-  #dials;
-  #sentKeys;
-  #sentDials;
-  #dirty;
-  #timer;
-  #flushing;
-  stats;
-  constructor(target, raster, opts = {}) {
-    this.target = target;
-    this.raster = raster;
-    this.opts = opts;
-    this.#dirty = false;
-    this.#timer = null;
-    this.#flushing = null;
-    this.stats = {
-      keyImages: 0,
-      stripImages: 0,
-      flushes: 0
-    };
-    const n = keyCount(target.model);
-    this.#keys = Array(n).fill(null);
-    this.#dials = Array(target.model.dials).fill(null);
-    this.#sentKeys = Array(n).fill("?");
-    this.#sentDials = Array(target.model.dials).fill("?");
-  }
-  /** Setzt den gewünschten Zustand; fehlende Einträge = leer. */
-  set(keys, dials = []) {
-    for (let i = 0; i < this.#keys.length; i++) this.#keys[i] = keys[i] ?? null;
-    for (let i = 0; i < this.#dials.length; i++) this.#dials[i] = dials[i] ?? null;
-    this.#schedule();
-  }
-  /** Alles neu senden (z. B. nach Wiederverbinden). */
-  invalidate() {
-    this.#sentKeys.fill("?");
-    this.#sentDials.fill("?");
-    this.#schedule();
-  }
-  /** Wartet auf einen gerade laufenden Durchgang (Tests/Schließen). */
-  async idle() {
-    while (this.#flushing) await this.#flushing;
-  }
-  /** Sofort senden (ohne Debounce). */
-  async flushNow() {
-    this.#timer = null;
-    while (this.#flushing) await this.#flushing;
-    this.#flushing = this.#flush().finally(() => this.#flushing = null);
-    await this.#flushing;
-  }
-  #schedule() {
-    this.#dirty = true;
-    if (this.#timer !== null) return;
-    const set = this.opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
-    this.#timer = set(() => {
-      void this.flushNow();
-    }, this.opts.debounceMs ?? 60);
-  }
-  async #flush() {
-    this.stats.flushes++;
-    this.#dirty = false;
-    try {
-      const model = this.target.model;
-      const keyJobs = [];
-      for (let i = 0; i < this.#keys.length; i++) {
-        const fp = fingerprint(this.#keys[i]);
-        if (fp !== this.#sentKeys[i]) keyJobs.push({
-          i,
-          fp,
-          jpeg: this.raster.key(this.#keys[i], model)
-        });
-      }
-      const strip2 = model.strip;
-      const dialJobs = [];
-      if (strip2 && this.#dials.length) {
-        const w = strip2.w / this.#dials.length;
-        for (let i = 0; i < this.#dials.length; i++) {
-          const fp = fingerprint(this.#dials[i]);
-          if (fp !== this.#sentDials[i]) dialJobs.push({
-            i,
-            fp,
-            w,
-            h: strip2.h,
-            jpeg: this.raster.dial(this.#dials[i], w, strip2.h, model.rotation)
-          });
-        }
-      }
-      for (const j of [
-        ...keyJobs,
-        ...dialJobs
-      ]) j.jpeg.catch(() => {
-      });
-      for (const j of keyJobs) {
-        await this.target.setKeyImage(j.i, await j.jpeg);
-        this.#sentKeys[j.i] = j.fp;
-        this.stats.keyImages++;
-      }
-      for (const j of dialJobs) {
-        await this.target.setStripImage(j.w * j.i, 0, j.w, j.h, await j.jpeg);
-        this.#sentDials[j.i] = j.fp;
-        this.stats.stripImages++;
-      }
-    } catch (e) {
-      this.opts.onError?.(e);
-      this.#dirty = true;
-    }
-    if (this.#dirty && this.#timer === null) this.#schedule();
-  }
-};
-
-// ui/shell/streamdeck/broker.ts
-var REFRESH_MS = 1500;
-var DIAL_FLUSH_MS = 50;
-var DeckBroker = class {
-  #dev;
-  #renderer;
-  #tabs = /* @__PURE__ */ new Map();
-  #active = null;
-  #tabPage = 0;
-  #composed = null;
-  #dials = new DialCoalescer();
-  #timers = [];
-  #unsub;
-  /** Gerät wählt einen Tab: Bildschirm soll folgen (Kachel nach vorn). */
-  onFocusRequest = () => {
-  };
-  onError = (e) => console.warn("[streamdeck]", e);
-  constructor(dev, raster = canvasRasterizer) {
-    this.#dev = dev;
-    this.#renderer = new DeckRenderer(dev, raster, {
-      onError: (e) => this.onError(e)
-    });
-    this.#unsub = dev.onEvent((e) => this.#onEvent(e));
-    this.#timers.push(globalThis.setInterval(() => this.#flushDials(), DIAL_FLUSH_MS));
-    this.#timers.push(globalThis.setInterval(() => void this.#refresh(), REFRESH_MS));
-    void dev.setBrightness(70).catch((e) => this.onError(e));
-    this.relayout();
-  }
-  get active() {
-    return this.#active;
-  }
-  get composed() {
-    return this.#composed;
-  }
-  get model() {
-    return this.#dev.model;
-  }
-  attach(id, label, el, nodeId) {
-    this.detach(id);
-    const tab = {
-      info: {
-        id,
-        label
-      },
-      el,
-      nodeId,
-      adapter: null,
-      page: 0,
-      onRelayout: () => this.relayout()
-    };
-    el.addEventListener(RELAYOUT_EVENT, tab.onRelayout);
-    this.#tabs.set(id, tab);
-    this.relayout();
-  }
-  detach(id) {
-    const t2 = this.#tabs.get(id);
-    if (!t2) return;
-    t2.el.removeEventListener(RELAYOUT_EVENT, t2.onRelayout);
-    t2.adapter?.dispose?.();
-    this.#tabs.delete(id);
-    if (this.#active === id) this.#active = null;
-    this.relayout();
-  }
-  /** Tab aktivieren (null = Home). `fromDevice`: Bildschirm soll folgen. */
-  focus(id, fromDevice = false) {
-    if (id !== null && !this.#tabs.has(id)) return;
-    this.#active = id;
-    if (id !== null) {
-      const t2 = this.#tabs.get(id);
-      t2.adapter ??= this.#resolveAdapter(t2);
-    }
-    if (fromDevice) this.onFocusRequest(id);
-    this.relayout();
-  }
-  #resolveAdapter(t2) {
-    const own = adapterFor(t2.el, t2.nodeId);
-    if (own) {
-      const w = own;
-      if ("onChange" in w) w.onChange = () => this.relayout();
-      if ("onError" in w) w.onError = (e) => this.onError(e);
-      void Promise.resolve(own.refresh?.()).catch((e) => this.onError(e));
-      return own;
-    }
-    const a = new AutoRasterAdapter(proxyIO(t2.nodeId));
-    a.onChange = () => this.relayout();
-    a.onError = (e) => this.onError(e);
-    return a;
-  }
-  relayout() {
-    const m = this.#dev.model;
-    const tabs = [
-      ...this.#tabs.values()
-    ].map((t2) => t2.info);
-    const act = this.#active ? this.#tabs.get(this.#active) : void 0;
-    const content = act?.adapter ? act.adapter.getLayout({
-      cols: m.cols,
-      rows: m.rows - 1,
-      dials: m.dials,
-      page: act.page
-    }) : null;
-    this.#composed = composeLayout(m, tabs, this.#active, this.#tabPage, content, act?.page ?? 0);
-    const c = this.#composed;
-    if (act) act.page = Math.min(act.page, c.contentPages - 1);
-    this.#renderer.set(c.keys, c.dials);
-  }
-  /** Sendet ausstehende Bilder sofort (Tests/Schließen). */
-  flushNow() {
-    return this.#renderer.flushNow();
-  }
-  #onEvent(e) {
-    const c = this.#composed;
-    const act = this.#active ? this.#tabs.get(this.#active) : void 0;
-    if (e.kind === "key") {
-      const p = c?.presses[e.index];
-      if (!p) return;
-      if (p.kind === "content") {
-        act?.adapter?.onKey(p.row, p.col, e.down);
-        return;
-      }
-      if (!e.down) return;
-      if (p.kind === "home") this.focus(null, true);
-      else if (p.kind === "tab") this.focus(p.id, true);
-      else if (p.kind === "tabPage") {
-        this.#tabPage = (this.#tabPage + 1) % (c?.tabPages ?? 1);
-        this.relayout();
-      } else if (p.kind === "contentPage" && act) {
-        act.page = (act.page + 1) % (c?.contentPages ?? 1);
-        this.relayout();
-      }
-    } else if (e.kind === "dialTurn") {
-      this.#dials.add(e.index, e.delta);
-    } else if (e.kind === "dialPress") {
-      act?.adapter?.onDialPress?.(e.index, e.down);
-    } else if (e.kind === "flick" && act && (c?.contentPages ?? 1) > 1) {
-      const n = c.contentPages;
-      act.page = (act.page + (e.x2 < e.x ? 1 : n - 1)) % n;
-      this.relayout();
-    }
-  }
-  #flushDials() {
-    const act = this.#active ? this.#tabs.get(this.#active) : void 0;
-    for (const [i, d] of this.#dials.take()) act?.adapter?.onDial?.(i, d);
-  }
-  #refreshing = false;
-  async #refresh() {
-    if (this.#refreshing) return;
-    const act = this.#active ? this.#tabs.get(this.#active) : void 0;
-    this.#refreshing = true;
-    try {
-      await Promise.race([
-        Promise.resolve(act?.adapter?.refresh?.()),
-        new Promise((res) => setTimeout(res, 8e3))
-      ]);
-    } catch (e) {
-      this.onError(e);
-    } finally {
-      this.#refreshing = false;
-    }
-  }
-  /** Beendet den Broker; das Gerät schließt der Aufrufer. */
-  stop() {
-    for (const t2 of this.#timers) clearInterval(t2);
-    this.#unsub();
-    for (const id of [
-      ...this.#tabs.keys()
-    ]) {
-      const t2 = this.#tabs.get(id);
-      t2.el.removeEventListener(RELAYOUT_EVENT, t2.onRelayout);
-      t2.adapter?.dispose?.();
-    }
-    this.#tabs.clear();
-  }
-};
-
-// ui/shell/streamdeck/protocol.ts
-var OUTPUT_LEN = 1023;
-var KEY_HEADER = 7;
-var STRIP_HEADER = 15;
-var CMD_KEY_IMAGE = 7;
-var CMD_STRIP_PARTIAL = 12;
-function u16(buf, off, v) {
-  buf[off] = v & 255;
-  buf[off + 1] = v >> 8 & 255;
-}
-function chunked(data, header, fill) {
-  const payload = OUTPUT_LEN - header;
-  const out = [];
-  let off = 0;
-  do {
-    const part = data.subarray(off, off + payload);
-    off += part.length;
-    const buf = new Uint8Array(OUTPUT_LEN);
-    fill(buf, off >= data.length, out.length, part.length);
-    buf.set(part, header);
-    out.push(buf);
-  } while (off < data.length);
-  return out;
-}
-function keyImageReports(key, jpeg) {
-  return chunked(jpeg, KEY_HEADER, (b, last, chunk, len) => {
-    b[0] = CMD_KEY_IMAGE;
-    b[1] = key;
-    b[2] = last ? 1 : 0;
-    u16(b, 3, len);
-    u16(b, 5, chunk);
-  });
-}
-function stripImageReports(x, y, w, h, jpeg) {
-  return chunked(jpeg, STRIP_HEADER, (b, last, chunk, len) => {
-    b[0] = CMD_STRIP_PARTIAL;
-    u16(b, 1, x);
-    u16(b, 3, y);
-    u16(b, 5, w);
-    u16(b, 7, h);
-    b[9] = last ? 1 : 0;
-    u16(b, 10, chunk);
-    u16(b, 12, len);
-  });
-}
-function brightnessFeature(pct) {
-  const b = new Uint8Array(31);
-  b[0] = 8;
-  b[1] = Math.max(0, Math.min(100, Math.round(pct)));
-  return b;
-}
-function showLogoFeature() {
-  const b = new Uint8Array(31);
-  b[0] = 2;
-  return b;
-}
-var rd16 = (d, o) => d[o] | d[o + 1] << 8;
-var i8 = (v) => v > 127 ? v - 256 : v;
-var InputDecoder = class {
-  model;
-  #keys;
-  #dials;
-  constructor(model) {
-    this.model = model;
-    this.#keys = Array(keyCount(model)).fill(false);
-    this.#dials = Array(model.dials).fill(false);
-  }
-  decode(d) {
-    const ev = [];
-    const cmd = d[0];
-    if (cmd === 0) {
-      for (let i = 0; i < this.#keys.length; i++) {
-        const down = d[3 + i] === 1;
-        if (down !== this.#keys[i]) {
-          this.#keys[i] = down;
-          ev.push({
-            kind: "key",
-            index: i,
-            down
-          });
-        }
-      }
-    } else if (cmd === 3 && this.model.dials > 0) {
-      const type = d[3];
-      for (let i = 0; i < this.model.dials; i++) {
-        if (type === 1) {
-          const delta = i8(d[4 + i]);
-          if (delta !== 0) ev.push({
-            kind: "dialTurn",
-            index: i,
-            delta
-          });
-        } else if (type === 0) {
-          const down = d[4 + i] === 1;
-          if (down !== this.#dials[i]) {
-            this.#dials[i] = down;
-            ev.push({
-              kind: "dialPress",
-              index: i,
-              down
-            });
-          }
-        }
-      }
-    } else if (cmd === 2 && this.model.strip) {
-      const type = d[3];
-      if (type === 1 || type === 2) {
-        ev.push({
-          kind: "touch",
-          type: type === 1 ? "tap" : "press",
-          x: rd16(d, 5),
-          y: rd16(d, 7)
-        });
-      } else if (type === 3) {
-        ev.push({
-          kind: "flick",
-          x: rd16(d, 5),
-          y: rd16(d, 7),
-          x2: rd16(d, 9),
-          y2: rd16(d, 11)
-        });
-      }
-    }
-    return ev;
-  }
-};
-
-// ui/shell/streamdeck/transport.ts
-var DeckDevice = class _DeckDevice {
-  model;
-  #hid;
-  #decoder;
-  #listeners = /* @__PURE__ */ new Set();
-  #onReport = (e) => {
-    const d = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
-    for (const ev of this.#decoder.decode(d)) for (const l of this.#listeners) l(ev);
-  };
-  constructor(hid, model) {
-    this.#hid = hid;
-    this.model = model;
-    this.#decoder = new InputDecoder(model);
-  }
-  /** Öffnet ein Gerät; wirft `Error(OpenError)` mit lesbarem Code in `message`. */
-  static async open(hid) {
-    const model = hid.vendorId === VENDOR_ID ? modelForPid(hid.productId) : void 0;
-    if (!model) throw new Error("unsupported-model");
-    try {
-      if (!hid.opened) await hid.open();
-    } catch {
-      throw new Error("open-failed");
-    }
-    const dev = new _DeckDevice(hid, model);
-    hid.addEventListener("inputreport", dev.#onReport);
-    return dev;
-  }
-  /** Anzeigename des Geräts (Produktname des HID-Geräts, sonst das Modell). */
-  get label() {
-    return this.#hid.productName || this.model.name;
-  }
-  onEvent(cb) {
-    this.#listeners.add(cb);
-    return () => this.#listeners.delete(cb);
-  }
-  async setKeyImage(key, jpeg) {
-    for (const r of keyImageReports(key, jpeg)) await this.#hid.sendReport(2, r);
-  }
-  async setStripImage(x, y, w, h, jpeg) {
-    if (!this.model.strip) return;
-    for (const r of stripImageReports(x, y, w, h, jpeg)) await this.#hid.sendReport(2, r);
-  }
-  async setBrightness(pct) {
-    await this.#hid.sendFeatureReport(3, brightnessFeature(pct));
-  }
-  /** Zeigt das Logo und schließt (Hersteller-Empfehlung statt „Reset“). */
-  async close() {
-    this.#hid.removeEventListener("inputreport", this.#onReport);
-    this.#listeners.clear();
-    try {
-      await this.#hid.sendFeatureReport(3, showLogoFeature());
-      await this.#hid.close();
-    } catch {
-    }
-  }
-};
-async function connectKnown() {
-  const hid = navigator.hid;
-  if (!hid) return null;
-  const known = (await hid.getDevices().catch(() => [])).find((d) => d.vendorId === VENDOR_ID && modelForPid(d.productId));
-  return known ? openResult(known) : null;
-}
-async function openResult(h) {
-  try {
-    return {
-      ok: true,
-      device: await DeckDevice.open(h)
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      reason: e.message
-    };
-  }
-}
-
-// ui/shell/streamdeck/session.ts
-var DeckSession = class {
-  #reg = /* @__PURE__ */ new Map();
-  #broker = null;
-  #dev = null;
-  #hotplug = false;
-  #listeners = /* @__PURE__ */ new Set();
-  #errListeners = /* @__PURE__ */ new Set();
-  /** Die Konsole hängt hier ein: Gerät hat Tab gewählt → Kachel nach vorn. */
-  focusRequest = () => {
-  };
-  get broker() {
-    return this.#broker;
-  }
-  get device() {
-    return this.#dev;
-  }
-  onChange(cb) {
-    this.#listeners.add(cb);
-    return () => this.#listeners.delete(cb);
-  }
-  /** Fehler des Brokers/der Adapter (z. B. 403 beim Schalten) für die Anzeige. */
-  onError(cb) {
-    this.#errListeners.add(cb);
-    return () => this.#errListeners.delete(cb);
-  }
-  #emit() {
-    for (const l of this.#listeners) l();
-  }
-  registerTab(id, label, el, nodeId) {
-    const short = label.replace(/^omp-/, "");
-    this.#reg.set(id, {
-      label: short,
-      el,
-      nodeId
-    });
-    this.#broker?.attach(id, short, el, nodeId);
-  }
-  unregisterTab(id) {
-    this.#reg.delete(id);
-    this.#broker?.detach(id);
-  }
-  /** Bildschirm hat eine Kachel nach vorn geholt → Gerät folgt. */
-  focusFromScreen(id) {
-    if (this.#broker?.active !== void 0 && this.#reg.has(id)) this.#broker?.focus(id);
-  }
-  setDevice(dev) {
-    this.#broker?.stop();
-    this.#broker = null;
-    this.#dev = dev;
-    if (dev) {
-      const b = new DeckBroker(dev);
-      b.onFocusRequest = (id) => this.focusRequest(id);
-      b.onError = (e) => {
-        console.warn("[streamdeck]", e);
-        for (const l of this.#errListeners) l(e);
-      };
-      for (const [id, r] of this.#reg) b.attach(id, r.label, r.el, r.nodeId);
-      this.#broker = b;
-      this.#installHotplug();
-    }
-    this.#emit();
-  }
-  /** Broker beenden und Gerät schließen → Gerät zeigt wieder sein Logo (Logout, Seite schließen). */
-  async releaseDevice() {
-    const dev = this.#dev;
-    if (!dev) return;
-    this.setDevice(null);
-    await dev.close();
-  }
-  #installHotplug() {
-    if (this.#hotplug) return;
-    const hid = navigator.hid;
-    if (!hid) return;
-    this.#hotplug = true;
-    globalThis.addEventListener("pagehide", () => void this.releaseDevice());
-    hid.addEventListener("disconnect", () => {
-      if (this.#dev) this.setDevice(null);
-    });
-    hid.addEventListener("connect", async () => {
-      if (this.#dev) return;
-      const r = await connectKnown();
-      if (r?.ok) this.setDevice(r.device);
-    });
-  }
-};
-var deckSession = new DeckSession();
-
 // ui/modules/channel-desk/multichannel-logic.ts
 function waitKindOf(w) {
   if (!w) return "";
@@ -11679,7 +7354,6 @@ var ChannelDesk = class extends HTMLElement {
   disconnectedCallback() {
     clearInterval(this.#timer);
     removeEventListener("keydown", this.#keyHandler);
-    for (const c of this.#channels) deckSession.unregisterTab(c.key);
   }
   /** Setzt die Konsolen-Liste (aus /api/v1/me/consoles oder dem Node-Bestand); wiederholt aufrufbar. */
   async setEntries(entries) {
@@ -11711,6 +7385,63 @@ var ChannelDesk = class extends HTMLElement {
     if (this.#openKey && !this.#channels.some((c) => c.key === this.#openKey)) this.#openKey = null;
     this.#renderAll();
     void this.#poll();
+  }
+  /** Wird bei jeder Änderung angezeigter Werte, der Auswahl oder des geöffneten Channels aufgerufen (Stream Deck). */
+  onModelChange;
+  /** Stand für die Stream-Deck-Belegung (siehe deck-logic.ts). */
+  deckInput(armed, openMode) {
+    const first = attentionList(this.#channels.map((c) => ({
+      key: c.key,
+      name: c.summary.name,
+      list: c.upcoming
+    })), 1)[0];
+    return {
+      channels: this.#channels.map((c) => ({
+        key: c.key,
+        name: c.summary.name,
+        health: c.summary.health,
+        remainingMs: c.summary.remainingMs,
+        onAir: !!c.summary.onAir,
+        selected: this.#selected.has(c.key)
+      })),
+      openKey: this.#openKey,
+      openMode,
+      attention: first ? {
+        key: first.key,
+        channel: first.channel,
+        label: first.label,
+        inMs: first.inMs,
+        waiting: first.waiting,
+        kind: first.kind === "live" ? "live" : "manual"
+      } : void 0,
+      armed
+    };
+  }
+  toggleSelect(key) {
+    if (this.#selected.has(key)) this.#selected.delete(key);
+    else this.#selected.add(key);
+    if (this.#openKey === null) this.#syncSelection();
+    else this.onModelChange?.();
+  }
+  selectAll() {
+    this.#selected = new Set(this.#channels.map((c) => c.key));
+    this.#syncIfOverview();
+  }
+  selectNone() {
+    this.#selected.clear();
+    this.#syncIfOverview();
+  }
+  #syncIfOverview() {
+    if (this.#openKey === null) this.#syncSelection();
+    else this.onModelChange?.();
+  }
+  /** Channel am Bildschirm öffnen (`null` = Übersicht). */
+  openChannel(key) {
+    this.#open(key);
+  }
+  /** Werte sofort nachladen (auch wenn die Ansicht gerade verdeckt ist). */
+  async refreshNow() {
+    await this.#poll(true);
   }
   /** Channels, die die Ansicht zeigt (für die Shell: gibt es überhaupt etwas zu übersichten?). */
   get channelCount() {
@@ -12093,26 +7824,26 @@ ${b.label}` : b.label;
     const axisRow = mk("row");
     axisRow.append(mk("lbl"), axis);
     const rows = this.#channels.map((c) => {
-      const wrap2 = mk("lanewrap");
+      const wrap = mk("lanewrap");
       const v = c.values;
       const now = v ? playlistNow(c.tl, v.currentItemId, v.playheadPositionMs ?? 0, v.cuedItemId) : null;
       if (v && now !== null) {
         const { lane, kids } = this.#lanes(c, now, past, future);
         lane.prepend(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
-        wrap2.append(lane, ...kids);
+        wrap.append(lane, ...kids);
       } else {
         const lane = mk("lane");
         lane.append(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
-        wrap2.append(lane);
+        wrap.append(lane);
       }
-      wrap2.append(mk("nowline", `left:${nowPct}%`));
+      wrap.append(mk("nowline", `left:${nowPct}%`));
       const lbl = mk("lbl");
       lbl.append(mk(`cd-dot ${c.summary.health}`), Object.assign(document.createElement("span"), {
         textContent: c.summary.name
       }));
       lbl.title = c.summary.name;
       const row = mk("row");
-      row.append(lbl, wrap2);
+      row.append(lbl, wrap);
       return row;
     });
     this.#allBox.replaceChildren(axisRow, ...rows);
@@ -12122,6 +7853,7 @@ ${b.label}` : b.label;
       c.card.classList.toggle("sel", this.#selected.has(c.key));
       this.#q(c.card, "sel").checked = this.#selected.has(c.key);
     }
+    this.onModelChange?.();
     this.#selInfo.textContent = this.#selected.size ? t("mc.selected", {
       n: this.#selected.size
     }) : "";
@@ -12129,10 +7861,16 @@ ${b.label}` : b.label;
   }
   // ---- Gruppen-Start --------------------------------------------------------------------------------------------
   async #gang(a) {
-    const targets = this.#channels.filter((c) => this.#selected.has(c.key));
+    await this.runAction(a, [
+      ...this.#selected
+    ], true);
+  }
+  /** Aktion auf Channels (Schlüssel); `ask`: bei mehr als einem Channel erst bestätigen (Stream Deck bestätigt selbst per Doppeldruck). */
+  async runAction(a, keys, ask) {
+    const targets = this.#channels.filter((c) => keys.includes(c.key));
     if (targets.length === 0) return;
     const action = t(`mc.act.${a}`);
-    if (targets.length > 1) {
+    if (ask && targets.length > 1) {
       const ok = await confirmDialog(t("mc.confirm", {
         action,
         n: targets.length,
@@ -12198,6 +7936,7 @@ ${b.label}` : b.label;
     if (key === this.#openKey) return;
     this.#openKey = key;
     this.#renderAll();
+    this.onModelChange?.();
   }
   #onKey(ev) {
     if (!ev.altKey || ev.ctrlKey || ev.metaKey || !this.isConnected) return;
@@ -12225,7 +7964,6 @@ ${b.label}` : b.label;
     this.#overviewTab.classList.toggle("active", this.#openKey === null);
     for (const c of this.#channels) c.switchBtn.classList.toggle("active", c.key === this.#openKey);
     if (this.#openKey === null) {
-      for (const c of this.#channels) deckSession.unregisterTab(c.key);
       this.#editHost = void 0;
       if (this.#loading) {
         this.#main.replaceChildren(Object.assign(document.createElement("p"), {
@@ -12258,9 +7996,7 @@ ${b.label}` : b.label;
     void (async () => {
       const el = await mountUIBundleEl(host, ch.entry.uiBundleUrl);
       if (this.#editHost !== host) return;
-      for (const c of this.#channels) if (c.key !== ch.key) deckSession.unregisterTab(c.key);
-      if (el) deckSession.registerTab(ch.key, ch.entry.nodeLabel, el, ch.entry.uiBundleUrl.split("/").pop() ?? "");
-      else host.replaceChildren(Object.assign(document.createElement("p"), {
+      if (!el) host.replaceChildren(Object.assign(document.createElement("p"), {
         className: "cd-empty",
         textContent: t("mc.noBundle", {
           name: ch.entry.nodeLabel
@@ -12269,8 +8005,8 @@ ${b.label}` : b.label;
     })();
   }
   // ---- Abfrage --------------------------------------------------------------------------------------------------
-  async #poll() {
-    if (this.#polling || this.#channels.length === 0 || this.offsetParent === null) return;
+  async #poll(force = false) {
+    if (this.#polling || this.#channels.length === 0 || !force && this.offsetParent === null) return;
     this.#polling = true;
     this.#tick++;
     try {
@@ -12284,6 +8020,7 @@ ${b.label}` : b.label;
     }
     this.#updateAttention();
     this.#refreshViews();
+    this.onModelChange?.();
   }
   async #pollOne(c) {
     try {
@@ -12322,18 +8059,298 @@ if (!customElements.get("omp-channel-desk")) {
   customElements.define("omp-channel-desk", ChannelDesk);
 }
 
+// ui/modules/channel-desk/deck-logic.ts
+var DECK_ACTIONS = [
+  {
+    a: "next",
+    label: "NEXT"
+  },
+  {
+    a: "take",
+    label: "TAKE"
+  },
+  {
+    a: "nextLive",
+    label: "N.LIVE"
+  },
+  {
+    a: "hold",
+    label: "HOLD"
+  },
+  {
+    a: "auto",
+    label: "AUTO"
+  }
+];
+var STATE_OF = {
+  ok: "preset",
+  wait: "cue",
+  warn: "error",
+  offline: "off"
+};
+function channelKey(c, picked) {
+  return {
+    label: c.name,
+    sub: c.health === "offline" ? t("mc.health.offline") : c.onAir ? fmtRemain(c.remainingMs) : "",
+    icon: picked ? "\u2713" : void 0,
+    state: STATE_OF[c.health],
+    dim: c.health === "offline"
+  };
+}
+function buildCells(input, cols) {
+  const cells = [];
+  const open = input.openKey;
+  if (open !== null) cells.push({
+    key: {
+      label: t("mc.deck.back"),
+      icon: "\u25C0"
+    },
+    act: {
+      t: "back"
+    }
+  });
+  for (const c of input.channels) {
+    cells.push({
+      key: open !== null ? {
+        ...channelKey(c, false),
+        icon: c.key === open ? "\u25B6" : void 0
+      } : channelKey(c, c.selected),
+      act: open !== null ? {
+        t: "open",
+        key: c.key
+      } : input.openMode ? {
+        t: "open",
+        key: c.key
+      } : {
+        t: "select",
+        key: c.key
+      }
+    });
+  }
+  while (cells.length % Math.max(cols, 1) !== 0) cells.push({
+    key: {},
+    act: {
+      t: "info",
+      key: null
+    }
+  });
+  const selCount = input.channels.filter((c) => c.selected).length;
+  const targets = open !== null ? 1 : selCount;
+  const a = input.attention;
+  if (a) {
+    cells.push({
+      key: {
+        label: a.channel,
+        sub: `${a.kind === "live" ? "\u25CF" : "\u270B"} ${a.waiting ? t("mc.cnt.waiting") : fmtRemain(a.inMs)}`,
+        state: urgencyOf(a) === "now" ? "error" : urgencyOf(a) === "soon" ? "cue" : "off"
+      },
+      act: {
+        t: "info",
+        key: a.key
+      }
+    });
+  } else {
+    cells.push({
+      key: {
+        label: t("mc.deck.noAttn"),
+        dim: true
+      },
+      act: {
+        t: "info",
+        key: null
+      }
+    });
+  }
+  for (const { a: act, label } of DECK_ACTIONS) {
+    const armed = input.armed === act;
+    cells.push({
+      key: {
+        label,
+        sub: armed ? t("mc.deck.again") : targets > 1 ? `${targets}\xD7` : "",
+        state: armed ? "cue" : "off",
+        dim: targets === 0
+      },
+      act: {
+        t: "action",
+        a: act
+      }
+    });
+  }
+  if (open === null) {
+    cells.push({
+      key: {
+        label: t("mc.selectAll")
+      },
+      act: {
+        t: "all"
+      }
+    });
+    cells.push({
+      key: {
+        label: t("mc.selectNone")
+      },
+      act: {
+        t: "none"
+      }
+    });
+    cells.push({
+      key: {
+        label: t("mc.deck.open"),
+        state: input.openMode ? "cue" : "off",
+        sub: input.openMode ? "an" : ""
+      },
+      act: {
+        t: "mode"
+      }
+    });
+  }
+  return cells;
+}
+function layoutCells(cells, ctx) {
+  const per = ctx.cols * ctx.rows;
+  const pages = cells.length <= per ? 1 : Math.ceil(cells.length / Math.max(per - 1, 1));
+  const size = pages > 1 ? per - 1 : per;
+  const page = Math.min(Math.max(ctx.page, 0), pages - 1);
+  const slice = cells.slice(page * size, page * size + size);
+  const keys = Array.from({
+    length: ctx.rows
+  }, () => Array(ctx.cols).fill(null));
+  const acts = Array.from({
+    length: ctx.rows
+  }, () => Array(ctx.cols).fill(null));
+  slice.forEach((c, i) => {
+    const r = Math.floor(i / ctx.cols);
+    const k = i % ctx.cols;
+    const empty = c.act.t === "info" && c.act.key === null && !c.key.label;
+    keys[r][k] = empty ? null : c.key;
+    acts[r][k] = empty ? null : c.act;
+  });
+  return {
+    keys,
+    acts,
+    pages
+  };
+}
+function actionTargets(input) {
+  return input.openKey !== null ? [
+    input.openKey
+  ] : input.channels.filter((c) => c.selected).map((c) => c.key);
+}
+function needsConfirm(targets, armed, a) {
+  return targets > 1 && armed !== a;
+}
+
 // ui/modules/channel-desk/panel.ts
-var REFRESH_MS2 = 1e4;
+var REFRESH_MS = 1e4;
 var ChannelDeskPanel = class extends HTMLElement {
   #desk;
   #timer;
   #sig = "";
+  #deck;
+  #grid = null;
+  #armed = null;
+  #openMode = false;
   connectedCallback() {
     this.style.cssText = "display:block;width:100%;height:100%;min-height:0;";
     this.#desk = document.createElement("omp-channel-desk");
+    this.#desk.onModelChange = () => this.#deck?.onChange();
     this.append(this.#desk);
     void this.#refresh();
-    this.#timer = setInterval(() => void this.#refresh(), REFRESH_MS2);
+    this.#timer = setInterval(() => void this.#refresh(), REFRESH_MS);
+  }
+  /**
+   * Stream-Deck-Belegung (Stufe 1 des Node-Tutorials): Übersicht mit Channel-Tasten und Gruppen-Start, in der
+   * Channel-Ansicht Wechsel + Aktionen für den geöffneten Channel. Gruppen-Aktionen auf mehrere Channels verlangen
+   * einen zweiten Druck, weil am Gerät kein Dialog möglich ist.
+   */
+  get streamDeck() {
+    if (this.#deck) return this.#deck;
+    const desk = () => this.#desk;
+    const armed = () => this.#armed && Date.now() < this.#armed.until ? this.#armed.a : null;
+    const deck = {
+      onChange: () => {
+      },
+      onError: (_e) => {
+      },
+      getLayout: (ctx) => {
+        const d = desk();
+        if (!d) return {
+          keys: Array.from({
+            length: ctx.rows
+          }, () => Array(ctx.cols).fill(null))
+        };
+        const input = d.deckInput(armed(), this.#openMode);
+        const grid = layoutCells(buildCells(input, ctx.cols), ctx);
+        this.#grid = grid;
+        const a = input.attention;
+        const dials = ctx.dials > 0 ? [
+          {
+            label: "Handlung",
+            value: a ? `${a.channel} ${a.waiting ? "\u2026" : Math.max(0, Math.round(a.inMs / 1e3)) + " s"}` : "\u2014",
+            dim: !a
+          }
+        ] : void 0;
+        return {
+          keys: grid.keys,
+          dials,
+          pages: grid.pages
+        };
+      },
+      onKey: (row, col, down) => {
+        const d = desk();
+        const act = this.#grid?.acts[row]?.[col];
+        if (!d || !down || !act) return;
+        switch (act.t) {
+          case "select":
+            d.toggleSelect(act.key);
+            break;
+          case "open":
+            this.#openMode = false;
+            d.openChannel(act.key);
+            break;
+          case "back":
+            d.openChannel(null);
+            break;
+          case "all":
+            d.selectAll();
+            break;
+          case "none":
+            d.selectNone();
+            break;
+          case "mode":
+            this.#openMode = !this.#openMode;
+            deck.onChange();
+            break;
+          case "info":
+            if (act.key) {
+              this.#openMode = false;
+              d.openChannel(act.key);
+            }
+            break;
+          case "action": {
+            const input = d.deckInput(armed(), this.#openMode);
+            const targets = actionTargets(input);
+            if (targets.length === 0) break;
+            if (needsConfirm(targets.length, armed(), act.a)) {
+              this.#armed = {
+                a: act.a,
+                until: Date.now() + 3e3
+              };
+              deck.onChange();
+              setTimeout(() => deck.onChange(), 3100);
+              break;
+            }
+            this.#armed = null;
+            d.runAction(act.a, targets, false).catch((e) => deck.onError(e)).finally(() => deck.onChange());
+          }
+        }
+      },
+      refresh: async () => {
+        await desk()?.refreshNow();
+      }
+    };
+    this.#deck = deck;
+    return deck;
   }
   disconnectedCallback() {
     clearInterval(this.#timer);
