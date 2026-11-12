@@ -485,6 +485,7 @@ nicht die Sandbox); bleibt es dabei, Variante Namensraum-Wrapper ohne Container-
 | E10 | Zielzeit „Fund bekannt → alle Hosts gepatcht“? | **ENTSCHIEDEN 2026-11-12:** Zone F/K 48 h; Zone S nächstes Sendefenster, höchstens 7 Tage |
 | E11 | Soll die MXL-Grenzprüfung als Beitrag ans MXL-Projekt gehen? | Ja; bis dahin als dritter Patch |
 | E12 | `omp-intercom` läuft im Netz des Hosts und nimmt Gäste per Link an — in eine eigene Netzzone/einen eigenen Host legen? | Ja, sobald Gäste von außerhalb des Hauses zugelassen sind |
+| E13 | Die Sandbox (98.3, beide Stufen) braucht unprivilegierte Benutzer-Namensräume. Kernel-Härtung „Namensräume sperren“ (Phase C) setzen oder nicht? | **ENTSCHIEDEN 2026-11-12: nicht setzen.** Unprivilegierte Benutzer-Namensräume bleiben erlaubt, die Sandbox bleibt nutzbar. Phase C darf `user.max_user_namespaces=0` / `kernel.unprivileged_userns_clone=0` nicht enthalten. |
 
 ---
 
