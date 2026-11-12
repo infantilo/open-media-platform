@@ -2653,6 +2653,7 @@ export const en: Record<keyof typeof de, string> = {
   "note.markerOk": "Set marker",
   "note.freeze": "Why are you freezing? What happened? (optional, at most 200 characters)",
   "note.freezeOk": "Freeze",
+  "app.close": "Close",
   "app.menu.devices": "Devices",
   "app.menu.devices.title": "Stream Deck and MIDI desks",
   "app.menu.support": "Support",

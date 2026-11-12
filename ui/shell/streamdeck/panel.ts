@@ -2,6 +2,7 @@
 // Konsolen-Board und Einzelansicht. Panel enthält die Verbindung (echtes
 // Gerät/Simulator) und gehört dem Broker (Attribut `broker`).
 
+import { addPanelClose } from "../panel-close.ts";
 import { t } from "../i18n.ts";
 import "./sim.ts";
 
@@ -14,9 +15,10 @@ export function createDeckToggle(buttonStyle: string): { button: HTMLButtonEleme
   panel.style.cssText =
     "display:none;position:fixed;right:12px;bottom:56px;width:fit-content;max-width:96vw;max-height:80vh;overflow:auto;" +
     "z-index:1000001;background:var(--omp-surface);border:1px solid var(--omp-border);border-radius:var(--omp-radius);box-shadow:0 4px 16px rgba(0,0,0,0.6);";
+  addPanelClose(panel, t("app.close"));
   button.addEventListener("click", () => {
     if (panel.style.display === "none") {
-      if (!panel.firstChild) {
+      if (panel.children.length < 2) {
         const sim = document.createElement("omp-streamdeck-sim");
         sim.setAttribute("broker", "");
         panel.appendChild(sim);

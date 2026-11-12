@@ -1,6 +1,7 @@
 // Knopf + einklappbares Panel „MIDI“ (Kap. 93): Geräte wählen, Mischer wählen, starten; Simulator; Profil-Eingabe mit Lernfunktion.
 // Wie das Stream-Deck-Panel gehört die Sitzung der Seite (`midiSession`), nicht dem Panel — es lässt sich schließen, ohne das Pult zu trennen.
 
+import { addPanelClose } from "../panel-close.ts";
 import { t } from "../i18n.ts";
 import { apiFetch } from "../connection.ts";
 import { EXAMPLE_KEYS, EXAMPLE_PROFILE, midiSession } from "./instance.ts";
@@ -379,9 +380,10 @@ export function createMidiToggle(buttonStyle: string): { button: HTMLButtonEleme
   panel.style.cssText =
     "display:none;position:fixed;right:12px;bottom:56px;width:fit-content;max-width:96vw;max-height:80vh;overflow:auto;" +
     "z-index:1000001;background:var(--omp-surface);border:1px solid var(--omp-border);border-radius:var(--omp-radius);box-shadow:0 4px 16px rgba(0,0,0,0.6);";
+  addPanelClose(panel, t("app.close"));
   button.addEventListener("click", () => {
     if (panel.style.display === "none") {
-      if (!panel.firstChild) panel.appendChild(document.createElement("omp-midi-panel"));
+      if (panel.children.length < 2) panel.appendChild(document.createElement("omp-midi-panel"));
       panel.style.display = "block";
     } else panel.style.display = "none";
   });

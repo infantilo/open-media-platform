@@ -2652,6 +2652,7 @@ export const de = {
   "note.markerOk": "Marker setzen",
   "note.freeze": "Warum wird eingefroren? Was ist passiert? (optional, höchstens 200 Zeichen)",
   "note.freezeOk": "Einfrieren",
+  "app.close": "Schließen",
   "app.menu.devices": "Geräte",
   "app.menu.devices.title": "Stream Deck und MIDI-Pulte",
   "app.menu.support": "Support",
