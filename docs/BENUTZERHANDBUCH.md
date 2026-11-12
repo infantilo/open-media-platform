@@ -2659,9 +2659,10 @@ z. B. der eigene Workflow) oder global **configure**; sonst meldet das Panel „
 
 Der Mehrkanal-Platz (mehrere Playout-Channels, Abschnitt 9) hat eine eigene Belegung:
 
-- **Übersicht:** Oben je eine Taste pro Channel — Name, Restzeit, Farbe nach Zustand (grün läuft, orange wartet auf Bedienung, rot Achtung, grau keine Verbindung). Ein Druck **wählt** den Channel für den Gruppen-Start (Haken ✓). Danach in der Steuerzeile: **Nächste Handlung** (Channel und Countdown der nächsten manuellen oder Live-Aktion; grau/orange/rot nach Dringlichkeit, Druck öffnet den Channel), **NEXT, TAKE, N.LIVE, HOLD, AUTO** auf die Auswahl, **Alle / Keine** sowie **ÖFFNEN** (der nächste Channel-Druck öffnet den Channel am Bildschirm statt ihn zu wählen).
+- **Übersicht (Standard):** Oben je eine Taste pro Channel — Name, Restzeit, Farbe nach Zustand (grün läuft, orange wartet auf Bedienung, rot Achtung, grau keine Verbindung). Ein Druck **öffnet den Channel** am Bildschirm. Darunter: **Nächste Handlung** (Channel und Countdown der nächsten manuellen oder Live-Aktion; grau/orange/rot nach Dringlichkeit, Druck öffnet den Channel) und **GANG ROLL ▸** (Untermenü; zeigt, wie viele Channels im Gang sind). Ein ✓ an einer Channel-Taste heißt: gehört zum Gang.
+- **Untermenü GANG ROLL:** **◀ ÜBERSICHT** führt zurück. Die Channel-Tasten **fügen Channels dem Gang hinzu bzw. entfernen sie** (✓). Darunter **NEXT, TAKE, N.LIVE, HOLD, AUTO** auf alle Channels im Gang sowie **Alle / Keine**.
 - **Sicherheit:** Trifft eine Aktion **mehrere** Channels, merkt sich die Taste sie erst vor (Zusatz „nochmal“, 3 Sekunden) — erst der zweite Druck führt sie aus. Bei genau einem Channel läuft sie sofort.
-- **Channel-Ansicht:** Ist am Bildschirm ein Channel geöffnet, zeigt das Gerät **◀ ÜBERSICHT**, die Channel-Tasten zum **Wechseln** (der offene ist mit ▶ markiert) und die Aktionstasten **nur für diesen Channel**.
+- **Channel-Ansicht:** Ist ein Channel geöffnet, zeigt das Gerät **◀ ÜBERSICHT**, die Channel-Tasten zum **Wechseln** (der offene mit ▶), die Aktionstasten **nur für diesen Channel** und **GANG +/−**, um genau diesen Channel dem Gang hinzuzufügen oder daraus zu entfernen.
 - **Dials („+“, „+ XL“):** Dial 1 zeigt die nächste Handlung mit Countdown.
 - Kleine Decks blättern (letzte Taste), die Belegung richtet sich nach der Gerätegröße. **Nicht am echten Gerät geprüft** (Logik-Tests und Simulator-Layout).
 

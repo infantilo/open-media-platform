@@ -201,7 +201,7 @@ export class ChannelDesk extends HTMLElement {
   onModelChange?: () => void;
 
   /** Stand für die Stream-Deck-Belegung (siehe deck-logic.ts). */
-  deckInput(armed: GangAction | null, openMode: boolean): DeckInput {
+  deckInput(armed: GangAction | null, gangView: boolean): DeckInput {
     const first = attentionList(this.#channels.map((c) => ({ key: c.key, name: c.summary.name, list: c.upcoming })), 1)[0];
     return {
       channels: this.#channels.map((c) => ({
@@ -209,7 +209,7 @@ export class ChannelDesk extends HTMLElement {
         onAir: !!c.summary.onAir, selected: this.#selected.has(c.key),
       })),
       openKey: this.#openKey,
-      openMode,
+      gangView,
       attention: first ? { key: first.key, channel: first.channel, label: first.label, inMs: first.inMs, waiting: first.waiting, kind: first.kind === "live" ? "live" : "manual" } : undefined,
       armed,
     };

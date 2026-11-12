@@ -17,7 +17,7 @@ export class ChannelDeskPanel extends HTMLElement {
   #deck?: StreamDeckAdapter & { onChange: () => void; onError: (e: unknown) => void };
   #grid: DeckGrid | null = null;
   #armed: { a: GangAction; until: number } | null = null;
-  #openMode = false;
+  #gangView = false;
 
   connectedCallback() {
     this.style.cssText = "display:block;width:100%;height:100%;min-height:0;";
@@ -43,7 +43,7 @@ export class ChannelDeskPanel extends HTMLElement {
       getLayout: (ctx: LayoutContext): AdapterLayout => {
         const d = desk();
         if (!d) return { keys: Array.from({ length: ctx.rows }, () => Array(ctx.cols).fill(null)) };
-        const input = d.deckInput(armed(), this.#openMode);
+        const input = d.deckInput(armed(), this.#gangView);
         const grid = layoutCells(buildCells(input, ctx.cols), ctx);
         this.#grid = grid;
         const a = input.attention;
@@ -58,14 +58,17 @@ export class ChannelDeskPanel extends HTMLElement {
         if (!d || !down || !act) return;
         switch (act.t) {
           case "select": d.toggleSelect(act.key); break;
-          case "open": this.#openMode = false; d.openChannel(act.key); break;
-          case "back": d.openChannel(null); break;
+          case "open": d.openChannel(act.key); break;
+          case "back":
+            // Im Untermenü zurück zur Übersicht, sonst aus der Channel-Ansicht heraus.
+            if (this.#gangView) { this.#gangView = false; deck.onChange(); } else d.openChannel(null);
+            break;
           case "all": d.selectAll(); break;
           case "none": d.selectNone(); break;
-          case "mode": this.#openMode = !this.#openMode; deck.onChange(); break;
-          case "info": if (act.key) { this.#openMode = false; d.openChannel(act.key); } break;
+          case "gang": this.#gangView = true; deck.onChange(); break;
+          case "info": if (act.key) { this.#gangView = false; d.openChannel(act.key); } break;
           case "action": {
-            const input = d.deckInput(armed(), this.#openMode);
+            const input = d.deckInput(armed(), this.#gangView);
             const targets = actionTargets(input);
             if (targets.length === 0) break;
             if (needsConfirm(targets.length, armed(), act.a)) {

@@ -162,9 +162,12 @@ var de = {
   "mc.attn.tip": "N\xE4chste manuelle oder Live-Ereignisse \xFCber alle Channels \u2014 z. B. wann ein externer Regieplatz zu starten ist",
   "mc.attn.none": "Keine manuelle oder Live-Aktion geplant",
   "mc.deck.back": "\xDCBERSICHT",
-  "mc.deck.open": "\xD6FFNEN",
   "mc.deck.again": "nochmal",
   "mc.deck.noAttn": "keine Handlung",
+  "mc.deck.gang": "GANG ROLL",
+  "mc.deck.members": "{n} im Gang",
+  "mc.deck.gangAdd": "GANG +",
+  "mc.deck.gangRemove": "GANG \u2212",
   "mc.title": "Mehrkanal-\xDCbersicht",
   "mc.overview": "\xDCbersicht",
   "mc.empty": "Keine Playout-Channels zugewiesen.",
@@ -3351,9 +3354,12 @@ var en = {
   "mc.attn.tip": "Next manual or live events across all channels \u2014 e.g. when an external control room has to be started",
   "mc.attn.none": "No manual or live action planned",
   "mc.deck.back": "OVERVIEW",
-  "mc.deck.open": "OPEN",
   "mc.deck.again": "press again",
   "mc.deck.noAttn": "no action",
+  "mc.deck.gang": "GANG ROLL",
+  "mc.deck.members": "{n} in gang",
+  "mc.deck.gangAdd": "GANG +",
+  "mc.deck.gangRemove": "GANG \u2212",
   "mc.title": "Multi-channel overview",
   "mc.overview": "Overview",
   "mc.empty": "No playout channels assigned.",
@@ -7389,7 +7395,7 @@ var ChannelDesk = class extends HTMLElement {
   /** Wird bei jeder Änderung angezeigter Werte, der Auswahl oder des geöffneten Channels aufgerufen (Stream Deck). */
   onModelChange;
   /** Stand für die Stream-Deck-Belegung (siehe deck-logic.ts). */
-  deckInput(armed, openMode) {
+  deckInput(armed, gangView) {
     const first = attentionList(this.#channels.map((c) => ({
       key: c.key,
       name: c.summary.name,
@@ -7405,7 +7411,7 @@ var ChannelDesk = class extends HTMLElement {
         selected: this.#selected.has(c.key)
       })),
       openKey: this.#openKey,
-      openMode,
+      gangView,
       attention: first ? {
         key: first.key,
         channel: first.channel,
@@ -8100,7 +8106,8 @@ function channelKey(c, picked) {
 function buildCells(input, cols) {
   const cells = [];
   const open = input.openKey;
-  if (open !== null) cells.push({
+  const gang = open === null && input.gangView;
+  if (open !== null || gang) cells.push({
     key: {
       label: t("mc.deck.back"),
       icon: "\u25C0"
@@ -8115,14 +8122,11 @@ function buildCells(input, cols) {
         ...channelKey(c, false),
         icon: c.key === open ? "\u25B6" : void 0
       } : channelKey(c, c.selected),
-      act: open !== null ? {
-        t: "open",
-        key: c.key
-      } : input.openMode ? {
-        t: "open",
+      act: gang ? {
+        t: "select",
         key: c.key
       } : {
-        t: "select",
+        t: "open",
         key: c.key
       }
     });
@@ -8161,6 +8165,22 @@ function buildCells(input, cols) {
       }
     });
   }
+  if (open === null && !gang) {
+    cells.push({
+      key: {
+        label: t("mc.deck.gang"),
+        icon: "\u25B8",
+        sub: selCount > 0 ? t("mc.deck.members", {
+          n: selCount
+        }) : "",
+        state: selCount > 0 ? "cue" : "off"
+      },
+      act: {
+        t: "gang"
+      }
+    });
+    return cells;
+  }
   for (const { a: act, label } of DECK_ACTIONS) {
     const armed = input.armed === act;
     cells.push({
@@ -8176,7 +8196,20 @@ function buildCells(input, cols) {
       }
     });
   }
-  if (open === null) {
+  if (open !== null) {
+    const member = input.channels.find((c) => c.key === open)?.selected ?? false;
+    cells.push({
+      key: {
+        label: member ? t("mc.deck.gangRemove") : t("mc.deck.gangAdd"),
+        icon: member ? "\u2713" : void 0,
+        state: member ? "cue" : "off"
+      },
+      act: {
+        t: "select",
+        key: open
+      }
+    });
+  } else {
     cells.push({
       key: {
         label: t("mc.selectAll")
@@ -8191,16 +8224,6 @@ function buildCells(input, cols) {
       },
       act: {
         t: "none"
-      }
-    });
-    cells.push({
-      key: {
-        label: t("mc.deck.open"),
-        state: input.openMode ? "cue" : "off",
-        sub: input.openMode ? "an" : ""
-      },
-      act: {
-        t: "mode"
       }
     });
   }
@@ -8249,7 +8272,7 @@ var ChannelDeskPanel = class extends HTMLElement {
   #deck;
   #grid = null;
   #armed = null;
-  #openMode = false;
+  #gangView = false;
   connectedCallback() {
     this.style.cssText = "display:block;width:100%;height:100%;min-height:0;";
     this.#desk = document.createElement("omp-channel-desk");
@@ -8279,7 +8302,7 @@ var ChannelDeskPanel = class extends HTMLElement {
             length: ctx.rows
           }, () => Array(ctx.cols).fill(null))
         };
-        const input = d.deckInput(armed(), this.#openMode);
+        const input = d.deckInput(armed(), this.#gangView);
         const grid = layoutCells(buildCells(input, ctx.cols), ctx);
         this.#grid = grid;
         const a = input.attention;
@@ -8305,11 +8328,13 @@ var ChannelDeskPanel = class extends HTMLElement {
             d.toggleSelect(act.key);
             break;
           case "open":
-            this.#openMode = false;
             d.openChannel(act.key);
             break;
           case "back":
-            d.openChannel(null);
+            if (this.#gangView) {
+              this.#gangView = false;
+              deck.onChange();
+            } else d.openChannel(null);
             break;
           case "all":
             d.selectAll();
@@ -8317,18 +8342,18 @@ var ChannelDeskPanel = class extends HTMLElement {
           case "none":
             d.selectNone();
             break;
-          case "mode":
-            this.#openMode = !this.#openMode;
+          case "gang":
+            this.#gangView = true;
             deck.onChange();
             break;
           case "info":
             if (act.key) {
-              this.#openMode = false;
+              this.#gangView = false;
               d.openChannel(act.key);
             }
             break;
           case "action": {
-            const input = d.deckInput(armed(), this.#openMode);
+            const input = d.deckInput(armed(), this.#gangView);
             const targets = actionTargets(input);
             if (targets.length === 0) break;
             if (needsConfirm(targets.length, armed(), act.a)) {

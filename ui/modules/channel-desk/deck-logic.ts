@@ -1,8 +1,9 @@
 // Stream-Deck-Belegung des Mehrkanal-Platzes (Kapitel 96) — reine Logik, ohne DOM und Netz.
 //
-// Übersicht: Channel-Tasten (Standard: Channel zum Gruppen-Start wählen, „ÖFFNEN“: Channel am Bildschirm öffnen),
-// danach die Steuerzeile (Nächste Handlung, Next/Take/Next Live/Hold/Auto auf die Auswahl, Alle/Keine/Öffnen).
-// Channel-Ansicht (ein Channel ist geöffnet): Zurück, Channel-Tasten zum Wechseln, Aktionen nur für diesen Channel.
+// Übersicht (Standard): Channel-Taste öffnet den Channel am Bildschirm; Steuerzeile mit Nächster Handlung und „GANG ROLL“.
+// Untermenü Gang Roll: Channel-Tasten fügen Channels der Gruppe hinzu/entfernen sie (✓), darunter Next/Take/Next Live/
+// Hold/Auto auf die Gruppe, Alle/Keine. Channel-Ansicht (ein Channel ist geöffnet): Zurück, Channel-Tasten zum Wechseln,
+// Aktionen nur für diesen Channel und „GANG +/−“ (diesen Channel der Gruppe hinzufügen/entfernen).
 // Die Größe kommt vom Gerät (`ctx`), nie feste Indizes; passt nicht alles auf eine Seite, wird geblättert.
 import type { KeyDef } from "../../shell/streamdeck/render-logic.ts";
 import { t } from "../../shell/i18n.ts";
@@ -29,8 +30,8 @@ export interface DeckAttention {
 export interface DeckInput {
   channels: DeckChannel[];
   openKey: string | null;
-  /** Übersicht: Channel-Taste öffnet statt zu wählen. */
-  openMode: boolean;
+  /** Untermenü Gang Roll: Channel-Tasten fügen hinzu/entfernen statt zu öffnen. */
+  gangView: boolean;
   attention?: DeckAttention;
   /** Zur Bestätigung vorgemerkte Aktion (zweiter Druck führt sie aus). */
   armed: GangAction | null;
@@ -42,7 +43,7 @@ export type DeckAct =
   | { t: "back" }
   | { t: "all" }
   | { t: "none" }
-  | { t: "mode" }
+  | { t: "gang" }
   | { t: "info"; key: string | null }
   | { t: "action"; a: GangAction };
 
@@ -75,11 +76,14 @@ function channelKey(c: DeckChannel, picked: boolean): KeyDef {
 export function buildCells(input: DeckInput, cols: number): DeckCell[] {
   const cells: DeckCell[] = [];
   const open = input.openKey;
-  if (open !== null) cells.push({ key: { label: t("mc.deck.back"), icon: "◀" }, act: { t: "back" } });
+  const gang = open === null && input.gangView;
+  if (open !== null || gang) cells.push({ key: { label: t("mc.deck.back"), icon: "◀" }, act: { t: "back" } });
   for (const c of input.channels) {
     cells.push({
-      key: open !== null ? { ...channelKey(c, false), icon: c.key === open ? "▶" : undefined } : channelKey(c, c.selected),
-      act: open !== null ? { t: "open", key: c.key } : input.openMode ? { t: "open", key: c.key } : { t: "select", key: c.key },
+      key: open !== null
+        ? { ...channelKey(c, false), icon: c.key === open ? "▶" : undefined }
+        : channelKey(c, c.selected), // Haken = gehört zur Gang-Roll-Gruppe
+      act: gang ? { t: "select", key: c.key } : { t: "open", key: c.key },
     });
   }
   // Steuerzeile beginnt in einer neuen Reihe.
@@ -99,6 +103,14 @@ export function buildCells(input: DeckInput, cols: number): DeckCell[] {
   } else {
     cells.push({ key: { label: t("mc.deck.noAttn"), dim: true }, act: { t: "info", key: null } });
   }
+  if (open === null && !gang) {
+    // Standardansicht: nur der Einstieg in das Untermenü.
+    cells.push({
+      key: { label: t("mc.deck.gang"), icon: "▸", sub: selCount > 0 ? t("mc.deck.members", { n: selCount }) : "", state: selCount > 0 ? "cue" : "off" },
+      act: { t: "gang" },
+    });
+    return cells;
+  }
   for (const { a: act, label } of DECK_ACTIONS) {
     const armed = input.armed === act;
     cells.push({
@@ -111,10 +123,15 @@ export function buildCells(input: DeckInput, cols: number): DeckCell[] {
       act: { t: "action", a: act },
     });
   }
-  if (open === null) {
+  if (open !== null) {
+    const member = input.channels.find((c) => c.key === open)?.selected ?? false;
+    cells.push({
+      key: { label: member ? t("mc.deck.gangRemove") : t("mc.deck.gangAdd"), icon: member ? "✓" : undefined, state: member ? "cue" : "off" },
+      act: { t: "select", key: open },
+    });
+  } else {
     cells.push({ key: { label: t("mc.selectAll") }, act: { t: "all" } });
     cells.push({ key: { label: t("mc.selectNone") }, act: { t: "none" } });
-    cells.push({ key: { label: t("mc.deck.open"), state: input.openMode ? "cue" : "off", sub: input.openMode ? "an" : "" }, act: { t: "mode" } });
   }
   return cells;
 }
