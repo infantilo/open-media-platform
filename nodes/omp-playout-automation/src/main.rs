@@ -72,6 +72,7 @@ mod structlog;
 use omp_playout_core::timeline;
 use omp_playout_core::trigger;
 mod uibundle;
+mod variables;
 mod voiceover;
 
 use std::collections::HashMap;
@@ -766,6 +767,9 @@ struct AutomationState {
     fixtime_resolved: HashMap<String, FixtimeResolution>,
     /// Kapitel 27 / P8: zuletzt ermittelte Medien-Bereitschaft je Item (Preflight-Schleife).
     readiness: HashMap<String, ReadinessEntry>,
+    /// Medien-Metadaten der Assets (Asset-ID → (Abrufzeit UTC-ms, Metadaten)) für die Variablen `meta.*`
+    /// in Child Events; gefüllt von `asset_meta_loop`, gelesen ohne Netzwerk beim Child-Start.
+    asset_meta: HashMap<String, (i64, Value)>,
     /// Preflight-Fenster in Minuten (Spec §72): davor wird nichts bewegt.
     preflight_window_min: u32,
     /// Standard-Filler des Channels (Dateiname im Medienverzeichnis), Richtlinie DEFAULT_FILLER.
@@ -871,6 +875,7 @@ impl AutomationState {
             timeline: TimelineCache::new(),
             fixtime_resolved: HashMap::new(),
             readiness: HashMap::new(),
+            asset_meta: HashMap::new(),
             preflight_window_min: 15,
             default_filler: String::new(),
             idle_source: String::new(),
@@ -3367,6 +3372,117 @@ fn retire_children(state: &mut AutomationState, new_item_id: &str) {
     state.child_runtime.retain(|rt| !rt.state.is_terminal() || (!hard && rt.preplanned && rt.item_id == new_item_id));
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Variablen für Child Events (`variables.rs`): Kontext aus dem Playlist-Zustand
+
+fn event_start_type_name(t: StartType) -> &'static str {
+    match t {
+        StartType::Sequence => "sequence",
+        StartType::Manual => "manual",
+        StartType::Fixtime => "fixtime",
+    }
+}
+
+fn event_facts(state: &AutomationState, id: &str, m: &ItemMeta, index: usize) -> variables::EventFacts {
+    let source = asrun_source(state, m);
+    let file = match &m.media {
+        ItemMedia::File { path } | ItemMedia::Image { path } => path.rsplit('/').next().unwrap_or(path).to_string(),
+        _ => String::new(),
+    };
+    variables::EventFacts {
+        id: id.to_string(),
+        title: m.label.clone(),
+        kind: event_type(&m.media).to_string(),
+        index,
+        duration_ms: m.duration_ms,
+        start_ms: None,
+        end_ms: None,
+        start_type: event_start_type_name(m.start_type).to_string(),
+        source,
+        file,
+        note: m.media_ref.note.clone(),
+        ad_class: m.media_ref.ad_class.clone(),
+        meta: m.media_ref.asset.as_ref().and_then(|a| state.asset_meta.get(&a.asset_id)).map(|(_, v)| v.clone()).unwrap_or(Value::Null),
+    }
+}
+
+/// Alle Events der Playlist mit geplanten Zeiten: ab dem laufenden Event nach Plan (`schedule::plan`),
+/// davor rückwärts aus dem Beginn des laufenden Events.
+fn playlist_facts(state: &AutomationState, now_ms: i64) -> (Vec<variables::EventFacts>, Option<usize>) {
+    let ids = state.playlist.items();
+    let cur = if state.playlist.on_air() { state.playlist.current_index() } else { None };
+    let from = cur.unwrap_or(0);
+    let mut facts: Vec<variables::EventFacts> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| match state.metadata.get(id) {
+            Some(m) => event_facts(state, id, m, i + 1),
+            None => variables::EventFacts { id: id.clone(), index: i + 1, ..Default::default() },
+        })
+        .collect();
+    let base = match (cur, state.onair_since) {
+        (Some(_), Some(since)) => now_ms - since.elapsed().as_millis() as i64,
+        _ => now_ms,
+    };
+    let inputs: Vec<schedule::PlanInput> = ids
+        .iter()
+        .skip(from)
+        .take(SCHEDULE_MAX_ENTRIES)
+        .map(|id| match state.metadata.get(id) {
+            Some(m) => schedule::PlanInput {
+                id: id.clone(),
+                duration_ms: m.duration_ms,
+                anchor_utc_ms: if m.start_type == StartType::Fixtime { m.start_at_utc_ms } else { None },
+                manual: m.start_type == StartType::Manual,
+            },
+            None => schedule::PlanInput { id: id.clone(), duration_ms: 0, anchor_utc_ms: None, manual: false },
+        })
+        .collect();
+    for e in schedule::plan(&inputs, base) {
+        if let Some(f) = facts.get_mut(from + e.index) {
+            f.start_ms = e.start_ms;
+            f.end_ms = e.end_ms;
+        }
+    }
+    // Vorgänger rückwärts: Ende = Beginn des Nachfolgers
+    let mut next_start = facts.get(from).and_then(|f| f.start_ms);
+    for f in facts[..from].iter_mut().rev() {
+        let (Some(end), true) = (next_start, f.duration_ms > 0) else { break };
+        f.end_ms = Some(end);
+        f.start_ms = Some(end - f.duration_ms as i64);
+        next_start = f.start_ms;
+    }
+    (facts, cur)
+}
+
+/// Kontext für die Variablen eines Child Events des Items `owner_item` zum Zeitpunkt `now_ms` (UTC).
+fn build_var_ctx(state: &AutomationState, owner_item: &str, now_ms: i64) -> variables::Ctx {
+    let (events, onair) = playlist_facts(state, now_ms);
+    let owner = events.iter().position(|e| e.id == owner_item);
+    let owner_extra = if owner.is_none() {
+        state.carts.iter().find(|(id, _)| id == owner_item).map(|(id, m)| event_facts(state, id, m, 0))
+    } else {
+        None
+    };
+    let fr = take_framerate();
+    variables::Ctx { now_ms, fps: (fr.num as u32, fr.den as u32), events, owner, owner_extra, onair, tz_offset_secs: None }
+}
+
+/// Löst die Variablen aller zu startenden/stoppenden Kinder auf (Bezugszeit = geplanter Befehlszeitpunkt).
+fn resolve_child_variables(state: &AutomationState, item_id: &str, child: &ChildEvent, fire_at: Instant, warnings: &mut Vec<String>) -> ChildEvent {
+    if !child.has_templates() {
+        return child.clone();
+    }
+    let now_inst = Instant::now();
+    let delta_ms = if fire_at >= now_inst { fire_at.duration_since(now_inst).as_millis() as i64 } else { -(now_inst.duration_since(fire_at).as_millis() as i64) };
+    let ctx = build_var_ctx(state, item_id, chrono::Utc::now().timestamp_millis() + delta_ms);
+    let mut local = Vec::new();
+    let resolved = child.resolve_templates(&ctx, &mut local);
+    warnings.extend(local.into_iter().map(|w| format!("Child „{}\u{201c} von „{item_id}\u{201c}: Variable: {w}", child.id)));
+    resolved
+}
+
 /// Braucht das Kind nach dem Start noch einen Stopp-Befehl?
 fn needs_stop(child: &ChildEvent) -> bool {
     if child.is_native_voiceover() {
@@ -3412,7 +3528,6 @@ fn plan_children(
     if meta.children.is_empty() && auto.is_empty() {
         return notices;
     }
-    let next_title = state.playlist.peek_next().and_then(|id| state.metadata.get(id)).map(|m| m.label.clone());
     let item_duration_ms = meta.duration_ms;
     let item_label = meta.label.clone();
     let mut children = meta.children.clone();
@@ -3428,7 +3543,6 @@ fn plan_children(
         if child.id.is_empty() {
             child.id = format!("c{}", n + 1);
         }
-        child.data = resolve_variables(&child.data, next_title.as_deref());
         let window = match child.resolve_window(item_duration_ms, state.onair_utc_ms) {
             Ok(w) => w,
             Err(e) => {
@@ -3978,31 +4092,6 @@ fn execute_child(
         };
     }
     Err(format!("{:?} wird nicht unterstützt", child.kind))
-}
-
-/// Kapitel 6 Teil 5 (§6.4 "Variablen-Auflösung ({{next:title}}-
-/// Teilmenge)"): ersetzt `{{next:title}}` in allen String-Werten von
-/// `data` (rekursiv durch Objekte/Arrays) durch den Titel des
-/// chronologisch nächsten Rundown-Items — die einzige in dieser
-/// Ausbaustufe unterstützte Variable, bewusst keine generische
-/// Template-Engine. `next_title: None` (kein nächstes Item, z. B.
-/// letztes Item der Liste) ersetzt durch einen leeren String statt den
-/// Platzhalter unverändert stehen zu lassen (der wäre sonst sichtbar
-/// auf der Grafik, ein leeres Feld ist die unauffälligere Ausfallstufe).
-fn resolve_variables(data: &Value, next_title: Option<&str>) -> Value {
-    const VAR_NEXT_TITLE: &str = "{{next:title}}";
-    match data {
-        Value::String(s) if s.contains(VAR_NEXT_TITLE) => {
-            Value::String(s.replace(VAR_NEXT_TITLE, next_title.unwrap_or("")))
-        }
-        Value::Array(items) => {
-            Value::Array(items.iter().map(|v| resolve_variables(v, next_title)).collect())
-        }
-        Value::Object(map) => Value::Object(
-            map.iter().map(|(k, v)| (k.clone(), resolve_variables(v, next_title))).collect(),
-        ),
-        other => other.clone(),
-    }
 }
 
 /// Liest `crosspoint.inputs` des Ziel-Mixers (bereits dessen eigene,
@@ -5085,11 +5174,96 @@ impl ParamStore for AutomationStore {
         {
             return Some(self.handle_timeline_window(query));
         }
+        if method == "GET"
+            && let Some(rest) = path.strip_prefix("/variables/")
+        {
+            return Some(self.handle_variables(rest));
+        }
         uibundle::route(method, path)
     }
 }
 
+/// Inhalt der Variablen-Routen (`GET /variables/catalog`, `GET /variables/preview?…`), ohne Transport — testbar.
+fn variables_endpoint(state: &AutomationState, rest: &str, now: i64) -> (u16, Value) {
+    let (what, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let mut item_id = String::new();
+    let mut texts: Vec<String> = Vec::new();
+    let mut offset: Option<i64> = None;
+    for pair in query.split('&') {
+        let Some((k, v)) = pair.split_once('=') else { continue };
+        let v = percent_decode(v);
+        match k {
+            "itemId" => item_id = v,
+            "t" => texts.push(v),
+            "offsetMs" => offset = v.parse().ok(),
+            _ => {}
+        }
+    }
+    match what {
+        "catalog" => {
+            let (facts, _) = playlist_facts(state, now);
+            let mut cat = variables::catalog();
+            cat["metaKeys"] = serde_json::json!(variables::meta_keys(&facts));
+            cat["events"] = Value::Array(facts.iter().map(|f| serde_json::json!({"id": f.id, "title": f.title, "index": f.index})).collect());
+            let fr = take_framerate();
+            cat["fps"] = serde_json::json!(fr.num as f64 / fr.den.max(1) as f64);
+            (200, cat)
+        }
+        "preview" => {
+            let mut ctx = build_var_ctx(state, &item_id, now);
+            if let Some(off) = offset
+                && let Some(start) = ctx.current().and_then(|e| e.start_ms)
+            {
+                ctx.now_ms = start + off;
+            }
+            let results: Vec<Value> = texts
+                .iter()
+                .map(|t| {
+                    let errors = variables::validate_text(t);
+                    let mut warnings = Vec::new();
+                    let text = if errors.is_empty() { variables::render_text(t, &ctx, &mut warnings) } else { String::new() };
+                    serde_json::json!({"text": text, "errors": errors, "warnings": warnings})
+                })
+                .collect();
+            (200, serde_json::json!({"results": results, "ownerFound": ctx.owner.is_some() || ctx.owner_extra.is_some(), "at": ctx.now_ms}))
+        }
+        _ => (404, serde_json::json!({"error": "unbekannter Pfad"})),
+    }
+}
+
+/// Prozent-Dekodierung eines Query-Werts (`%C3%A4`, `+` = Leerzeichen).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() => {
+                if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                    out.push(v);
+                    i += 2;
+                } else {
+                    out.push(b'%');
+                }
+            }
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 impl AutomationStore {
+    /// `GET /variables/catalog[?itemId=…]` — Bezüge, Felder, Formate (aus `variables.rs`) plus die in der Playlist
+    /// vorkommenden Metadaten-Schlüssel; `GET /variables/preview?itemId=…&t=<Text>[&t=…][&offsetMs=<n>]` — setzt die
+    /// Texte so ein, wie ein Child dieses Events es zum Zeitpunkt `Eventbeginn + offsetMs` täte (ohne `offsetMs`: jetzt).
+    fn handle_variables(&self, rest: &str) -> omp_node_sdk::RawResponse {
+        let state = self.state.lock().expect("lock poisoned");
+        let (status, v) = variables_endpoint(&state, rest, chrono::Utc::now().timestamp_millis());
+        omp_node_sdk::RawResponse { status, content_type: "application/json", body: serde_json::to_vec(&v).unwrap_or_default() }
+    }
+
     /// `GET /timeline/window?fromIndex=<n>&count=<n>` (C20,
     /// `ARCHITECTURE.md` §24.5) — bewusst als `extra_route` statt als
     /// Methode/Parameter: eine generische Methode
@@ -5708,6 +5882,91 @@ fn upcoming_asset_items(state: &AutomationState, now_ms: i64) -> Vec<(String, re
         .collect()
 }
 
+/// Holt die Medien-Metadaten der Assets rund um die laufende Position ins Cache (`state.asset_meta`), damit
+/// die Variablen `meta.*` beim Child-Start ohne Netzwerkzugriff auflösen. Asynchron zum Playout-Takt; ein
+/// Fehler lässt nur das Metadatum leer, er stört nie die Sendung.
+async fn asset_meta_loop(store: Arc<AutomationStore>) {
+    const REFRESH_MS: i64 = 60_000;
+    const AHEAD: usize = 40;
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    loop {
+        interval.tick().await;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let wanted: Vec<String> = {
+            let state = store.state.lock().expect("lock poisoned");
+            let from = state.playlist.current_index().unwrap_or(0).saturating_sub(2);
+            let mut ids: Vec<String> = state
+                .playlist
+                .items()
+                .iter()
+                .skip(from)
+                .take(AHEAD)
+                .filter_map(|id| state.metadata.get(id))
+                .filter_map(|m| m.media_ref.asset.as_ref().map(|a| a.asset_id.clone()))
+                .filter(|a| !a.is_empty())
+                .collect();
+            ids.extend(state.carts.iter().filter_map(|(_, m)| m.media_ref.asset.as_ref().map(|a| a.asset_id.clone())).filter(|a| !a.is_empty()));
+            ids.sort();
+            ids.dedup();
+            ids
+        };
+        {
+            let mut state = store.state.lock().expect("lock poisoned");
+            state.asset_meta.retain(|k, _| wanted.contains(k));
+        }
+        let stale: Vec<String> = {
+            let state = store.state.lock().expect("lock poisoned");
+            wanted.into_iter().filter(|id| state.asset_meta.get(id).is_none_or(|(t, _)| now_ms - t > REFRESH_MS)).take(8).collect()
+        };
+        if stale.is_empty() {
+            continue;
+        }
+        let store2 = store.clone();
+        let fetched = tokio::task::spawn_blocking(move || {
+            stale
+                .into_iter()
+                .map(|id| {
+                    let r = remote::get_json(&store2.orchestrator_url, &store2.auth, &format!("/api/v1/assets/{id}"));
+                    (id, r)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        let mut state = store.state.lock().expect("lock poisoned");
+        for (id, res) in fetched {
+            match res {
+                Ok(asset) => {
+                    state.asset_meta.insert(id, (now_ms, flatten_asset_meta(&asset)));
+                }
+                Err(_) => {
+                    // Fehler: alten Stand behalten, aber nicht jede 5 s erneut versuchen
+                    let old = state.asset_meta.get(&id).map(|(_, v)| v.clone()).unwrap_or(Value::Null);
+                    state.asset_meta.insert(id, (now_ms - REFRESH_MS + 15_000, old));
+                }
+            }
+        }
+    }
+}
+
+/// Asset-Antwort des Orchestrators → `{title, description, status, type, descriptive:{…}, technical:{…}, …}`.
+fn flatten_asset_meta(asset: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    for k in ["title", "description", "status", "type"] {
+        if let Some(v) = asset.get(k).filter(|v| !v.is_null()) {
+            out.insert(k.to_string(), v.clone());
+        }
+    }
+    if let Some(Value::Object(m)) = asset.get("metadata") {
+        for (k, v) in m {
+            if v.as_object().is_some_and(|o| !o.is_empty()) {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    Value::Object(out)
+}
+
 /// Kapitel 27 / P8: prüft alle 5 s die Medien der anstehenden Events, stößt die Bereitstellung rechtzeitig an
 /// (Spec §71) und hält die Bereitschaft je Item fest. Läuft vollständig asynchron zum Playout-Takt (Spec §182):
 /// Prozesse laufen im Orchestrator, hier wird nur gefragt und angestoßen — ein Fehler macht das Event „NOT_READY“,
@@ -6113,6 +6372,7 @@ async fn child_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<E
 
         // Fällige Befehle einsammeln, nach `fire_at` sortiert (ein Start muss
         // vor seinem eigenen Stopp laufen, auch wenn beide überfällig sind).
+        let mut var_warnings: Vec<String> = Vec::new();
         let due: Vec<(ScheduledChild, ChildEvent, Option<String>, i64)> = {
             let mut state = store.state.lock().expect("lock poisoned");
             let mut due_events = Vec::new();
@@ -6149,6 +6409,7 @@ async fn child_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<E
             due_events.sort_by_key(|ev| ev.fire_at);
             let graphics_node = state.graphics_node_id.clone();
             let occurrence_secs = state.onair_utc_ms.div_euclid(1000);
+            let state = &*state;
             due_events
                 .into_iter()
                 .filter_map(|ev| {
@@ -6162,10 +6423,15 @@ async fn child_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<E
                     if ev.action == ChildAction::Stop && rt.used_fallback && !child.fallback_target.is_empty() {
                         child.target = child.fallback_target.clone();
                     }
+                    // Variablen erst jetzt einsetzen: Zeiten und Metadaten beziehen sich auf den Startmoment des Kindes.
+                    let child = resolve_child_variables(state, &ev.item_id, &child, ev.fire_at, &mut var_warnings);
                     Some((ev, child, graphics_node.clone(), occurrence_secs))
                 })
                 .collect()
         };
+        for w in var_warnings {
+            let _ = events.send(Event::Error(w));
+        }
         if due.is_empty() {
             continue;
         }
@@ -6548,6 +6814,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::spawn(persist::audio_targets_loop(store.clone()));
     // Kapitel 27 / P8: Medien-Preflight (Verfügbarkeit, rechtzeitige Bereitstellung, Bereitschaft je Event).
     tokio::spawn(preflight_loop(store.clone()));
+    tokio::spawn(asset_meta_loop(store.clone()));
     tokio::spawn(release_loop(store.clone()));
     // Kapitel 27 / P7: Channel-Trigger empfangen.
     tokio::spawn(trigger_loop(store.clone(), nats_url_for_triggers));
@@ -7063,8 +7330,8 @@ mod fixtime_wait_tests {
     }
 }
 
-// Kapitel 6 Teil 5 / Kapitel 27 P3: `resolve_variables` und die Child-Planung
-// sind reine Zustandsfunktionen (kein Netzwerk) — direkt unit-testbar.
+// Kapitel 27 P3: die Child-Planung ist eine reine Zustandsfunktion (kein Netzwerk) — direkt unit-testbar.
+// (Variablen: `variables.rs`.)
 #[cfg(test)]
 mod graphics_children_tests {
     use super::*;
@@ -7108,6 +7375,52 @@ mod graphics_children_tests {
         s.metadata.insert("n".to_string(), next);
         s.playlist.append("n".to_string());
         s
+    }
+
+    #[test]
+    fn variables_resolve_at_start_against_the_owners_neighbours_and_planned_times() {
+        let mut s = two_items(vec![], 20_000);
+        let items = s.playlist.items().to_vec();
+        s.playlist.restore(items, Some(0), true, Mode::default());
+        s.onair_since = Some(Instant::now());
+        let mut c = graphic(TimingMode::RelativeToStart, 0, 0);
+        c.id = "c1".into();
+        c.data = serde_json::json!({
+            "t": "{{next.title}} um {{next.start|short}}, in {{next.untilStart|seconds}} s, {{current.duration|seconds|num}}",
+            "u": "{{prev.title|default:–}}",
+        });
+        let mut w = Vec::new();
+        let r = resolve_child_variables(&s, "p", &c, Instant::now(), &mut w);
+        assert!(w.is_empty(), "{w:?}");
+        assert!(r.data["t"].as_str().unwrap().starts_with("Next um "), "{}", r.data["t"]);
+        assert_eq!(r.data["u"], "–");
+        // unaufgelöst bleibt die Vorlage im Runtime-Eintrag erhalten (nur die Kopie wird eingesetzt)
+        assert!(c.data["t"].as_str().unwrap().contains("{{"));
+        // Cart ohne Playlist-Position
+        let ctx = build_var_ctx(&s, "unbekannt", 0);
+        assert!(ctx.owner.is_none() && ctx.owner_extra.is_none());
+    }
+
+    #[test]
+    fn variables_routes_serve_catalog_and_a_preview_at_the_childs_moment() {
+        let mut s = two_items(vec![], 20_000);
+        let items = s.playlist.items().to_vec();
+        s.playlist.restore(items, Some(0), true, Mode::default());
+        s.onair_since = Some(Instant::now());
+        s.asset_meta.insert("a".into(), (0, serde_json::json!({"title": "T", "descriptive": {"artist": "Meier"}})));
+        s.metadata.get_mut("n").unwrap().media_ref.asset = Some(readiness::AssetRef { asset_id: "a".into(), ..Default::default() });
+        let now = chrono::Utc::now().timestamp_millis();
+        let (st, cat) = variables_endpoint(&s, "catalog", now);
+        assert_eq!(st, 200);
+        assert!(cat["metaKeys"].as_array().unwrap().iter().any(|k| k == "descriptive.artist"));
+        assert_eq!(cat["events"].as_array().unwrap().len(), 2);
+        // 5 s nach Beginn des 20-s-Events „p“: das Nachfolge-Event startet in 15 s
+        let (_, pv) = variables_endpoint(&s, "preview?itemId=p&offsetMs=5000&t=%7B%7Bnext.untilStart%7Cseconds%7D%7D&t=%7B%7Bnext.meta.artist%7D%7D&t=%7B%7Bnext.titel%7D%7D", now);
+        assert_eq!(pv["results"][0]["text"], "15");
+        assert_eq!(pv["results"][1]["text"], "Meier");
+        assert!(pv["results"][2]["errors"][0].as_str().unwrap().contains("unbekannt"));
+        assert_eq!(pv["ownerFound"], true);
+        assert_eq!(variables_endpoint(&s, "nope", now).0, 404);
     }
 
     #[test]
@@ -7282,35 +7595,6 @@ mod graphics_children_tests {
         assert!(!needs_stop(&c), "node commands only stop when a stopMethod is set");
         c.stop_method = "off".to_string();
         assert!(needs_stop(&c));
-    }
-
-    #[test]
-    fn resolve_variables_replaces_next_title_in_string_values() {
-        let data = serde_json::json!({"title": "Coming up: {{next:title}}", "subtitle": "static"});
-        let resolved = resolve_variables(&data, Some("Weather"));
-        assert_eq!(resolved["title"], "Coming up: Weather");
-        assert_eq!(resolved["subtitle"], "static");
-    }
-
-    #[test]
-    fn resolve_variables_without_a_next_item_substitutes_empty_string() {
-        let data = serde_json::json!({"title": "{{next:title}}"});
-        let resolved = resolve_variables(&data, None);
-        assert_eq!(resolved["title"], "");
-    }
-
-    #[test]
-    fn resolve_variables_recurses_into_nested_arrays_and_objects() {
-        let data = serde_json::json!({"items": [{"label": "Next: {{next:title}}"}]});
-        let resolved = resolve_variables(&data, Some("News"));
-        assert_eq!(resolved["items"][0]["label"], "Next: News");
-    }
-
-    #[test]
-    fn resolve_variables_leaves_non_matching_data_untouched() {
-        let data = serde_json::json!({"count": 5, "flag": true, "title": "Fixed Title"});
-        let resolved = resolve_variables(&data, Some("Ignored"));
-        assert_eq!(resolved, data);
     }
 }
 

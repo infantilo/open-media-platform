@@ -162,6 +162,56 @@ sofort ihren Stopp. Neustart: bereits gestartete Kinder werden nicht wiederholt 
 Journal `child:<item>:<child>:<on-air-sekunde>`), verpasste als `CANCELLED` gemeldet.
 Zustand: Parameter `childEvents`.
 
+## 4a. Variablen in Child Events (Kapitel 95)
+
+In den **Daten** einer Grafik, den **Parametern** (auch `stopParams`) von Node-Befehl/Trigger/Audio/Voiceover/Webhook/Channel-Trigger
+und in der **URL** eines Webhooks dürfen Platzhalter stehen. Sie werden **beim Start des Kindes** eingesetzt (nicht beim Anlegen, nicht beim
+Beginn des Events): „Zeit bis zum Ende“ und Ähnliches beziehen sich also auf den geplanten Startmoment des Kindes (bei einer Grafik mit
+Vorlauf auf den Moment, in dem sie erscheint). Die gespeicherte Vorlage bleibt unverändert; nur die Kopie, die an den Node geht, ist eingesetzt.
+
+`{{bezug.feld|format|format:argument}}` — Trenner zum Feld ist `.` oder `:` (`{{next:title}}` aus Kapitel 6 gilt unverändert).
+
+| Bezug | Bedeutung |
+|---|---|
+| `current` | das Event, zu dem das Child gehört (bei Carts: das Cart) |
+| `prev`, `prev2`, `prev3` … / `next`, `next2` … | Event davor / danach (N-tes) |
+| `onair` | das Event, das gerade läuft |
+| `first`, `last`, `at(N)`, `item(ID)` | erstes / letztes / Position N / bestimmte ID |
+| `find(Bedingung)` | **erstes passendes Event NACH** dem aktuellen |
+| `findprev(Bedingung)` | **nächstes passendes Event DAVOR** |
+
+**Suchbedingung:** Klauseln mit `&` (alle müssen zutreffen), z. B. `type=CLIP & title~Nachrichten & duration>1min`. Operatoren:
+`=` `!=` `~` (enthält) `!~` `^` (beginnt) `$` (endet) `>` `>=` `<` `<=` `?` (vorhanden). Suchbar ist jedes Feld, auch `meta.…`.
+Text ohne Groß-/Kleinschreibung; Dauern als `30s`, `1:30`, `1h30m`; Zeiten als `20:15`, `20:15:30`, `2026-11-12 20:15` (Ortszeit) oder RFC 3339.
+
+**Felder:** `title`, `id`, `type`, `index`, `source`, `file`, `note`, `adClass`, `startType` (Text); `start`, `end` (Zeitpunkt, **geplant** nach der
+Playlist-Planung: Dauern, Fix-Anker; ohne bestimmbaren Start leer); `duration`, `untilStart`, `untilEnd` (= `remaining`), `elapsed` (Dauer);
+`meta.<Schlüssel>` — Medien-Metadaten des verknüpften Assets (Abschnitte descriptive, editorial, custom, technical, system, ai; auch `meta.descriptive.artist`).
+Die Metadaten holt der Node im Hintergrund (alle 60 s, für die Events rund um die Sendeposition); beim Child-Start wird nie auf das Netz gewartet.
+
+**Formate** (die Oberfläche listet sie je Werttyp mit Ergebnis):
+- *Zeitpunkt:* `time` hh:mm:ss, `short` hh:mm, `date`, `datetime`, `day` (heute/morgen/übermorgen/gestern/Wochentag/Datum), `daytime` („heute 20:15“), `weekday`,
+  `tc` (hh:mm:ss:ff), `frames` (Bilder seit Mitternacht), `iso`, `utc`, `unix`, `unixms`, `human` („in 5 Min“), `pattern:<Muster>` mit
+  `yyyy yy MMMM MMM MM dd EEEE EEE HH hh mm ss SSS ff a` (`'…'` wörtlich).
+- *Dauer:* `hms`, `hmsf` (Timecode), `mmss`, `auto` (m:ss oder h:mm:ss), `seconds`, `millis`, `minutes`, `hours`, `frames`, `human` („5 Min 30 Sek“), `int`, `fixed:N`.
+- *Text/Zahl:* `upper`, `lower`, `trim`, `max:N` (kürzen mit …), `prefix:`/`suffix:` (nur wenn ein Wert da ist), `default:` (Ersatz bei leer), `pad:N`, `fixed:N`, `int`.
+- *Ausgabe:* `en` (englische Wochentage/Monate/Klartext), `num` / `int` (JSON-**Zahl** statt Text) und `bool` — nur wenn der Platzhalter allein im Feld steht
+  (für Zahlenfelder einer Vorlage: Feld über „{ }“ auf einen Platzhalter umstellen, z. B. `{{current.duration|seconds|num}}`).
+
+**Fehlt etwas** (kein nächstes Event, Metadatum nicht vorhanden), wird der Platzhalter **leer** (oder der Wert von `|default:…`), nie sichtbar auf der Grafik.
+**Falsch geschrieben** (unbekannter Bezug/Feld/Format, fehlende Klammer) wird schon beim Speichern des Childs im Klartext abgelehnt (mit Pfad, z. B.
+`data.title: Feld „titel“ unbekannt — erlaubt: …`); eine nur zur Laufzeit erkannte Unstimmigkeit (z. B. Dauerformat auf einen Text) meldet der Automator als Warnung, das Child startet trotzdem.
+
+**Oberfläche:** Jedes Textfeld in den Daten/Parametern eines Childs hat rechts den Knopf **„{ }“** (auch Zahlenfelder: Platzhalter statt fester Zahl). Der Assistent führt in drei
+Schritten — ① von welchem Event (Voriges/Aktuelles/Nächstes/N-tes/läuft gerade/erstes/letztes/Position/bestimmtes/**Suche** mit Bedingungszeilen), ② welche Angabe
+(Titel, Zeiten, Medien-Metadaten mit den bekannten Schlüsseln), ③ wie sie aussieht: eine Liste aller passenden Formate, **jede Zeile mit dem Ergebnis, wenn das Child jetzt
+startet** (mit dem echten Zeitpunkt des Childs relativ zum Event). Darunter der fertige Platzhalter und das Ergebnis; „Einfügen“ setzt ihn an die Cursor-Stelle.
+Ein Feld mit Platzhalter zeigt darunter eine **Live-Vorschau**. Katalog und Vorschau liefert der Node (`GET /variables/catalog`, `GET /variables/preview?itemId=…&t=…&offsetMs=…`,
+über den Orchestrator unter `/api/v1/nodes/{id}/variables/…`); die Oberfläche hat keine eigene Liste.
+
+**Nicht enthalten:** laufende Aktualisierung einer bereits sichtbaren Grafik (ein Countdown, der jede Sekunde neu gesetzt wird). Dafür den absoluten Zeitpunkt übergeben
+(`{{current.end|iso}}`, `|unixms`) und die Vorlage selbst herunterzählen lassen.
+
 ## 5. Source Selector und Tags
 
 Quellen-Sicht: `GET /api/v1/sources` (Filter `tag`, `mediaType`, `workflowId`). Tags

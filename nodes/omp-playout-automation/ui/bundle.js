@@ -287,6 +287,16 @@ const T = (() => {
       "ed.currentChoice": "Aktuelle Wahl: {chosen} ({via})",
       "ed.deleteKid": "Child Event löschen",
       "ed.addKid": "＋ Child Event",
+      "var.title": "Wert aus der Playlist einfügen", "var.insert": "Wert aus der Playlist einfügen (Titel, Zeiten, Metadaten …)", "var.useVar": "Statt fester Zahl einen Wert aus der Playlist verwenden", "var.backToNumber": "Zurück zu einer festen Zahl",
+      "var.loading": "Lade …", "var.loadFail": "Katalog nicht ladbar", "var.empty": "(leer)", "var.asIs": "unverändert", "var.result": "Ergebnis jetzt:", "var.doInsert": "Einfügen",
+      "var.step1": "Von welchem Event?", "var.step2": "Welche Angabe?", "var.step3": "Wie soll sie aussehen?", "var.step3Hint": "Zeile anklicken — rechts steht das Ergebnis, wenn das Child jetzt startet",
+      "var.ref.prev": "Voriges Event", "var.ref.current": "Aktuelles Event (zu dem dieses Child gehört)", "var.ref.next": "Nächstes Event", "var.ref.prevN": "N-tes Event davor …", "var.ref.nextN": "N-tes Event danach …",
+      "var.ref.onair": "Event, das gerade läuft", "var.ref.first": "Erstes Event der Liste", "var.ref.last": "Letztes Event der Liste", "var.ref.at": "Event an Position …", "var.ref.item": "Ein bestimmtes Event …",
+      "var.ref.find": "Event suchen: erstes passendes danach", "var.ref.findprev": "Event suchen: nächstes passendes davor",
+      "var.nHintNext": "2 = übernächstes Event", "var.nHintPrev": "2 = vorvoriges Event", "var.findHint": "Das erste Event NACH diesem, auf das alle Bedingungen zutreffen.", "var.findPrevHint": "Das nächste Event VOR diesem, auf das alle Bedingungen zutreffen.",
+      "var.where": "wo", "var.and": "und", "var.addCond": "＋ Bedingung", "var.valuePh": "Wert (Zeit: 20:15, Dauer: 30s oder 1:30)", "var.metaPrefix": "Metadatum",
+      "var.g.text": "Angaben", "var.g.time": "Zeiten", "var.g.meta": "Medien-Metadaten", "var.metaPick": "Metadatum wählen …", "var.metaPh": "z. B. descriptive.artist oder artist", "var.noMeta": "Noch keine Metadaten bekannt (nur bei Events mit Asset).",
+      "var.english": "Englische Wochentage/Monate", "var.ifEmpty": "Wenn leer, zeige:", "var.ifEmptyPh": "z. B. –", "var.patternHint": "HH Std, mm Min, ss Sek, ff Bilder, dd Tag, MM Monat, yyyy Jahr, EEEE Wochentag",
       "ed.kidsEmpty": "Child Events laufen parallel zum Event: Grafik ein-/ausblenden, Node-Befehle, Webhooks, Audio/Voiceover, Channel-Trigger.",
       "ed.runtime": "Laufzeit: {state}{error}{attempt}",
       "ed.attempt": " (Versuch {n})",
@@ -650,6 +660,16 @@ const T = (() => {
       "ed.currentChoice": "Current choice: {chosen} ({via})",
       "ed.deleteKid": "Delete child event",
       "ed.addKid": "＋ Child event",
+      "var.title": "Insert a value from the playlist", "var.insert": "Insert a value from the playlist (title, times, metadata …)", "var.useVar": "Use a value from the playlist instead of a fixed number", "var.backToNumber": "Back to a fixed number",
+      "var.loading": "Loading …", "var.loadFail": "Catalog could not be loaded", "var.empty": "(empty)", "var.asIs": "as is", "var.result": "Result now:", "var.doInsert": "Insert",
+      "var.step1": "From which event?", "var.step2": "Which value?", "var.step3": "How should it look?", "var.step3Hint": "Click a row — the result on the right is what you get if the child started now",
+      "var.ref.prev": "Previous event", "var.ref.current": "Current event (the one this child belongs to)", "var.ref.next": "Next event", "var.ref.prevN": "N-th event before …", "var.ref.nextN": "N-th event after …",
+      "var.ref.onair": "Event on air right now", "var.ref.first": "First event in list", "var.ref.last": "Last event in list", "var.ref.at": "Event at position …", "var.ref.item": "A specific event …",
+      "var.ref.find": "Search: first match after this one", "var.ref.findprev": "Search: nearest match before this one",
+      "var.nHintNext": "2 = the one after next", "var.nHintPrev": "2 = two before", "var.findHint": "The first event AFTER this one where all conditions apply.", "var.findPrevHint": "The nearest event BEFORE this one where all conditions apply.",
+      "var.where": "where", "var.and": "and", "var.addCond": "＋ Condition", "var.valuePh": "Value (time: 20:15, duration: 30s or 1:30)", "var.metaPrefix": "Metadata",
+      "var.g.text": "Details", "var.g.time": "Times", "var.g.meta": "Media metadata", "var.metaPick": "Pick metadata …", "var.metaPh": "e.g. descriptive.artist or artist", "var.noMeta": "No metadata known yet (only for events with an asset).",
+      "var.english": "English weekdays/months", "var.ifEmpty": "If empty, show:", "var.ifEmptyPh": "e.g. –", "var.patternHint": "HH hours, mm minutes, ss seconds, ff frames, dd day, MM month, yyyy year, EEEE weekday",
       "ed.kidsEmpty": "Child events run in parallel to the event: show/hide graphics, node commands, webhooks, audio/voiceover, channel triggers.",
       "ed.runtime": "Runtime: {state}{error}{attempt}",
       "ed.attempt": " (attempt {n})",
@@ -836,7 +856,7 @@ function kvValueEditor(holder, key, onChange, opts = {}) {
   const kind = opts.kind || kvKindOf(holder[key]);
   const changed = () => { if (onChange) onChange(); };
   if (kind === "number") {
-    return h("input", { type: "number", step: "any", value: holder[key] ?? 0, oninput: (e) => { if (e.target.value !== "") { holder[key] = Number(e.target.value); changed(); } } });
+    return varNumberField(holder, key, h("input", { type: "number", step: "any", value: holder[key] ?? 0, oninput: (e) => { if (e.target.value !== "") { holder[key] = Number(e.target.value); changed(); } } }), changed);
   }
   if (kind === "bool") {
     const c = h("input", { type: "checkbox", onchange: (e) => { holder[key] = e.target.checked; changed(); } });
@@ -851,7 +871,7 @@ function kvValueEditor(holder, key, onChange, opts = {}) {
     if (holder[key] === null || typeof holder[key] !== "object" || Array.isArray(holder[key])) holder[key] = {};
     return kvObjectEditor(holder[key], changed, opts);
   }
-  return h("input", { type: "text", value: holder[key] ?? "", oninput: (e) => { holder[key] = e.target.value; changed(); } });
+  return decorateVarInput(h("input", { type: "text", value: holder[key] ?? "", oninput: (e) => { holder[key] = e.target.value; changed(); } }));
 }
 
 /** Liste: eine Zeile je Eintrag (mit Typwahl) und „＋ Eintrag“. */
@@ -911,6 +931,218 @@ function kvObjectEditor(obj, onChange, opts = {}) {
   };
   draw();
   return box;
+}
+
+// ---------------------------------------------------------------------------
+// Variablen-Assistent: Werte aus Playlist-Events (Titel, Zeiten, Metadaten von Vorgänger/Nachfolger/gesuchtem Event)
+// in Textfelder von Child Events einsetzen. Alle Bezüge, Felder und Formate liefert der Node (GET /variables/catalog) —
+// diese Oberfläche kennt keine eigene Liste. Schreibweise des Platzhalters: {{bezug.feld|format}} (s. docs/PLAYOUT-AUTOMATION.md §4a).
+// ---------------------------------------------------------------------------
+let varAssistHook = null; // (input) => Element; vom Event-Editor gesetzt (kennt nodeId, Event, Zeitpunkt des Childs)
+const decorateVarInput = (input) => (varAssistHook ? varAssistHook(input) : input);
+
+/** Zahlenfeld, das auf Wunsch einen Platzhalter statt einer festen Zahl aufnimmt (Typ-Format `num` macht daraus wieder eine Zahl). */
+function varNumberField(holder, key, numInput, onChange) {
+  if (!varAssistHook) return numInput;
+  const wrap = h("div", { class: "var-wrap" });
+  const asNumber = () => {
+    if (typeof holder[key] === "string") holder[key] = Number(holder[key]) || 0;
+    numInput.value = holder[key] ?? "";
+    wrap.replaceChildren(numInput, h("button", { type: "button", class: "var-btn", title: T("var.useVar"), onclick: asText }, "{ }"));
+  };
+  const asText = () => {
+    const t = h("input", { type: "text", value: typeof holder[key] === "string" ? holder[key] : "", oninput: (e) => { holder[key] = e.target.value; if (onChange) onChange(); } });
+    wrap.replaceChildren(decorateVarInput(t), h("button", { type: "button", class: "var-btn", title: T("var.backToNumber"), onclick: asNumber }, "123"));
+  };
+  if (typeof holder[key] === "string" && holder[key].includes("{{")) asText(); else asNumber();
+  return wrap;
+}
+
+/** Baut Textfeld + „{ }“-Knopf + Live-Vorschau. `ctx`: { nodeId, itemId, offsetMs() }. */
+function makeVarField(input, ctx) {
+  const prev = h("div", { class: "var-prev" });
+  const btn = h("button", { type: "button", class: "var-btn", title: T("var.insert"), onclick: () => openVarAssistant(ctx, (token) => {
+    const s = input.selectionStart ?? input.value.length, e2 = input.selectionEnd ?? s;
+    input.value = input.value.slice(0, s) + token + input.value.slice(e2);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+    input.setSelectionRange(s + token.length, s + token.length);
+  }) }, "{ }");
+  let timer = null;
+  const refresh = () => {
+    clearTimeout(timer);
+    if (!input.value.includes("{{")) { prev.style.display = "none"; return; }
+    timer = setTimeout(async () => {
+      const r = await varPreview(ctx, [input.value]);
+      const x = r && r.results && r.results[0];
+      if (!x) { prev.style.display = "none"; return; }
+      prev.style.display = "";
+      if (x.errors.length) { prev.className = "var-prev bad"; prev.textContent = `⚠ ${x.errors[0]}`; }
+      else { prev.className = "var-prev"; prev.textContent = `→ ${x.text === "" ? T("var.empty") : x.text}${x.warnings.length ? ` ⚠ ${x.warnings[0]}` : ""}`; }
+    }, 300);
+  };
+  input.addEventListener("input", refresh);
+  refresh();
+  return h("div", { class: "var-field" }, h("div", { class: "var-wrap" }, input, btn), prev);
+}
+
+async function varPreview(ctx, texts) {
+  const q = new URLSearchParams();
+  if (ctx.itemId) q.set("itemId", ctx.itemId);
+  const off = ctx.offsetMs ? ctx.offsetMs() : null;
+  if (off !== null && off !== undefined) q.set("offsetMs", String(Math.round(off)));
+  for (const t of texts) q.append("t", t);
+  try {
+    const res = await fetch(`/api/v1/nodes/${ctx.nodeId}/variables/preview?${q}`);
+    return res.ok ? await res.json() : null;
+  } catch { return null; }
+}
+
+const VAR_CATALOG = {}; // je nodeId, einmal geladen (Metadaten-Schlüssel ändern sich selten; beim Öffnen neu geholt)
+async function varCatalog(nodeId, fresh) {
+  if (!fresh && VAR_CATALOG[nodeId]) return VAR_CATALOG[nodeId];
+  const res = await fetch(`/api/v1/nodes/${nodeId}/variables/catalog`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (VAR_CATALOG[nodeId] = await res.json());
+}
+
+/** Dialog: 1 Event wählen, 2 Angabe wählen, 3 Darstellung (Liste aller passenden Formate mit Ergebnis JETZT anklicken). */
+function openVarAssistant(ctx, onInsert) {
+  const en = document.documentElement.lang === "en";
+  const lbl = (o) => (en ? o.en : o.de) || o.de || o.key;
+  const st = { ref: "next", n: 2, pos: 1, itemId: "", dir: "find", clauses: [{ field: "title", op: "~", value: "" }], field: "title", metaKey: "", format: "", arg: "", dflt: "", english: false };
+  const overlay = h("div", { class: "overlay", style: "z-index:1100", onmousedown: (e) => { if (e.target === overlay) close(); } });
+  const close = () => overlay.remove();
+  const body = h("div", { class: "content var-assist" }, h("div", { class: "hint" }, T("var.loading")));
+  const footer = h("footer", {});
+  overlay.append(h("div", { class: "modal", style: "width:min(820px,96vw)" }, h("header", {}, T("var.title"), h("button", { onclick: close }, "✕")), body, footer));
+  overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); e.stopPropagation(); });
+  (ctx.root || document.body).append(overlay); // im Shadow-DOM des Panels, damit dessen Stile gelten
+  let cat = null;
+  let fmtResults = {}; // format → Text
+  let seq = 0;
+
+  const refToken = () => {
+    switch (st.ref) {
+      case "prevN": return st.n === 1 ? "prev" : `prev${st.n}`;
+      case "nextN": return st.n === 1 ? "next" : `next${st.n}`;
+      case "at": return `at(${st.pos})`;
+      case "item": return `item(${st.itemId})`;
+      case "find": case "findprev": {
+        const q = st.clauses.filter((c) => c.field && (c.op === "?" || c.value !== "")).map((c) => `${c.field}${c.op}${/[&()|"]/.test(c.value) ? `"${c.value.replace(/"/g, "")}"` : c.value}`).join(" & ");
+        return `${st.ref}(${q})`;
+      }
+      default: return st.ref;
+    }
+  };
+  const fieldToken = () => (st.field === "meta.<Schlüssel>" ? `meta.${st.metaKey}` : st.field);
+  const fieldType = () => {
+    if (st.field.startsWith("meta.")) return "text";
+    const f = (cat.fields || []).find((x) => x.key === st.field);
+    return f ? f.type : "text";
+  };
+  const fmtApplies = (f) => f.for === "all" || f.for.split(",").includes(fieldType());
+  const defArg = { pattern: "HH:mm", fixed: "2", pad: "3", max: "20" };
+  const fmtPart = (f, arg) => (f.arg ? `${f.key}:${arg ?? defArg[f.key] ?? ""}` : f.key);
+  const token = (withFormat = true) => {
+    const parts = [`${refToken()}.${fieldToken()}`];
+    if (withFormat && st.format) {
+      const f = cat.formats.find((x) => x.key === st.format);
+      if (f) parts.push(fmtPart(f, st.arg || undefined));
+    }
+    if (st.english) parts.push("en");
+    if (st.dflt !== "") parts.push(`default:${st.dflt}`);
+    return `{{${parts.join("|")}}}`;
+  };
+
+  const sel = (options, value, onchange) => {
+    const s = h("select", { onchange: (e) => onchange(e.target.value) }, ...options.map(([v, t]) => h("option", { value: v }, t)));
+    s.value = value;
+    return s;
+  };
+
+  const loadPreviews = async () => {
+    const my = ++seq;
+    const forms = cat.formats.filter(fmtApplies).filter((f) => !["prefix", "suffix", "default", "en", "bool", "num"].includes(f.key));
+    const texts = [`{{${refToken()}.${fieldToken()}${st.english ? "|en" : ""}}}`, ...forms.map((f) => `{{${refToken()}.${fieldToken()}|${fmtPart(f)}${st.english ? "|en" : ""}}}`), token()];
+    const r = await varPreview(ctx, texts);
+    if (my !== seq || !r) return;
+    fmtResults = { "": r.results[0] };
+    forms.forEach((f, i) => { fmtResults[f.key] = r.results[i + 1]; });
+    fmtResults.__final = r.results[texts.length - 1];
+    drawResults();
+  };
+
+  const resultsBox = h("div", { class: "var-fmts" });
+  const finalBox = h("div", { class: "var-final" });
+  const drawResults = () => {
+    const forms = cat.formats.filter(fmtApplies).filter((f) => !["prefix", "suffix", "default", "en", "bool", "num"].includes(f.key));
+    const row = (key, text, sub, res) => h("label", { class: `var-fmt${st.format === key ? " act" : ""}` },
+      h("input", { type: "radio", name: "varfmt", checked: st.format === key, onchange: () => { st.format = key; st.arg = ""; drawAll(); } }),
+      h("span", { class: "var-fmt-name" }, text, sub ? h("small", {}, sub) : null),
+      h("span", { class: "var-fmt-val" }, !res ? "…" : res.errors && res.errors.length ? `⚠ ${res.errors[0]}` : res.warnings && res.warnings.length ? `⚠ ${res.warnings[0]}` : res.text === "" ? T("var.empty") : res.text));
+    resultsBox.replaceChildren(row("", T("var.asIs"), "", fmtResults[""]), ...forms.map((f) => row(f.key, lbl(f), f.arg ? `${f.key}:${st.format === f.key && st.arg ? st.arg : defArg[f.key] ?? ""}` : f.key, fmtResults[f.key])));
+    const cur = st.format && cat.formats.find((x) => x.key === st.format);
+    const argRow = cur && cur.arg ? h("div", { class: "crow", style: "margin:4px 0" }, h("span", {}, `${cur.arg}:`), h("input", { type: "text", value: st.arg || defArg[cur.key] || "", style: "width:200px", oninput: (e) => { st.arg = e.target.value; clearTimeout(drawResults.t); drawResults.t = setTimeout(loadPreviews, 250); } }), cur.key === "pattern" ? h("span", { class: "hint" }, T("var.patternHint")) : null) : null;
+    const fin = fmtResults.__final;
+    finalBox.replaceChildren(...[argRow].filter(Boolean), h("div", { class: "var-token" }, h("code", {}, token())), h("div", { class: "var-result" }, T("var.result"), " ", h("b", {}, !fin ? "…" : fin.errors && fin.errors.length ? `⚠ ${fin.errors[0]}` : fin.text === "" ? T("var.empty") : fin.text)));
+    footer.replaceChildren(h("button", { onclick: close }, T("cancel")), h("button", { class: "primary", onclick: () => { onInsert(token()); close(); } }, T("var.doInsert")));
+  };
+
+  const drawAll = () => {
+    const events = cat.events || [];
+    // --- 1. Event
+    const refOpts = [["prev", "⬅ " + T("var.ref.prev")], ["current", "◉ " + T("var.ref.current")], ["next", "➡ " + T("var.ref.next")], ["prevN", T("var.ref.prevN")], ["nextN", T("var.ref.nextN")],
+      ["onair", "▶ " + T("var.ref.onair")], ["first", T("var.ref.first")], ["last", T("var.ref.last")], ["at", T("var.ref.at")], ["item", T("var.ref.item")], ["find", "🔍 " + T("var.ref.find")], ["findprev", "🔍 " + T("var.ref.findprev")]];
+    const refRow = h("div", { class: "crow" }, sel(refOpts, st.ref, (v) => { st.ref = v; drawAll(); }));
+    if (st.ref === "prevN" || st.ref === "nextN") refRow.append(h("input", { type: "number", min: "1", max: "50", value: st.n, style: "width:70px", oninput: (e) => { st.n = Math.max(1, Number(e.target.value) || 1); loadPreviews(); } }), h("span", { class: "hint" }, st.ref === "nextN" ? T("var.nHintNext") : T("var.nHintPrev")));
+    if (st.ref === "at") refRow.append(h("input", { type: "number", min: "1", value: st.pos, style: "width:80px", oninput: (e) => { st.pos = Math.max(1, Number(e.target.value) || 1); loadPreviews(); } }));
+    if (st.ref === "item") {
+      if (!st.itemId && events.length) st.itemId = events[0].id;
+      refRow.append(sel(events.map((e) => [e.id, `${e.index}. ${e.title || e.id}`]), st.itemId, (v) => { st.itemId = v; loadPreviews(); }));
+    }
+    const refBox = h("div", {}, refRow);
+    if (st.ref === "find" || st.ref === "findprev") {
+      refBox.append(h("div", { class: "hint" }, st.ref === "find" ? T("var.findHint") : T("var.findPrevHint")));
+      const fieldOpts = cat.fields.filter((f) => !f.key.startsWith("meta.")).map((f) => [f.key, lbl(f)]).concat((cat.metaKeys || []).map((k) => [`meta.${k}`, `${T("var.metaPrefix")} ${k}`]));
+      const opOpts = cat.operators.map((o) => [o.key, lbl(o)]);
+      st.clauses.forEach((c, i) => {
+        const valIn = h("input", { type: "text", value: c.value, placeholder: T("var.valuePh"), style: c.op === "?" ? "display:none" : "", oninput: (e) => { c.value = e.target.value; clearTimeout(drawAll.t); drawAll.t = setTimeout(loadPreviews, 250); } });
+        refBox.append(h("div", { class: "crow", style: "margin-top:4px" },
+          i === 0 ? h("span", { style: "width:34px" }, T("var.where")) : h("span", { style: "width:34px" }, T("var.and")),
+          sel(fieldOpts, c.field, (v) => { c.field = v; loadPreviews(); }), sel(opOpts, c.op, (v) => { c.op = v; valIn.style.display = v === "?" ? "none" : ""; loadPreviews(); }), valIn,
+          st.clauses.length > 1 ? h("button", { class: "kv-x", onclick: () => { st.clauses.splice(i, 1); drawAll(); } }, "✕") : null));
+      });
+      refBox.append(h("button", { type: "button", class: "kv-add", style: "margin-top:4px", onclick: () => { st.clauses.push({ field: "title", op: "~", value: "" }); drawAll(); } }, T("var.addCond")));
+    }
+    // --- 2. Angabe
+    const groups = [
+      [T("var.g.text"), ["title", "type", "file", "source", "note", "id", "index", "adClass", "startType"]],
+      [T("var.g.time"), ["start", "end", "duration", "untilStart", "untilEnd", "elapsed"]],
+    ];
+    const fieldSel = h("select", { onchange: (e) => { st.field = e.target.value; st.format = ""; st.arg = ""; drawAll(); } },
+      ...groups.map(([g, keys]) => h("optgroup", { label: g }, ...keys.map((k) => cat.fields.find((f) => f.key === k)).filter(Boolean).map((f) => h("option", { value: f.key }, lbl(f))))),
+      h("optgroup", { label: T("var.g.meta") }, h("option", { value: "meta.<Schlüssel>" }, T("var.metaPick"))));
+    fieldSel.value = st.field;
+    const fieldRow = h("div", { class: "crow" }, fieldSel);
+    if (st.field === "meta.<Schlüssel>") {
+      const dl = h("datalist", { id: "var-meta-keys" }, ...(cat.metaKeys || []).map((k) => h("option", { value: k })));
+      fieldRow.append(h("input", { type: "text", list: "var-meta-keys", value: st.metaKey, placeholder: T("var.metaPh"), style: "min-width:220px", oninput: (e) => { st.metaKey = e.target.value.trim(); clearTimeout(drawAll.t); drawAll.t = setTimeout(loadPreviews, 250); } }), dl);
+      if (!(cat.metaKeys || []).length) fieldRow.append(h("span", { class: "hint" }, T("var.noMeta")));
+    }
+    // --- Zusatz
+    const extra = h("div", { class: "crow" },
+      h("label", { class: "var-chk" }, h("input", { type: "checkbox", checked: st.english, onchange: (e) => { st.english = e.target.checked; loadPreviews(); } }), T("var.english")),
+      h("span", {}, T("var.ifEmpty")), h("input", { type: "text", value: st.dflt, placeholder: T("var.ifEmptyPh"), style: "width:200px", oninput: (e) => { st.dflt = e.target.value; clearTimeout(drawAll.t); drawAll.t = setTimeout(loadPreviews, 250); } }));
+    body.replaceChildren(
+      h("div", { class: "var-step" }, "① ", T("var.step1")), refBox,
+      h("div", { class: "var-step" }, "② ", T("var.step2")), fieldRow,
+      h("div", { class: "var-step" }, "③ ", T("var.step3"), h("span", { class: "hint", style: "margin-left:8px" }, T("var.step3Hint"))), resultsBox, extra, finalBox);
+    drawResults();
+    loadPreviews();
+  };
+
+  varCatalog(ctx.nodeId, true).then((c) => { cat = c; drawAll(); }).catch((e) => { body.replaceChildren(h("div", { class: "hint", style: "color:var(--warn)" }, `${T("var.loadFail")}: ${e.message || e}`)); });
 }
 
 // ---------------------------------------------------------------------------
@@ -1119,6 +1351,22 @@ const STYLE = `
   .kv-chip { padding: 1px 6px; font-size: 11px; margin: 0 3px 3px 0; }
   .kv-sug { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
   .hint { color: var(--mut); font-size: 11px; grid-column: 1 / -1; }
+  .var-field { width: 100%; min-width: 0; }
+  .var-wrap { display: flex; gap: 4px; align-items: center; width: 100%; }
+  .var-wrap > input { flex: 1; min-width: 0; }
+  .var-btn { cursor: pointer; background: var(--bg3, transparent); border: 1px solid var(--bd); border-radius: 3px; color: var(--acc); font-family: monospace; padding: 2px 6px; white-space: nowrap; }
+  .var-prev { font-size: 11px; color: var(--ok, #7fd37f); margin: 2px 0 0 2px; word-break: break-word; }
+  .var-prev.bad { color: var(--warn); }
+  .var-assist { display: flex; flex-direction: column; gap: 6px; }
+  .var-step { font-weight: 600; margin-top: 8px; }
+  .var-fmts { border: 1px solid var(--bd); border-radius: 4px; max-height: 250px; overflow: auto; }
+  .var-fmt { display: grid; grid-template-columns: 22px 1fr minmax(120px, 40%); gap: 6px; align-items: center; padding: 4px 8px; cursor: pointer; border-bottom: 1px solid #2a2a2e; }
+  .var-fmt.act { background: #26384f; }
+  .var-fmt small { display: block; color: var(--mut); font-family: monospace; font-size: 10px; }
+  .var-fmt-val { font-family: monospace; text-align: right; word-break: break-word; }
+  .var-token { margin: 6px 0 2px; } .var-token code { background: var(--bg3); padding: 3px 6px; border-radius: 3px; user-select: all; }
+  .var-result { font-size: 13px; }
+  .var-chk { display: flex; gap: 4px; align-items: center; }
   .kid-edit { display: grid; grid-template-columns: 210px 1fr; gap: 12px; }
   .kid-list { border: 1px solid var(--bd); border-radius: 4px; max-height: 340px; overflow: auto; }
   .kid-list .it { padding: 5px 8px; cursor: pointer; border-bottom: 1px solid #2a2a2e; display: flex; gap: 6px; align-items: center; }
@@ -2465,6 +2713,21 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const origDur = d.durationMs;
       const kids = JSON.parse(JSON.stringify(item?.children || []));
       let kidIdx = Math.min(startKid ?? 0, kids.length - 1);
+      // Variablen-Assistent: Zeitpunkt des Childs relativ zum Eventbeginn (für die Vorschau „so sieht es beim Start aus“)
+      const kidOffsetMs = () => {
+        const k = kids[kidIdx];
+        if (!k) return null;
+        const dur = item?.durationMs || d.durationMs || 0, dl = k.delayMs || 0;
+        switch (k.timing) {
+          case "RELATIVE_TO_START": return dl;
+          case "RELATIVE_TO_END": return dur ? dur - dl : null;
+          case "BEFORE_START": return -dl;
+          case "AFTER_END": return dur ? dur + dl : null;
+          case "FULL_PRIMARY": return 0;
+          default: return null;
+        }
+      };
+      varAssistHook = (input) => makeVarField(input, { nodeId, itemId: item?.id || "", root: shadow, offsetMs: kidOffsetMs });
 
       const durationEditable = () => (cart ? true : ["pattern", "image", "live", "liveselect"].includes(d.kind));
       const block = [...(item?.follow || [])];
@@ -2623,7 +2886,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const schemaControl = (p, holder, n, onChange) => {
         p = p || {};
         const changed = () => { if (onChange) onChange(); };
-        let ctl;
+        let ctl, numberVar = false, textVar = false;
         if (Array.isArray(p.enum)) {
           ctl = bindSelect(holder, n, p.enum.map((e) => [String(e), String(e)]));
           ctl.addEventListener("change", () => { holder[n] = p.type === "integer" || p.type === "number" ? Number(ctl.value) : ctl.value; changed(); });
@@ -2635,6 +2898,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           if (p.minimum !== undefined) ctl.min = p.minimum;
           if (p.maximum !== undefined) ctl.max = p.maximum;
           ctl.value = holder[n] ?? "";
+          numberVar = true;
         } else if (p.type === "object") {
           if (!holder[n] || typeof holder[n] !== "object" || Array.isArray(holder[n])) holder[n] = {};
           ctl = p.properties ? schemaObject(p, holder[n], changed) : kvObjectEditor(holder[n], changed);
@@ -2646,9 +2910,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           ctl = h("input", { type: isColor ? "color" : "text", oninput: (e) => { holder[n] = e.target.value; changed(); } });
           if (p.maxLength) ctl.maxLength = p.maxLength;
           ctl.value = holder[n] ?? "";
+          textVar = !isColor;
         }
         if (p.description) ctl.title = p.description;
-        return ctl;
+        if (numberVar) return varNumberField(holder, n, ctl, changed);
+        return textVar ? decorateVarInput(ctl) : ctl;
       };
       const schemaObject = (p, obj, onChange) => {
         const req = new Set(p.required || []);
@@ -2756,7 +3022,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           f.append(...field(T("ed.stopMethod"), stopIn));
           if (k.stopMethod) f.append(...objField(T("ed.stopParams"), "stopParams", methodArgs(k.target, k.stopMethod)));
         } else if (t === "WEBHOOK") {
-          f.append(...field("URL", bindText(k, "url", { placeholder: "https://…" })));
+          f.append(...field("URL", decorateVarInput(bindText(k, "url", { placeholder: "https://…" }))));
           f.append(...objField(T("ed.bodyFields"), "params"));
         } else if (t === "CHANNEL_TRIGGER") {
           const p = (k.params = k.params && typeof k.params === "object" ? k.params : {});
@@ -2895,6 +3161,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       };
 
       openModal({
+        onClose: () => { varAssistHook = null; },
         title: cart ? (isNew ? T("cart.newTitle") : T("cart.edit", { label: item.label })) : isNew ? T("ed.new") : T("ed.edit", { label: item.label }),
         tabs: cart
           ? [["content", T("ed.tab.content")], ["audio", T("ed.tab.audio")], ["kids", T("ed.tab.kids", { n: kids.length })], ["block", T("cart.tab.block", { n: block.length })]]

@@ -254,7 +254,33 @@ impl ChildEvent {
         self.kind == ChildType::Voiceover && self.method.trim().is_empty()
     }
 
+    /// Alle Felder, in denen Variablen (`{{next.title}}` …) stehen dürfen.
+    fn template_fields(&self) -> [(&'static str, Value); 4] {
+        [("data", self.data.clone()), ("params", self.params.clone()), ("stopParams", self.stop_params.clone()), ("url", Value::String(self.url.clone()))]
+    }
+
+    pub fn has_templates(&self) -> bool {
+        crate::variables::has_placeholders(&self.data)
+            || crate::variables::has_placeholders(&self.params)
+            || crate::variables::has_placeholders(&self.stop_params)
+            || self.url.contains("{{")
+    }
+
+    /// Kopie mit eingesetzten Variablen (zum Startzeitpunkt, `ctx.now_ms`). Fehler kommen in `warnings`.
+    pub fn resolve_templates(&self, ctx: &crate::variables::Ctx, warnings: &mut Vec<String>) -> ChildEvent {
+        let mut c = self.clone();
+        c.data = crate::variables::render_value(&self.data, ctx, warnings);
+        c.params = crate::variables::render_value(&self.params, ctx, warnings);
+        c.stop_params = crate::variables::render_value(&self.stop_params, ctx, warnings);
+        c.url = crate::variables::render_text(&self.url, ctx, warnings);
+        c
+    }
+
     pub fn validate(&self) -> Result<(), String> {
+        let bad: Vec<String> = self.template_fields().iter().flat_map(|(n, v)| crate::variables::validate_value(v, n)).collect();
+        if !bad.is_empty() {
+            return Err(format!("Variablen: {}", bad.join("; ")));
+        }
         if self.kind == ChildType::Subtitle && self.params.get("track").and_then(Value::as_str).is_none_or(|t| t.trim().is_empty()) {
             return Err("SUBTITLE: params.track (Spur im Untertitel-Verzeichnis des Grafik-Nodes) fehlt".to_string());
         }
@@ -536,6 +562,25 @@ mod tests {
         // Ohne atUtc gar nicht erst gültig.
         let bad = ChildEvent::graphic("t", TimingMode::Absolute, 0, 0);
         assert!(bad.validate().unwrap_err().contains("atUtc"));
+    }
+
+    #[test]
+    fn variables_are_checked_when_the_child_is_set_and_resolved_on_a_copy() {
+        let mut c = ChildEvent::graphic("lt", TimingMode::FullPrimary, 0, 0);
+        c.data = serde_json::json!({"t": "{{next.title|upper}}", "n": {"x": "{{find(title~Wetter).start|short}}"}});
+        c.validate().unwrap();
+        assert!(c.has_templates());
+        c.data = serde_json::json!({"t": "{{next.titel}}"});
+        assert!(c.validate().unwrap_err().contains("data.t"), "Pfad des fehlerhaften Felds im Klartext");
+        c.data = Value::Null;
+        c.url = "https://x.invalid/{{current.id}}".to_string();
+        c.kind = ChildType::Webhook;
+        c.validate().unwrap();
+        let mut ctx = crate::variables::Ctx::empty(0);
+        ctx.owner_extra = Some(crate::variables::EventFacts { id: "i7".into(), ..Default::default() });
+        let mut w = Vec::new();
+        assert_eq!(c.resolve_templates(&ctx, &mut w).url, "https://x.invalid/i7");
+        assert!(c.url.contains("{{"), "das Original bleibt unverändert");
     }
 
     #[test]

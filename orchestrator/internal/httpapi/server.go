@@ -463,6 +463,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// artig wie params/plugins GET, reine Registrierung, keine neue
 	// Proxy-Logik (Query-String-Weiterleitung in proxy.go ergänzt).
 	mux.HandleFunc("GET /api/v1/nodes/{id}/timeline/window", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/timeline/window", nodeLogs)))
+	// Variablen der Child Events (omp-playout-automation): Katalog und Vorschau — lesend, reine
+	// Routenregistrierung auf denselben generischen handleNodeProxy (Query-String wird weitergereicht).
+	mux.HandleFunc("GET /api/v1/nodes/{id}/variables/catalog", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/variables/catalog", nodeLogs)))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/variables/preview", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/variables/preview", nodeLogs)))
 	// Sammel-Messwerte eines Messgeraet-Nodes (omp-scope, Nachtrag 226) —
 	// wie timeline/window daruber nur eine Routenregistrierung auf
 	// denselben generischen handleNodeProxy, keine neue Proxy-Logik und
