@@ -51,10 +51,34 @@ interface Tile {
   // Node liefert ein previewUrl-Bild (Schalter nur dann sichtbar); Vorschau selbst nur auf Wunsch.
   canPreview: boolean;
   previewHandle?: MountedPreview;
-  // Nur im Speicher (Kapitel 24, 2026-09-28): Maximieren ist eine
-  // vorübergehende Fokus-Aktion, keine dauerhafte Layout-Entscheidung wie
-  // Minimieren — nach Neuladen der Seite startet keine Kachel maximiert.
+  // Laufender Zustand; wird zusätzlich als `TileLayout.maximized` mit dem Layout gespeichert (Nutzerfund 2026-11-12:
+  // ein maximiertes, gespeichertes Fenster blieb beim Aufruf klein) und von #restoreMaximized wieder hergestellt.
   maximized: boolean;
+}
+
+// Fenstersymbole als feste SVG-Zeichen (kein Nutzertext): Strich = minimieren, Quadrat = maximieren,
+// zwei Quadrate = wiederherstellen, Pfeil nach unten = aufklappen.
+const WINDOW_ICONS = {
+  minimize: '<path d="M3 11.5h10"/>',
+  maximize: '<rect x="3" y="3" width="10" height="10" rx="1"/>',
+  restore: '<rect x="3" y="5.5" width="7.5" height="7.5" rx="1"/><path d="M5.5 5.5V3h7.5v7.5h-2.5"/>',
+  unfold: '<path d="M3.5 6l4.5 4.5L12.5 6"/>',
+} as const;
+
+function setWindowIcon(btn: HTMLButtonElement, kind: keyof typeof WINDOW_ICONS) {
+  btn.innerHTML =
+    `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" ` +
+    `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${WINDOW_ICONS[kind]}</svg>`;
+}
+
+function ensureWindowButtonCss() {
+  if (document.getElementById("omp-win-btn-css")) return;
+  const s = document.createElement("style");
+  s.id = "omp-win-btn-css";
+  s.textContent =
+    ".omp-win-btn:hover:not(:disabled){background:var(--omp-surface-raised);border-color:var(--omp-accent,#4aa3ff);}" +
+    ".omp-win-btn:focus-visible{outline:2px solid var(--omp-accent,#4aa3ff);outline-offset:1px;}";
+  document.head.append(s);
 }
 
 export class ConsoleBoard extends HTMLElement {
@@ -302,6 +326,7 @@ export class ConsoleBoard extends HTMLElement {
       this.#updateWindowButtons(roleId);
       this.#syncPreview(roleId);
     }
+    this.#restoreMaximized();
     this.#saveLayouts();
     this.#renderTaskbar();
   }
@@ -368,6 +393,7 @@ export class ConsoleBoard extends HTMLElement {
       this.#layouts = reconcileLayouts(entries, this.#layouts, this.clientWidth || FALLBACK_CONTAINER_WIDTH);
       this.#saveLayouts();
       await Promise.all(diff.toMount.map((entry) => this.#mountTile(entry)));
+      this.#restoreMaximized();
       this.#renderTaskbar();
     }
 
@@ -415,13 +441,16 @@ export class ConsoleBoard extends HTMLElement {
     header.appendChild(spacer);
 
     const windowButtonStyle =
-      "flex-shrink:0;width:18px;height:18px;line-height:16px;padding:0;border:1px solid var(--omp-border);" +
-      "border-radius:3px;background:var(--omp-surface);color:var(--omp-text-dim);cursor:pointer;font-size:11px;";
+      "flex-shrink:0;width:26px;height:22px;line-height:18px;padding:0;border:1px solid var(--omp-border);" +
+      "border-radius:4px;background:var(--omp-surface);color:var(--omp-text);cursor:pointer;font-size:12px;" +
+      "display:inline-flex;align-items:center;justify-content:center;";
+    ensureWindowButtonCss();
     const previewBtn = document.createElement("button");
     previewBtn.type = "button";
     previewBtn.textContent = "👁";
     previewBtn.title = t("board.previewTitle");
     previewBtn.style.cssText = windowButtonStyle + "display:none;";
+    previewBtn.className = "omp-win-btn";
     previewBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     previewBtn.addEventListener("click", () => {
       const l = this.#layouts[entry.nodeRoleId];
@@ -435,6 +464,7 @@ export class ConsoleBoard extends HTMLElement {
     const minimizeBtn = document.createElement("button");
     minimizeBtn.type = "button";
     minimizeBtn.style.cssText = windowButtonStyle;
+    minimizeBtn.className = "omp-win-btn";
     minimizeBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     minimizeBtn.addEventListener("click", () => this.#toggleMinimize(entry.nodeRoleId));
     header.appendChild(minimizeBtn);
@@ -442,6 +472,7 @@ export class ConsoleBoard extends HTMLElement {
     const maximizeBtn = document.createElement("button");
     maximizeBtn.type = "button";
     maximizeBtn.style.cssText = windowButtonStyle;
+    maximizeBtn.className = "omp-win-btn";
     maximizeBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     maximizeBtn.addEventListener("click", () => this.#toggleMaximize(entry.nodeRoleId));
     header.appendChild(maximizeBtn);
@@ -590,10 +621,12 @@ export class ConsoleBoard extends HTMLElement {
     const tile = this.#tiles.get(roleId);
     const layout = this.#layouts[roleId];
     if (!tile || !layout) return;
-    tile.minimizeBtn.textContent = layout.minimized ? "▢" : "–";
+    setWindowIcon(tile.minimizeBtn, layout.minimized ? "unfold" : "minimize");
     tile.minimizeBtn.title = layout.minimized ? t("board.restore") : t("board.minimize");
-    tile.maximizeBtn.textContent = tile.maximized ? "❐" : "▭";
+    tile.minimizeBtn.setAttribute("aria-label", tile.minimizeBtn.title);
+    setWindowIcon(tile.maximizeBtn, tile.maximized ? "restore" : "maximize");
     tile.maximizeBtn.title = tile.maximized ? t("board.restore") : t("board.maximize");
+    tile.maximizeBtn.setAttribute("aria-label", tile.maximizeBtn.title);
     tile.maximizeBtn.disabled = !!layout.minimized;
     tile.maximizeBtn.style.opacity = layout.minimized ? "0.4" : "1";
     tile.content.style.display = layout.minimized ? "none" : "flex";
@@ -619,16 +652,37 @@ export class ConsoleBoard extends HTMLElement {
     if (!layout || !tile) return;
     if (tile.maximized) {
       tile.maximized = false;
+      layout.maximized = false;
       this.#maximizedRoleId = null;
       this.#applyLayout(tile.wrapper, layout);
     } else {
       if (this.#maximizedRoleId && this.#maximizedRoleId !== roleId) this.#toggleMaximize(this.#maximizedRoleId);
       tile.maximized = true;
+      layout.maximized = true;
       this.#maximizedRoleId = roleId;
       this.#applyMaximizedSize(roleId);
       this.#bringToFront(roleId);
     }
     this.#updateWindowButtons(roleId);
+    this.#saveLayouts();
+  }
+
+  // Stellt eine im Layout als maximiert gespeicherte Kachel wieder her (nach dem Einhängen bzw. nach dem Laden eines
+  // benannten Layouts). Höchstens eine; weitere Markierungen werden zurückgesetzt.
+  #restoreMaximized() {
+    let done = !!this.#maximizedRoleId;
+    for (const [roleId, layout] of Object.entries(this.#layouts)) {
+      if (!layout.maximized) continue;
+      const tile = this.#tiles.get(roleId);
+      if (!tile) continue; // Rolle läuft gerade nicht: Markierung bleibt für später
+      if (done || layout.minimized) {
+        layout.maximized = false;
+        continue;
+      }
+      done = true;
+      layout.maximized = false; // #toggleMaximize setzt es neu
+      this.#toggleMaximize(roleId);
+    }
   }
 
   #applyMaximizedSize(roleId: string) {

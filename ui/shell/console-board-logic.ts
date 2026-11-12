@@ -27,6 +27,8 @@ export interface TileLayout {
   zIndex?: number;
   // Live-Vorschau in der Kachel: nur auf Wunsch (Standard aus, Nutzerwunsch 2026-10-15).
   preview?: boolean;
+  // Kachel ist maximiert (wird mit dem Layout gespeichert und beim Aufruf wiederhergestellt; höchstens eine je Board).
+  maximized?: boolean;
 }
 
 // Benannte Layouts (Nutzerwunsch 2026-10-15): Momentaufnahme der Kachel-Zustände

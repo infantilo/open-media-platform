@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import {
+  applyPreset,
   computeDefaultLayout,
   computeTileGridLayout,
   diffEntries,
@@ -152,4 +153,11 @@ Deno.test("applyPreset: überträgt Zustand, behält zIndex, ignoriert fremde Ro
   });
   if (res.a.x !== 50 || !res.a.minimized || !res.a.preview || res.a.zIndex !== 5) throw new Error("a falsch");
   if (res.b !== cur.b || "gone" in res) throw new Error("b/gone falsch");
+});
+
+Deno.test("applyPreset übernimmt den Maximiert-Zustand, behält aber den aktuellen zIndex", () => {
+  const cur = { r: { x: 0, y: 0, width: 300, height: 300, zIndex: 7 } };
+  const out = applyPreset(cur, { r: { x: 1, y: 1, width: 400, height: 400, maximized: true, zIndex: 1 } });
+  assertEquals(out.r.maximized, true);
+  assertEquals(out.r.zIndex, 7);
 });
