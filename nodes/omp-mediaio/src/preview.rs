@@ -195,7 +195,10 @@ pub fn build_mjpeg_branch(
     let videoscale = gst::ElementFactory::make("videoscale")
         .build()
         .map_err(|e| format!("videoscale: {e}"))?;
+    // `drop-only`: videorate gibt jedes durchgelassene Bild sofort aus, statt es bis zum nächsten festzuhalten — sonst bliebe nach dem
+    // Stillstand des Flusses (z. B. Grafik AUS, Schreiber pausiert) das vorletzte Bild stehen und das letzte (leere) käme nie an.
     let videorate = gst::ElementFactory::make("videorate")
+        .property("drop-only", true)
         .build()
         .map_err(|e| format!("videorate: {e}"))?;
     let caps = gst::ElementFactory::make("capsfilter")

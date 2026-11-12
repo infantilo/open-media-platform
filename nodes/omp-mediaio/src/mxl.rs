@@ -2311,6 +2311,9 @@ fn read_loop(
     max_fps: &Arc<std::sync::atomic::AtomicI32>,
 ) {
     let mut last_slot: i64 = -1;
+    // Letztes vom Vorschau-Takt (`max_fps`) übersprungenes Grain: bleibt der Fluss danach stehen (Schreiber pausiert, z. B.
+    // Grafik AUS), wäre sonst ein älteres Bild das letzte, das der Leser ausgibt — das leere Schlussbild ginge verloren.
+    let mut held: Option<u64> = None;
     let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(grain_rate);
     // `Option`, nicht der nackte `GrainReader` (s. `FLOW_INVALID`-Zweig
@@ -2400,11 +2403,13 @@ fn read_loop(
                 if fps > 0 {
                     let slot = (index as u128 * period_ns as u128 * fps as u128 / 1_000_000_000) as i64;
                     if slot == last_slot {
+                        held = Some(index);
                         index += 1;
                         continue;
                     }
                     last_slot = slot;
                 }
+                held = None;
                 let mut buffer = gst::Buffer::from_slice(grain.payload.to_vec());
                 if let (Some(pts), Some(b)) = (pts, buffer.get_mut()) {
                     b.set_pts(gst::ClockTime::from_nseconds(pts));
@@ -2479,6 +2484,19 @@ fn read_loop(
             }
             Err(mxl::Error::OutOfRangeTooEarly) => {
                 st[5] += 1;
+                // Fluss steht (seit 4 Perioden kein Grain): das zuletzt übersprungene Grain nachliefern. Ohne PTS: `do-timestamp`
+                // des appsrc stempelt es mit der aktuellen Laufzeit.
+                if let Some(h) = held
+                    && last_ok.elapsed() > Duration::from_nanos(period_ns * 4)
+                {
+                    held = None;
+                    if let Some(Ok(g)) = grain_reader.as_ref().map(|r| r.get_grain_non_blocking(h))
+                        && g.index == h
+                    {
+                        last_pts = None;
+                        let _ = app_src.push_buffer(gst::Buffer::from_slice(g.payload.to_vec()));
+                    }
+                }
                 // Noch nicht geschrieben — gleichen Index nach kurzem
                 // Rust-seitigem Backoff erneut versuchen.
                 //

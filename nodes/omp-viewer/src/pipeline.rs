@@ -195,10 +195,15 @@ fn rebuild_mjpeg_branch(active: &mut ActivePipeline, fps: i32) {
         gst::Caps::builder("video/x-raw")
             .field("width", PREVIEW_WIDTH as i32)
             .field("height", PREVIEW_HEIGHT as i32)
-            .field("framerate", gst::Fraction::new(fps, 1))
+            .field("framerate", gst::Fraction::new(fps * MJPEG_RATE_FACTOR, 1))
             .build(),
     );
 }
+
+/// Ziel-Framerate des MJPEG-Zweigs = `previewFps` × Faktor: den Takt gibt der Lese-Thread vor (`MxlVideoInput::max_fps`), das
+/// `videorate` dahinter (drop-only) soll nichts mehr verwerfen — sonst fiel das letzte Bild eines stehenden Flusses (Grafik AUS:
+/// leeres Schlussbild) mit Pech dem zweiten Takt zum Opfer und die Vorschau zeigte weiter das letzte sichtbare Bild.
+const MJPEG_RATE_FACTOR: i32 = 2;
 
 fn build(
     context: &Arc<MxlContext>,
@@ -278,7 +283,7 @@ fn build(
         broadcaster,
         PREVIEW_WIDTH,
         PREVIEW_HEIGHT,
-        preview_fps,
+        preview_fps * MJPEG_RATE_FACTOR,
         PREVIEW_JPEG_QUALITY,
     )?;
     if let Some(sink_name) = sink_element {

@@ -64,3 +64,43 @@ fn first_changed_frame() {
     }
     assert!(first.is_some(), "kein verändertes Bild gesehen");
 }
+
+/// Prüft, was ein Leser nach `hide` zuletzt sieht (Fehlersuche „Grafik AUS, letztes Bild bleibt stehen“): liest `OMP_TEST_SECONDS`
+/// lang alle Grains des Fill-Flows, gibt je Sekunde Anzahl und Unterschied zum ersten Bild aus und am Ende, wie weit das LETZTE
+/// Grain vom ersten (Leer-)Bild abweicht und wie alt es ist. Das Pausieren des Nodes schreibt danach keine Grains mehr.
+#[test]
+#[ignore = "braucht einen laufenden Grafik-Node und MXL-Umgebung"]
+fn last_grain_after_hide() {
+    let flow = std::env::var("OMP_TEST_FLOW").expect("OMP_TEST_FLOW");
+    let seconds: u64 = std::env::var("OMP_TEST_SECONDS").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let ctx = Arc::new(MxlContext::new(&std::env::var("OMP_MXL_DOMAIN").unwrap_or("/dev/shm/omp-mxl".into())).unwrap());
+    let started = std::time::Instant::now();
+    type St = (Option<Vec<u8>>, Vec<(f64, usize)>, usize);
+    let state: Arc<Mutex<St>> = Arc::new(Mutex::new((None, Vec::new(), 0)));
+    let st = state.clone();
+    let _input = MxlDataInput::new_indexed(ctx.clone(), &flow, move |_index, payload| {
+        let mut s = st.lock().unwrap();
+        let t = started.elapsed().as_secs_f64();
+        let Some(base) = s.0.clone() else {
+            s.0 = Some(payload.to_vec());
+            s.2 = payload.len();
+            return;
+        };
+        let d = diff(&base, payload);
+        s.1.push((t, d));
+    })
+    .unwrap();
+    std::thread::sleep(Duration::from_secs(seconds));
+    let s = state.lock().unwrap();
+    let mut sec = 0.0;
+    while sec < seconds as f64 {
+        let w: Vec<_> = s.1.iter().filter(|(t, _)| *t >= sec && *t < sec + 1.0).collect();
+        let max = w.iter().map(|(_, d)| *d).max().unwrap_or(0);
+        println!("T={sec:.0}s grains={} maxdiff={max}", w.len());
+        sec += 1.0;
+    }
+    match s.1.last() {
+        Some((t, d)) => println!("LAST_GRAIN t={t:.2}s diff_vs_first={d} (>20 = Bild sichtbar)"),
+        None => println!("NO_GRAINS"),
+    }
+}
