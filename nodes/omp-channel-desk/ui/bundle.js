@@ -149,6 +149,18 @@ var de = {
   "lang.title": "Sprache",
   "mc.allTimeline": "Gesamt-Timeline",
   "mc.allTimelineTip": "Alle Channels auf einer gemeinsamen Zeitachse ein-/ausblenden",
+  "mc.optWarn": "Warnungen",
+  "mc.optWarnTip": "Warnungen aus dem Sendeplan und fehlgeschlagene Child Events in den Zeitleisten markieren",
+  "mc.optKids": "Child Events",
+  "mc.optKidsTip": "Child Events (Grafiken, Trigger, Audio \u2026) als Spuren unter den Events zeigen",
+  "mc.cnt.live": "Next Live",
+  "mc.cnt.manual": "Next Manual",
+  "mc.cnt.missing": "Next Missing",
+  "mc.cnt.waiting": "wartet",
+  "mc.cnt.after": "nach {label}",
+  "mc.attn.title": "N\xE4chste Handlung",
+  "mc.attn.tip": "N\xE4chste manuelle oder Live-Ereignisse \xFCber alle Channels \u2014 z. B. wann ein externer Regieplatz zu starten ist",
+  "mc.attn.none": "Keine manuelle oder Live-Aktion geplant",
   "mc.title": "Mehrkanal-\xDCbersicht",
   "mc.overview": "\xDCbersicht",
   "mc.empty": "Keine Playout-Channels zugewiesen.",
@@ -3322,6 +3334,18 @@ var en = {
   "lang.title": "Language",
   "mc.allTimeline": "All timelines",
   "mc.allTimelineTip": "Show/hide all channels on one shared time axis",
+  "mc.optWarn": "Warnings",
+  "mc.optWarnTip": "Mark warnings from the schedule and failed child events in the timelines",
+  "mc.optKids": "Child events",
+  "mc.optKidsTip": "Show child events (graphics, triggers, audio \u2026) as lanes under the events",
+  "mc.cnt.live": "Next live",
+  "mc.cnt.manual": "Next manual",
+  "mc.cnt.missing": "Next missing",
+  "mc.cnt.waiting": "waiting",
+  "mc.cnt.after": "after {label}",
+  "mc.attn.title": "Next action",
+  "mc.attn.tip": "Next manual or live events across all channels \u2014 e.g. when an external control room has to be started",
+  "mc.attn.none": "No manual or live action planned",
   "mc.title": "Multi-channel overview",
   "mc.overview": "Overview",
   "mc.empty": "No playout channels assigned.",
@@ -11231,13 +11255,13 @@ function summarize(v, fallbackName) {
     health
   };
 }
-function blockClass(it, currentItemId, cuedItemId) {
+function blockClass(it, currentItemId, cuedItemId, problem = false) {
   if (!it) return "";
   const c = [];
   const ctl = it.eventType === "HOLD" || it.eventType === "JUMP";
   if (!ctl) {
     if (it.available === false) c.push("miss");
-    else if (it.asset && it.readiness === "NOT_READY") c.push("bad");
+    else if (it.asset && it.readiness === "NOT_READY" || problem) c.push("bad");
   }
   if (it.id === currentItemId) c.push("onair");
   else if (it.id === cuedItemId) c.push("cued");
@@ -11246,7 +11270,7 @@ function blockClass(it, currentItemId, cuedItemId) {
   if (ctl) c.push("ctl");
   return c.join(" ");
 }
-function buildBlocks(items, tl, playlistNowMs, currentItemId, pastMs, futureMs, cuedItemId) {
+function buildBlocks(items, tl, playlistNowMs, currentItemId, pastMs, futureMs, cuedItemId, opts = {}) {
   const span = pastMs + futureMs;
   if (span <= 0) return [];
   const from = playlistNowMs - pastMs;
@@ -11266,10 +11290,78 @@ function buildBlocks(items, tl, playlistNowMs, currentItemId, pastMs, futureMs, 
       leftPct: (s - from) / span * 100,
       widthPct: Math.max(0.4, (f - s) / span * 100),
       current: e.itemId === currentItemId,
-      cls: blockClass(byId.get(e.itemId), currentItemId, cuedItemId)
+      cls: blockClass(byId.get(e.itemId), currentItemId, cuedItemId, problemNotes(e.itemId, opts).length > 0),
+      note: problemNotes(e.itemId, opts).join("\n")
     });
   }
   return out;
+}
+function problemNotes(itemId, o) {
+  if (!o.warnings) return [];
+  const w = [
+    ...o.warnings.get(itemId) ?? []
+  ];
+  if (o.childRuntime?.some((c) => c.itemId === itemId && c.state === "Failed")) w.push("Child Event fehlgeschlagen");
+  return w;
+}
+function planWarnings(schedule) {
+  const m = /* @__PURE__ */ new Map();
+  for (const e of schedule?.entries ?? []) if (e.warnings && e.warnings.length) m.set(e.id, e.warnings);
+  return m;
+}
+function childSpan(c, dur, horizon) {
+  const t2 = c.timing || (c.relativeTo === "END" ? "RELATIVE_TO_END" : "RELATIVE_TO_START");
+  if (t2 === "ABSOLUTE") return null;
+  const end = dur > 0 ? dur : horizon;
+  const d = c.delayMs || 0;
+  let a = 0;
+  if (t2 === "RELATIVE_TO_START") a = d;
+  else if (t2 === "RELATIVE_TO_END") a = Math.max(0, end - d);
+  else if (t2 === "BEFORE_START") a = -d;
+  else if (t2 === "AFTER_END") a = end + d;
+  const b = t2 === "FULL_PRIMARY" ? end : c.endAfterEndMs != null && dur > 0 ? dur + c.endAfterEndMs : c.endBeforeEndMs != null && dur > 0 ? Math.max(a + 1, dur - c.endBeforeEndMs) : !c.durationMs ? end : t2 === "AFTER_END" || t2 === "BEFORE_START" ? a + c.durationMs : Math.min(end, a + c.durationMs);
+  return [
+    a,
+    Math.max(b, a + 1)
+  ];
+}
+function childRows(items, tl, runtime, playlistNowMs, pastMs, futureMs) {
+  const span = pastMs + futureMs;
+  if (span <= 0) return [];
+  const from = playlistNowMs - pastMs;
+  const to = playlistNowMs + futureMs;
+  const byId = new Map(items.map((i) => [
+    i.id,
+    i
+  ]));
+  const spans = [];
+  const rows = [];
+  for (const e of tl) {
+    for (const c of byId.get(e.itemId)?.children ?? []) {
+      const sp = childSpan(c, e.durationMs, Math.max(0, to - e.startMs));
+      if (!sp) continue;
+      const a = Math.max(e.startMs + sp[0], from);
+      const b = Math.min(e.startMs + sp[1], to);
+      if (b <= a) continue;
+      let r = spans.findIndex((row) => row.every(([x, y]) => b <= x || a >= y));
+      if (r < 0) {
+        r = spans.length;
+        spans.push([]);
+        rows.push([]);
+      }
+      spans[r].push([
+        a,
+        b
+      ]);
+      rows[r].push({
+        leftPct: (a - from) / span * 100,
+        widthPct: Math.max(0.4, (b - a) / span * 100),
+        label: c.templateId || c.target || c.url || c.type || "",
+        state: runtime.find((x) => x.itemId === e.itemId && x.id === c.id)?.state ?? ""
+      });
+    }
+  }
+  return rows;
 }
 function nowOffsetPct(pastMs, futureMs) {
   const span = pastMs + futureMs;
@@ -11356,10 +11448,89 @@ function axisTicks(nowEpochMs, pastMs, futureMs) {
   }
   return out;
 }
+function upcomingList(items, tl, currentItemId, playheadMs, wait) {
+  const out = [];
+  const byId = new Map(items.map((i) => [
+    i.id,
+    i
+  ]));
+  const w = typeof wait === "string" ? safeParse(wait) : wait;
+  if (w && w.kind) {
+    out.push({
+      kind: "manual",
+      label: byId.get(w.itemId ?? "")?.label ?? "",
+      inMs: 0,
+      waiting: true,
+      atEnd: w.kind === "endHold"
+    });
+  }
+  const cur = currentItemId ? tl.find((e) => e.itemId === currentItemId) : void 0;
+  if (!cur) return out;
+  const now = cur.startMs + playheadMs;
+  for (const e of tl) {
+    const it = byId.get(e.itemId);
+    if (!it) continue;
+    const ctl = it.eventType === "HOLD" || it.eventType === "JUMP";
+    if (e.index > cur.index) {
+      const inMs = e.startMs - now;
+      if (inMs < 0) continue;
+      if (it.senderId) out.push({
+        kind: "live",
+        label: it.label,
+        inMs
+      });
+      if (it.startType === "manual" || it.eventType === "HOLD") out.push({
+        kind: "manual",
+        label: it.label,
+        inMs
+      });
+      if (!ctl && it.available === false) out.push({
+        kind: "missing",
+        label: it.label,
+        inMs
+      });
+    }
+    if (e.index >= cur.index && it.endType === "manual" && !(w && w.kind && w.itemId === it.id)) {
+      const inMs = e.endMs - now;
+      if (inMs >= 0) out.push({
+        kind: "manual",
+        label: it.label,
+        inMs,
+        atEnd: true
+      });
+    }
+  }
+  return out.sort((a, b) => a.inMs - b.inMs);
+}
+function safeParse(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+function nextByKind(list) {
+  const out = {};
+  for (const u of list) out[u.kind] ??= u;
+  return out;
+}
+function attentionList(channels, limit = 4) {
+  return channels.flatMap((c) => c.list.filter((u) => u.kind !== "missing").map((u) => ({
+    ...u,
+    channel: c.name,
+    key: c.key
+  }))).sort((a, b) => a.inMs - b.inMs).slice(0, limit);
+}
+function urgencyOf(u) {
+  if (u.waiting || u.inMs < 15e3) return "now";
+  return u.inMs < 6e4 ? "soon" : "later";
+}
 
 // ui/modules/channel-desk/channel-desk.ts
 var PARAMS = [
   "items",
+  "schedule",
+  "childEvents",
   "currentItemId",
   "cuedItemId",
   "mode",
@@ -11412,14 +11583,32 @@ omp-channel-desk .cd-clock{font-size:1.8em;font-variant-numeric:tabular-nums;fon
 omp-channel-desk .cd-prog{height:6px;border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
 omp-channel-desk .cd-prog>i{display:block;height:100%;background:var(--omp-accent,#4aa3ff)}
 omp-channel-desk .cd-next{min-height:1.3em;color:var(--omp-text-dim);font-size:var(--omp-font-size-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-omp-channel-desk .cd-tl{position:relative;height:26px;border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
+omp-channel-desk .cd-tl{position:relative;border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
+omp-channel-desk .lane{position:relative;height:26px}
+omp-channel-desk .krow{position:relative;height:16px;margin-top:2px}
+omp-channel-desk .kid{position:absolute;top:0;bottom:0;border-radius:2px;background:linear-gradient(#7c52b0,#5a3585);color:#f2e8ff;font-size:10px;line-height:14px;padding:0 4px;box-sizing:border-box;overflow:hidden;white-space:nowrap;border:1px solid #000}
+omp-channel-desk .kid.Fired,omp-channel-desk .kid.Active{background:linear-gradient(#35b862,#1c8a48);color:#02150a}
+omp-channel-desk .kid.Failed{background:linear-gradient(#e05050,#a02020);color:#fff}
+omp-channel-desk .kid.Completed,omp-channel-desk .kid.Cancelled{opacity:.5}
+omp-channel-desk .cd-cnt{display:flex;gap:6px;flex-wrap:wrap}
+omp-channel-desk .cd-cnt span{font-size:var(--omp-font-size-sm);padding:1px 8px;border-radius:10px;border:1px solid var(--omp-border);font-variant-numeric:tabular-nums;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+omp-channel-desk .cd-cnt span.empty{opacity:.45}
+omp-channel-desk .u-soon{color:var(--omp-warning,#f0b429);border-color:var(--omp-warning,#f0b429)!important}
+omp-channel-desk .u-now{color:#fff;background:#b3261e;border-color:#ff5c5c!important;font-weight:600}
+omp-channel-desk .cd-attn{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:8px 10px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);background:var(--omp-surface)}
+omp-channel-desk .cd-attn .ttl{font-weight:600;margin-right:4px}
+omp-channel-desk .cd-attn .it{display:flex;gap:6px;align-items:center;padding:2px 10px;border-radius:12px;border:1px solid var(--omp-border);font-variant-numeric:tabular-nums}
+omp-channel-desk .cd-attn .none{color:var(--omp-text-dim)}
+omp-channel-desk .cd-bar .cd-attn-mini{margin-left:auto;display:flex;gap:6px;align-items:center;white-space:nowrap;padding:2px 10px;border-radius:12px;border:1px solid var(--omp-border);font-size:var(--omp-font-size-sm);font-variant-numeric:tabular-nums;cursor:pointer}
+omp-channel-desk .cd-all .lanewrap{position:relative;flex:1;min-width:0}
+omp-channel-desk .cd-all .lanewrap .lane{border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
+omp-channel-desk .cd-all .lanewrap .nowline{z-index:2}
 omp-channel-desk .cd-tl b{position:absolute;top:3px;bottom:3px;border-radius:2px;background:linear-gradient(#3a6f9a,#24506f);overflow:hidden;font-weight:400;font-size:11px;line-height:20px;padding:0 3px;box-sizing:border-box;white-space:nowrap;color:#fff;border:1px solid #000}
 omp-channel-desk .cd-tl u{position:absolute;top:0;bottom:0;width:2px;background:#ff5c5c;text-decoration:none}
 omp-channel-desk .cd-stats{display:flex;gap:14px;color:var(--omp-text-dim);font-size:var(--omp-font-size-sm);font-variant-numeric:tabular-nums}
 omp-channel-desk .cd-all{display:flex;flex-direction:column;gap:3px;padding:10px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);background:var(--omp-surface)}
 omp-channel-desk .cd-all .row{display:flex;gap:8px;align-items:center}
 omp-channel-desk .cd-all .lbl{width:130px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--omp-font-size-sm);display:flex;gap:6px;align-items:center}
-omp-channel-desk .cd-all .lane{position:relative;flex:1;height:26px;border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
 omp-channel-desk .cd-all .lane b{position:absolute;top:3px;bottom:3px;border-radius:2px;background:linear-gradient(#3a6f9a,#24506f);overflow:hidden;font-weight:400;font-size:11px;line-height:20px;padding:0 3px;box-sizing:border-box;white-space:nowrap;color:#fff;border:1px solid #000;cursor:pointer}
 omp-channel-desk .cd-all .axis{position:relative;height:16px;flex:1;font-size:11px;color:var(--omp-text-dim);font-variant-numeric:tabular-nums}
 omp-channel-desk .cd-all .axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
@@ -11442,6 +11631,11 @@ var ChannelDesk = class extends HTMLElement {
   #openKey = null;
   #winMin = 30;
   #combined = false;
+  #optWarn = true;
+  #optKids = false;
+  #attn;
+  #attnMini;
+  #optBtns = [];
   #allBox;
   #allBtn;
   #timer;
@@ -11468,6 +11662,8 @@ var ChannelDesk = class extends HTMLElement {
       const w = Number(localStorage.getItem("omp-cd-window"));
       if (WINDOWS_MIN.includes(w)) this.#winMin = w;
       this.#combined = localStorage.getItem("omp-cd-combined") === "1";
+      this.#optWarn = localStorage.getItem("omp-cd-warn") !== "0";
+      this.#optKids = localStorage.getItem("omp-cd-kids") === "1";
     } catch {
     }
     this.#bar = document.createElement("div");
@@ -11532,6 +11728,7 @@ var ChannelDesk = class extends HTMLElement {
       tl: [],
       tlKey: "",
       summary: summarize(null, e.nodeLabel),
+      upcoming: [],
       card: document.createElement("div"),
       switchBtn
     };
@@ -11595,11 +11792,38 @@ var ChannelDesk = class extends HTMLElement {
       this.#renderAll();
     });
     this.#allBtn.title = t("mc.allTimelineTip");
+    const opt = (key, label, tip, get, set) => {
+      const b = this.#btn(label, () => {
+        set(!get());
+        try {
+          localStorage.setItem(key, get() ? "1" : "0");
+        } catch {
+        }
+        sync();
+        this.#refreshViews();
+      });
+      b.title = tip;
+      const sync = () => {
+        b.style.borderColor = get() ? "var(--omp-accent,#4aa3ff)" : "";
+      };
+      sync();
+      return b;
+    };
+    this.#optBtns = [
+      opt("omp-cd-warn", t("mc.optWarn"), t("mc.optWarnTip"), () => this.#optWarn, (v) => {
+        this.#optWarn = v;
+      }),
+      opt("omp-cd-kids", t("mc.optKids"), t("mc.optKidsTip"), () => this.#optKids, (v) => {
+        this.#optKids = v;
+      })
+    ];
     this.#allBox = document.createElement("div");
     this.#allBox.className = "cd-all";
-    this.#tools.append(title, grow, win, this.#allBtn, all, none, this.#selInfo, sep, gangLabel, ...this.#gangBtns);
+    this.#tools.append(title, grow, win, this.#allBtn, ...this.#optBtns, all, none, this.#selInfo, sep, gangLabel, ...this.#gangBtns);
     this.#grid = document.createElement("div");
     this.#grid.className = "cd-grid";
+    this.#attn = document.createElement("div");
+    this.#attn.className = "cd-attn";
   }
   #btn(text, on) {
     const b = document.createElement("button");
@@ -11653,11 +11877,137 @@ var ChannelDesk = class extends HTMLElement {
     const stats = document.createElement("div");
     stats.className = "cd-stats";
     stats.dataset.role = "stats";
-    card.append(head, now, prog, next, tl, stats);
+    const cnt = document.createElement("div");
+    cnt.className = "cd-cnt";
+    cnt.dataset.role = "cnt";
+    card.append(head, now, prog, cnt, next, tl, stats);
     this.#updateCard(ch);
   }
   #q(el, role) {
     return el.querySelector(`[data-role="${role}"]`);
+  }
+  /** Spur eines Channels (Balken) plus optionale Child-Event-Zeilen — für Kachel und Gesamt-Timeline. */
+  #lanes(ch, now, past, future) {
+    const v = ch.values;
+    const items = v.items ?? [];
+    const lane = document.createElement("div");
+    lane.className = "lane";
+    const opts = this.#optWarn ? {
+      warnings: planWarnings(v.schedule),
+      childRuntime: v.childEvents ?? []
+    } : {};
+    for (const b of buildBlocks(items, ch.tl, now, v.currentItemId, past, future, v.cuedItemId, opts)) {
+      const el = document.createElement("b");
+      el.style.left = `${b.leftPct}%`;
+      el.style.width = `${b.widthPct}%`;
+      el.textContent = b.cls.includes("bad") && b.note ? `\u26A0 ${b.label}` : b.label;
+      el.title = b.note ? `\u26A0 ${b.note}
+${b.label}` : b.label;
+      el.className = b.cls;
+      el.addEventListener("dblclick", () => this.#open(ch.key));
+      lane.append(el);
+    }
+    const kids = [];
+    if (this.#optKids) {
+      for (const row of childRows(items, ch.tl, v.childEvents ?? [], now, past, future)) {
+        const r = document.createElement("div");
+        r.className = "krow";
+        for (const k of row) {
+          const el = document.createElement("div");
+          el.className = `kid ${k.state}`;
+          el.style.left = `${k.leftPct}%`;
+          el.style.width = `${k.widthPct}%`;
+          el.textContent = k.label;
+          el.title = k.label;
+          r.append(el);
+        }
+        kids.push(r);
+      }
+    }
+    return {
+      lane,
+      kids
+    };
+  }
+  #cntChip(kind, u) {
+    const icon = {
+      live: "\u25CF",
+      manual: "\u270B",
+      missing: "\u26A0"
+    }[kind];
+    const el = document.createElement("span");
+    if (!u) {
+      el.className = "empty";
+      el.textContent = t(`mc.cnt.${kind}`) + ": \u2014";
+      return el;
+    }
+    const when = u.waiting ? t("mc.cnt.waiting") : fmtRemain(u.inMs);
+    el.className = `u-${urgencyOf(u)}`;
+    el.textContent = [
+      icon,
+      [
+        u.atEnd && u.label ? t("mc.cnt.after", {
+          label: u.label
+        }) : u.label,
+        when
+      ].filter(Boolean).join(" \xB7 ")
+    ].join(" ");
+    el.title = t(`mc.cnt.${kind}`);
+    return el;
+  }
+  #refreshViews() {
+    for (const c of this.#channels) this.#updateCard(c);
+    this.#updateCombined();
+  }
+  /** Kanalübergreifend: wann muss der Operator als Nächstes etwas tun (manuell/Live, z. B. externen Regieplatz starten). */
+  #updateAttention() {
+    const list = attentionList(this.#channels.map((c) => ({
+      key: c.key,
+      name: c.summary.name,
+      list: c.upcoming
+    })), 4);
+    const mk = (u) => {
+      const el = document.createElement("span");
+      el.className = `it u-${urgencyOf(u)}`;
+      const icon = u.kind === "live" ? "\u25CF" : "\u270B";
+      el.textContent = [
+        icon,
+        [
+          u.channel,
+          u.atEnd && u.label ? t("mc.cnt.after", {
+            label: u.label
+          }) : u.label,
+          u.waiting ? t("mc.cnt.waiting") : fmtRemain(u.inMs)
+        ].filter(Boolean).join(" \xB7 ")
+      ].join(" ");
+      el.title = t(u.kind === "live" ? "mc.cnt.live" : "mc.cnt.manual");
+      el.style.cursor = "pointer";
+      el.addEventListener("click", () => this.#open(u.key));
+      return el;
+    };
+    this.#attn.replaceChildren(Object.assign(document.createElement("span"), {
+      className: "ttl",
+      textContent: t("mc.attn.title"),
+      title: t("mc.attn.tip")
+    }), ...list.length ? list.map(mk) : [
+      Object.assign(document.createElement("span"), {
+        className: "none",
+        textContent: t("mc.attn.none")
+      })
+    ]);
+    if (!this.#attnMini) {
+      this.#attnMini = document.createElement("div");
+      this.#attnMini.className = "cd-attn-mini";
+    }
+    const first = list[0];
+    this.#attnMini.className = `cd-attn-mini${first ? ` u-${urgencyOf(first)}` : ""}`;
+    this.#attnMini.style.display = first ? "" : "none";
+    this.#attnMini.replaceChildren(...first ? [
+      mk(first)
+    ] : []);
+    this.#attnMini.firstElementChild?.setAttribute("class", "");
+    this.#attnMini.title = t("mc.attn.title");
+    if (!this.#attnMini.isConnected) this.#bar.append(this.#attnMini);
   }
   #updateCard(ch) {
     const s = ch.summary;
@@ -11682,21 +12032,15 @@ var ChannelDesk = class extends HTMLElement {
     if (v && now !== null) {
       const past = Math.round(this.#winMin * 6e4 * TIMELINE_PAST_SHARE);
       const future = this.#winMin * 6e4 - past;
-      const blocks = buildBlocks(v.items ?? [], ch.tl, now, v.currentItemId, past, future, v.cuedItemId);
-      tlEl.replaceChildren(...blocks.map((b) => {
-        const el = document.createElement("b");
-        el.style.left = `${b.leftPct}%`;
-        el.style.width = `${b.widthPct}%`;
-        el.textContent = b.label;
-        el.title = b.label;
-        el.className = b.cls;
-        return el;
-      }), Object.assign(document.createElement("u"), {
+      const { lane, kids } = this.#lanes(ch, now, past, future);
+      tlEl.replaceChildren(lane, ...kids, Object.assign(document.createElement("u"), {
         style: `left:${nowOffsetPct(past, future)}%`
       }));
     } else {
       tlEl.replaceChildren();
     }
+    const nb = nextByKind(ch.upcoming);
+    this.#q(c, "cnt").replaceChildren(this.#cntChip("live", nb.live), this.#cntChip("manual", nb.manual), this.#cntChip("missing", nb.missing));
     const stats = this.#q(c, "stats");
     const ends = s.remainingTotalMs > 0 ? new Date(Date.now() + s.remainingTotalMs).toLocaleTimeString([], {
       hour: "2-digit",
@@ -11749,31 +12093,26 @@ var ChannelDesk = class extends HTMLElement {
     const axisRow = mk("row");
     axisRow.append(mk("lbl"), axis);
     const rows = this.#channels.map((c) => {
-      const lane = mk("lane");
+      const wrap2 = mk("lanewrap");
       const v = c.values;
       const now = v ? playlistNow(c.tl, v.currentItemId, v.playheadPositionMs ?? 0, v.cuedItemId) : null;
-      lane.append(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
       if (v && now !== null) {
-        for (const b of buildBlocks(v.items ?? [], c.tl, now, v.currentItemId, past, future, v.cuedItemId)) {
-          const el = Object.assign(document.createElement("b"), {
-            textContent: b.label,
-            title: b.label,
-            className: b.cls
-          });
-          el.style.left = `${b.leftPct}%`;
-          el.style.width = `${b.widthPct}%`;
-          el.addEventListener("dblclick", () => this.#open(c.key));
-          lane.append(el);
-        }
+        const { lane, kids } = this.#lanes(c, now, past, future);
+        lane.prepend(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
+        wrap2.append(lane, ...kids);
+      } else {
+        const lane = mk("lane");
+        lane.append(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
+        wrap2.append(lane);
       }
-      lane.append(mk("nowline", `left:${nowPct}%`));
+      wrap2.append(mk("nowline", `left:${nowPct}%`));
       const lbl = mk("lbl");
       lbl.append(mk(`cd-dot ${c.summary.health}`), Object.assign(document.createElement("span"), {
         textContent: c.summary.name
       }));
       lbl.title = c.summary.name;
       const row = mk("row");
-      row.append(lbl, lane);
+      row.append(lbl, wrap2);
       return row;
     });
     this.#allBox.replaceChildren(axisRow, ...rows);
@@ -11881,6 +12220,7 @@ var ChannelDesk = class extends HTMLElement {
     this.#overviewTab.title = t("mc.keys");
     this.#overviewTab.addEventListener("click", () => this.#open(null));
     this.#bar.replaceChildren(this.#overviewTab, ...this.#channels.map((c) => c.switchBtn));
+    this.#updateAttention();
     this.#bar.style.display = this.#channels.length > 0 ? "flex" : "none";
     this.#overviewTab.classList.toggle("active", this.#openKey === null);
     for (const c of this.#channels) c.switchBtn.classList.toggle("active", c.key === this.#openKey);
@@ -11899,7 +12239,7 @@ var ChannelDesk = class extends HTMLElement {
         }));
       } else {
         this.#grid.replaceChildren(...this.#channels.map((c) => c.card));
-        this.#main.replaceChildren(this.#tools, ...this.#combined ? [
+        this.#main.replaceChildren(this.#tools, this.#attn, ...this.#combined ? [
           this.#allBox
         ] : [], this.#grid);
         this.#allBtn.classList.toggle("active", this.#combined);
@@ -11938,8 +12278,12 @@ var ChannelDesk = class extends HTMLElement {
     } finally {
       this.#polling = false;
     }
-    for (const c of this.#channels) this.#updateCard(c);
-    this.#updateCombined();
+    for (const c of this.#channels) {
+      const v = c.values;
+      c.upcoming = v?.connected === false ? [] : upcomingList(v?.items ?? [], c.tl, v?.currentItemId, v?.playheadPositionMs ?? 0, v?.operatorWait);
+    }
+    this.#updateAttention();
+    this.#refreshViews();
   }
   async #pollOne(c) {
     try {

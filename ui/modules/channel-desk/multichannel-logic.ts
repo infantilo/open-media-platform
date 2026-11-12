@@ -8,10 +8,32 @@ export interface ChannelItem {
   durationMs: number;
   eventType?: string;
   startType?: string;
+  endType?: string;
   senderId?: string;
   available?: boolean;
   asset?: unknown;
   readiness?: string;
+  children?: ChildEvent[];
+}
+
+export interface ChildEvent {
+  id: string;
+  type?: string;
+  timing?: string;
+  relativeTo?: string;
+  delayMs?: number;
+  durationMs?: number;
+  endAfterEndMs?: number | null;
+  endBeforeEndMs?: number | null;
+  templateId?: string;
+  target?: string;
+  url?: string;
+}
+
+export interface ChildRuntime {
+  itemId: string;
+  id: string;
+  state?: string;
 }
 
 export interface ChannelValues {
@@ -23,7 +45,9 @@ export interface ChannelValues {
   playheadPositionMs?: number;
   currentDurationMs?: number;
   channelName?: string;
-  operatorWait?: { kind?: string; remainingMs?: number | null } | string | null;
+  schedule?: { entries?: { id: string; warnings?: string[] }[] } | null;
+  childEvents?: ChildRuntime[];
+  operatorWait?: { kind?: string; itemId?: string; remainingMs?: number | null } | string | null;
 }
 
 export interface TimelineEntry {
@@ -101,16 +125,18 @@ export interface TimelineBlock {
   current: boolean;
   /** Farbklassen wie in der Playlist-Zeitleiste: onair, cued, live, ctl, fix, miss, bad (leer = geplant). */
   cls: string;
+  /** Hinweistext (Warnungen); leer, wenn es keinen gibt. */
+  note: string;
 }
 
 /** Farbklassen eines Events — dieselben Regeln wie die Zeitleiste der Playlist selbst. */
-export function blockClass(it: ChannelItem | undefined, currentItemId?: string, cuedItemId?: string): string {
+export function blockClass(it: ChannelItem | undefined, currentItemId?: string, cuedItemId?: string, problem = false): string {
   if (!it) return "";
   const c: string[] = [];
   const ctl = it.eventType === "HOLD" || it.eventType === "JUMP";
   if (!ctl) {
     if (it.available === false) c.push("miss");
-    else if (it.asset && it.readiness === "NOT_READY") c.push("bad");
+    else if ((it.asset && it.readiness === "NOT_READY") || problem) c.push("bad");
   }
   if (it.id === currentItemId) c.push("onair");
   else if (it.id === cuedItemId) c.push("cued");
@@ -133,6 +159,7 @@ export function buildBlocks(
   pastMs: number,
   futureMs: number,
   cuedItemId?: string,
+  opts: BlockOptions = {},
 ): TimelineBlock[] {
   const span = pastMs + futureMs;
   if (span <= 0) return [];
@@ -150,10 +177,101 @@ export function buildBlocks(
       leftPct: ((s - from) / span) * 100,
       widthPct: Math.max(0.4, ((f - s) / span) * 100),
       current: e.itemId === currentItemId,
-      cls: blockClass(byId.get(e.itemId), currentItemId, cuedItemId),
+      cls: blockClass(byId.get(e.itemId), currentItemId, cuedItemId, problemNotes(e.itemId, opts).length > 0),
+      note: problemNotes(e.itemId, opts).join("\n"),
     });
   }
   return out;
+}
+
+export interface BlockOptions {
+  /** Warnungen aus dem Sendeplan je Event-ID (nur gesetzt, wenn die Option „Warnungen“ an ist). */
+  warnings?: Map<string, string[]>;
+  /** Laufzeitstand der Child Events (fehlgeschlagene Children zählen als Warnung, wenn `warnings` gesetzt ist). */
+  childRuntime?: ChildRuntime[];
+}
+
+function problemNotes(itemId: string, o: BlockOptions): string[] {
+  if (!o.warnings) return [];
+  const w = [...(o.warnings.get(itemId) ?? [])];
+  if (o.childRuntime?.some((c) => c.itemId === itemId && c.state === "Failed")) w.push("Child Event fehlgeschlagen");
+  return w;
+}
+
+/** Warnungen je Event-ID aus dem Sendeplan (`schedule.entries[].warnings`). */
+export function planWarnings(schedule: ChannelValues["schedule"]): Map<string, string[]> {
+  const m = new Map<string, string[]>();
+  for (const e of schedule?.entries ?? []) if (e.warnings && e.warnings.length) m.set(e.id, e.warnings);
+  return m;
+}
+
+export interface ChildBar {
+  leftPct: number;
+  widthPct: number;
+  label: string;
+  state: string;
+}
+
+/** Zeitfenster eines Child Events relativ zum Beginn seines Events (ms) oder null (ABSOLUTE: nicht auf dieser Achse) — wie die Playlist-Zeitleiste. */
+export function childSpan(c: ChildEvent, dur: number, horizon: number): [number, number] | null {
+  const t = c.timing || (c.relativeTo === "END" ? "RELATIVE_TO_END" : "RELATIVE_TO_START");
+  if (t === "ABSOLUTE") return null;
+  const end = dur > 0 ? dur : horizon;
+  const d = c.delayMs || 0;
+  let a = 0;
+  if (t === "RELATIVE_TO_START") a = d;
+  else if (t === "RELATIVE_TO_END") a = Math.max(0, end - d);
+  else if (t === "BEFORE_START") a = -d;
+  else if (t === "AFTER_END") a = end + d;
+  const b = t === "FULL_PRIMARY"
+    ? end
+    : c.endAfterEndMs != null && dur > 0
+    ? dur + c.endAfterEndMs
+    : c.endBeforeEndMs != null && dur > 0
+    ? Math.max(a + 1, dur - c.endBeforeEndMs)
+    : !c.durationMs
+    ? end
+    : t === "AFTER_END" || t === "BEFORE_START"
+    ? a + c.durationMs
+    : Math.min(end, a + c.durationMs);
+  return [a, Math.max(b, a + 1)];
+}
+
+/** Child-Event-Balken in Zeilen, so verteilt, dass sich überlappende nicht verdecken (wie in der Playlist-Zeitleiste). */
+export function childRows(
+  items: ChannelItem[],
+  tl: TimelineEntry[],
+  runtime: ChildRuntime[],
+  playlistNowMs: number,
+  pastMs: number,
+  futureMs: number,
+): ChildBar[][] {
+  const span = pastMs + futureMs;
+  if (span <= 0) return [];
+  const from = playlistNowMs - pastMs;
+  const to = playlistNowMs + futureMs;
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const spans: [number, number][][] = [];
+  const rows: ChildBar[][] = [];
+  for (const e of tl) {
+    for (const c of byId.get(e.itemId)?.children ?? []) {
+      const sp = childSpan(c, e.durationMs, Math.max(0, to - e.startMs));
+      if (!sp) continue;
+      const a = Math.max(e.startMs + sp[0], from);
+      const b = Math.min(e.startMs + sp[1], to);
+      if (b <= a) continue;
+      let r = spans.findIndex((row) => row.every(([x, y]) => b <= x || a >= y));
+      if (r < 0) { r = spans.length; spans.push([]); rows.push([]); }
+      spans[r].push([a, b]);
+      rows[r].push({
+        leftPct: ((a - from) / span) * 100,
+        widthPct: Math.max(0.4, ((b - a) / span) * 100),
+        label: c.templateId || c.target || c.url || c.type || "",
+        state: runtime.find((x) => x.itemId === e.itemId && x.id === c.id)?.state ?? "",
+      });
+    }
+  }
+  return rows;
 }
 
 export function nowOffsetPct(pastMs: number, futureMs: number): number {
@@ -242,4 +360,91 @@ export function axisTicks(nowEpochMs: number, pastMs: number, futureMs: number):
     out.push({ leftPct: ((t - from) / span) * 100, epochMs: t });
   }
   return out;
+}
+
+// ---- Zähler: nächstes Live-/manuelles/fehlendes Event ----------------------------------------------------------------
+
+export type UpcomingKind = "live" | "manual" | "missing";
+
+export interface Upcoming {
+  kind: UpcomingKind;
+  label: string;
+  /** Abstand bis zum Eintritt in ms (0 = jetzt/wartet bereits). */
+  inMs: number;
+  /** Manuell am Ende eines Events (Manual Hold), nicht an dessen Beginn. */
+  atEnd?: boolean;
+  /** Der Operator wird gerade erwartet (HOLD läuft, Manual Hold erreicht, gecued). */
+  waiting?: boolean;
+}
+
+/**
+ * Alle kommenden Ereignisse, die den Operator oder die Regie betreffen, nach Abstand sortiert — dieselben Regeln wie die
+ * Zähler der Playlist: Live = Event mit Quelle, manuell = manueller Start oder HOLD (zusätzlich Manual Hold am Ende eines
+ * Events), fehlend = Quelle nicht verfügbar. Bezug ist die Sendeposition; ohne laufendes Event gibt es keine Abstände.
+ */
+export function upcomingList(
+  items: ChannelItem[],
+  tl: TimelineEntry[],
+  currentItemId: string | undefined,
+  playheadMs: number,
+  wait?: ChannelValues["operatorWait"],
+): Upcoming[] {
+  const out: Upcoming[] = [];
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const w = typeof wait === "string" ? safeParse(wait) : wait;
+  if (w && w.kind) {
+    out.push({ kind: "manual", label: byId.get(w.itemId ?? "")?.label ?? "", inMs: 0, waiting: true, atEnd: w.kind === "endHold" });
+  }
+  const cur = currentItemId ? tl.find((e) => e.itemId === currentItemId) : undefined;
+  if (!cur) return out;
+  const now = cur.startMs + playheadMs;
+  for (const e of tl) {
+    const it = byId.get(e.itemId);
+    if (!it) continue;
+    const ctl = it.eventType === "HOLD" || it.eventType === "JUMP";
+    if (e.index > cur.index) {
+      const inMs = e.startMs - now;
+      if (inMs < 0) continue;
+      if (it.senderId) out.push({ kind: "live", label: it.label, inMs });
+      if (it.startType === "manual" || it.eventType === "HOLD") out.push({ kind: "manual", label: it.label, inMs });
+      if (!ctl && it.available === false) out.push({ kind: "missing", label: it.label, inMs });
+    }
+    if (e.index >= cur.index && it.endType === "manual" && !(w && w.kind && w.itemId === it.id)) {
+      const inMs = e.endMs - now;
+      if (inMs >= 0) out.push({ kind: "manual", label: it.label, inMs, atEnd: true });
+    }
+  }
+  return out.sort((a, b) => a.inMs - b.inMs);
+}
+
+function safeParse(s: string): { kind?: string; itemId?: string } | null {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+/** Je Art das nächste Ereignis (für die drei Zähler einer Kachel). */
+export function nextByKind(list: Upcoming[]): Partial<Record<UpcomingKind, Upcoming>> {
+  const out: Partial<Record<UpcomingKind, Upcoming>> = {};
+  for (const u of list) out[u.kind] ??= u;
+  return out;
+}
+
+export interface AttentionItem extends Upcoming {
+  channel: string;
+  key: string;
+}
+
+/** Kanalübergreifend: die nächsten manuellen und Live-Ereignisse (wann muss der Operator etwas tun, z. B. einen externen Regieplatz starten). */
+export function attentionList(channels: { key: string; name: string; list: Upcoming[] }[], limit = 4): AttentionItem[] {
+  return channels
+    .flatMap((c) => c.list.filter((u) => u.kind !== "missing").map((u) => ({ ...u, channel: c.name, key: c.key })))
+    .sort((a, b) => a.inMs - b.inMs)
+    .slice(0, limit);
+}
+
+export type Urgency = "now" | "soon" | "later";
+
+/** Farbstufe eines Abstands: rot ab 15 s (oder wartend), gelb ab 60 s. */
+export function urgencyOf(u: { inMs: number; waiting?: boolean }): Urgency {
+  if (u.waiting || u.inMs < 15_000) return "now";
+  return u.inMs < 60_000 ? "soon" : "later";
 }

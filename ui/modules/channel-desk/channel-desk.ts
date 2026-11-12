@@ -14,13 +14,14 @@ import { mountUIBundleEl } from "../../shell/ui-bundle.ts";
 import { deckSession } from "../../shell/streamdeck/session.ts";
 import type { ConsoleEntry } from "../../shell/console-view.ts";
 import {
-  axisTicks, buildBlocks, TIMELINE_PAST_SHARE, fmtRemain, gangCall, nodeIdFromBundleUrl, nowOffsetPct, playlistNow, pruneSelection, stepChannel,
+  attentionList, axisTicks, buildBlocks, childRows, nextByKind, planWarnings, TIMELINE_PAST_SHARE, upcomingList, urgencyOf,
+  type AttentionItem, type Upcoming, fmtRemain, gangCall, nodeIdFromBundleUrl, nowOffsetPct, playlistNow, pruneSelection, stepChannel,
   summarize, summarizeGang, waitKindOf,
   type ChannelSummary, type ChannelValues, type GangAction, type GangResult, type TimelineEntry,
 } from "./multichannel-logic.ts";
 
 const PARAMS = [
-  "items", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "channelName", "operatorWait",
+  "items", "schedule", "childEvents", "currentItemId", "cuedItemId", "mode", "connected", "playheadPositionMs", "currentDurationMs", "channelName", "operatorWait",
 ];
 const ACTIONS: GangAction[] = ["next", "take", "nextLive", "hold", "auto"];
 const WINDOWS_MIN = [10, 30, 60];
@@ -35,6 +36,7 @@ interface Channel {
   tl: TimelineEntry[];
   tlKey: string;
   summary: ChannelSummary;
+  upcoming: Upcoming[];
   card: HTMLElement;
   switchBtn: HTMLButtonElement;
 }
@@ -68,14 +70,32 @@ omp-channel-desk .cd-clock{font-size:1.8em;font-variant-numeric:tabular-nums;fon
 omp-channel-desk .cd-prog{height:6px;border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
 omp-channel-desk .cd-prog>i{display:block;height:100%;background:var(--omp-accent,#4aa3ff)}
 omp-channel-desk .cd-next{min-height:1.3em;color:var(--omp-text-dim);font-size:var(--omp-font-size-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-omp-channel-desk .cd-tl{position:relative;height:26px;border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
+omp-channel-desk .cd-tl{position:relative;border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
+omp-channel-desk .lane{position:relative;height:26px}
+omp-channel-desk .krow{position:relative;height:16px;margin-top:2px}
+omp-channel-desk .kid{position:absolute;top:0;bottom:0;border-radius:2px;background:linear-gradient(#7c52b0,#5a3585);color:#f2e8ff;font-size:10px;line-height:14px;padding:0 4px;box-sizing:border-box;overflow:hidden;white-space:nowrap;border:1px solid #000}
+omp-channel-desk .kid.Fired,omp-channel-desk .kid.Active{background:linear-gradient(#35b862,#1c8a48);color:#02150a}
+omp-channel-desk .kid.Failed{background:linear-gradient(#e05050,#a02020);color:#fff}
+omp-channel-desk .kid.Completed,omp-channel-desk .kid.Cancelled{opacity:.5}
+omp-channel-desk .cd-cnt{display:flex;gap:6px;flex-wrap:wrap}
+omp-channel-desk .cd-cnt span{font-size:var(--omp-font-size-sm);padding:1px 8px;border-radius:10px;border:1px solid var(--omp-border);font-variant-numeric:tabular-nums;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+omp-channel-desk .cd-cnt span.empty{opacity:.45}
+omp-channel-desk .u-soon{color:var(--omp-warning,#f0b429);border-color:var(--omp-warning,#f0b429)!important}
+omp-channel-desk .u-now{color:#fff;background:#b3261e;border-color:#ff5c5c!important;font-weight:600}
+omp-channel-desk .cd-attn{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:8px 10px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);background:var(--omp-surface)}
+omp-channel-desk .cd-attn .ttl{font-weight:600;margin-right:4px}
+omp-channel-desk .cd-attn .it{display:flex;gap:6px;align-items:center;padding:2px 10px;border-radius:12px;border:1px solid var(--omp-border);font-variant-numeric:tabular-nums}
+omp-channel-desk .cd-attn .none{color:var(--omp-text-dim)}
+omp-channel-desk .cd-bar .cd-attn-mini{margin-left:auto;display:flex;gap:6px;align-items:center;white-space:nowrap;padding:2px 10px;border-radius:12px;border:1px solid var(--omp-border);font-size:var(--omp-font-size-sm);font-variant-numeric:tabular-nums;cursor:pointer}
+omp-channel-desk .cd-all .lanewrap{position:relative;flex:1;min-width:0}
+omp-channel-desk .cd-all .lanewrap .lane{border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
+omp-channel-desk .cd-all .lanewrap .nowline{z-index:2}
 omp-channel-desk .cd-tl b{position:absolute;top:3px;bottom:3px;border-radius:2px;background:linear-gradient(#3a6f9a,#24506f);overflow:hidden;font-weight:400;font-size:11px;line-height:20px;padding:0 3px;box-sizing:border-box;white-space:nowrap;color:#fff;border:1px solid #000}
 omp-channel-desk .cd-tl u{position:absolute;top:0;bottom:0;width:2px;background:#ff5c5c;text-decoration:none}
 omp-channel-desk .cd-stats{display:flex;gap:14px;color:var(--omp-text-dim);font-size:var(--omp-font-size-sm);font-variant-numeric:tabular-nums}
 omp-channel-desk .cd-all{display:flex;flex-direction:column;gap:3px;padding:10px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);background:var(--omp-surface)}
 omp-channel-desk .cd-all .row{display:flex;gap:8px;align-items:center}
 omp-channel-desk .cd-all .lbl{width:130px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--omp-font-size-sm);display:flex;gap:6px;align-items:center}
-omp-channel-desk .cd-all .lane{position:relative;flex:1;height:26px;border-radius:3px;background:var(--omp-surface-raised);overflow:hidden}
 omp-channel-desk .cd-all .lane b{position:absolute;top:3px;bottom:3px;border-radius:2px;background:linear-gradient(#3a6f9a,#24506f);overflow:hidden;font-weight:400;font-size:11px;line-height:20px;padding:0 3px;box-sizing:border-box;white-space:nowrap;color:#fff;border:1px solid #000;cursor:pointer}
 omp-channel-desk .cd-all .axis{position:relative;height:16px;flex:1;font-size:11px;color:var(--omp-text-dim);font-variant-numeric:tabular-nums}
 omp-channel-desk .cd-all .axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
@@ -99,6 +119,11 @@ export class ChannelDesk extends HTMLElement {
   #openKey: string | null = null;
   #winMin = 30;
   #combined = false;
+  #optWarn = true;
+  #optKids = false;
+  #attn!: HTMLDivElement;
+  #attnMini!: HTMLDivElement;
+  #optBtns: HTMLButtonElement[] = [];
   #allBox!: HTMLDivElement;
   #allBtn!: HTMLButtonElement;
   #timer?: number;
@@ -126,6 +151,8 @@ export class ChannelDesk extends HTMLElement {
       const w = Number(localStorage.getItem("omp-cd-window"));
       if (WINDOWS_MIN.includes(w)) this.#winMin = w;
       this.#combined = localStorage.getItem("omp-cd-combined") === "1";
+      this.#optWarn = localStorage.getItem("omp-cd-warn") !== "0";
+      this.#optKids = localStorage.getItem("omp-cd-kids") === "1";
     } catch { /* ohne Speicher: Standard */ }
     this.#bar = document.createElement("div");
     this.#bar.className = "cd-bar";
@@ -180,7 +207,7 @@ export class ChannelDesk extends HTMLElement {
     switchBtn.addEventListener("click", () => this.#open(e.nodeRoleId));
     const ch: Channel = {
       key: e.nodeRoleId, entry: e, nodeId: nodeIdFromBundleUrl(e.uiBundleUrl), values: null, tl: [], tlKey: "",
-      summary: summarize(null, e.nodeLabel), card: document.createElement("div"), switchBtn,
+      summary: summarize(null, e.nodeLabel), upcoming: [], card: document.createElement("div"), switchBtn,
     };
     this.#buildCard(ch);
     return ch;
@@ -230,11 +257,29 @@ export class ChannelDesk extends HTMLElement {
       this.#renderAll();
     });
     this.#allBtn.title = t("mc.allTimelineTip");
+    const opt = (key: string, label: string, tip: string, get: () => boolean, set: (v: boolean) => void) => {
+      const b = this.#btn(label, () => {
+        set(!get());
+        try { localStorage.setItem(key, get() ? "1" : "0"); } catch { /* egal */ }
+        sync();
+        this.#refreshViews();
+      });
+      b.title = tip;
+      const sync = () => { b.style.borderColor = get() ? "var(--omp-accent,#4aa3ff)" : ""; };
+      sync();
+      return b;
+    };
+    this.#optBtns = [
+      opt("omp-cd-warn", t("mc.optWarn"), t("mc.optWarnTip"), () => this.#optWarn, (v) => { this.#optWarn = v; }),
+      opt("omp-cd-kids", t("mc.optKids"), t("mc.optKidsTip"), () => this.#optKids, (v) => { this.#optKids = v; }),
+    ];
     this.#allBox = document.createElement("div");
     this.#allBox.className = "cd-all";
-    this.#tools.append(title, grow, win, this.#allBtn, all, none, this.#selInfo, sep, gangLabel, ...this.#gangBtns);
+    this.#tools.append(title, grow, win, this.#allBtn, ...this.#optBtns, all, none, this.#selInfo, sep, gangLabel, ...this.#gangBtns);
     this.#grid = document.createElement("div");
     this.#grid.className = "cd-grid";
+    this.#attn = document.createElement("div");
+    this.#attn.className = "cd-attn";
   }
 
   #btn(text: string, on: () => void): HTMLButtonElement {
@@ -289,12 +334,103 @@ export class ChannelDesk extends HTMLElement {
     const stats = document.createElement("div");
     stats.className = "cd-stats";
     stats.dataset.role = "stats";
-    card.append(head, now, prog, next, tl, stats);
+    const cnt = document.createElement("div");
+    cnt.className = "cd-cnt";
+    cnt.dataset.role = "cnt";
+    card.append(head, now, prog, cnt, next, tl, stats);
     this.#updateCard(ch);
   }
 
   #q(el: HTMLElement, role: string): HTMLElement {
     return el.querySelector(`[data-role="${role}"]`) as HTMLElement;
+  }
+
+  /** Spur eines Channels (Balken) plus optionale Child-Event-Zeilen — für Kachel und Gesamt-Timeline. */
+  #lanes(ch: Channel, now: number, past: number, future: number): { lane: HTMLElement; kids: HTMLElement[] } {
+    const v = ch.values!;
+    const items = v.items ?? [];
+    const lane = document.createElement("div");
+    lane.className = "lane";
+    const opts = this.#optWarn ? { warnings: planWarnings(v.schedule), childRuntime: v.childEvents ?? [] } : {};
+    for (const b of buildBlocks(items, ch.tl, now, v.currentItemId, past, future, v.cuedItemId, opts)) {
+      const el = document.createElement("b");
+      el.style.left = `${b.leftPct}%`;
+      el.style.width = `${b.widthPct}%`;
+      el.textContent = b.cls.includes("bad") && b.note ? `⚠ ${b.label}` : b.label;
+      el.title = b.note ? `⚠ ${b.note}\n${b.label}` : b.label;
+      el.className = b.cls;
+      el.addEventListener("dblclick", () => this.#open(ch.key));
+      lane.append(el);
+    }
+    const kids: HTMLElement[] = [];
+    if (this.#optKids) {
+      for (const row of childRows(items, ch.tl, v.childEvents ?? [], now, past, future)) {
+        const r = document.createElement("div");
+        r.className = "krow";
+        for (const k of row) {
+          const el = document.createElement("div");
+          el.className = `kid ${k.state}`;
+          el.style.left = `${k.leftPct}%`;
+          el.style.width = `${k.widthPct}%`;
+          el.textContent = k.label;
+          el.title = k.label;
+          r.append(el);
+        }
+        kids.push(r);
+      }
+    }
+    return { lane, kids };
+  }
+
+  #cntChip(kind: "live" | "manual" | "missing", u?: Upcoming): HTMLElement {
+    const icon = { live: "●", manual: "✋", missing: "⚠" }[kind];
+    const el = document.createElement("span");
+    if (!u) {
+      el.className = "empty";
+      el.textContent = t(`mc.cnt.${kind}` as I18nKey) + ": —";
+      return el;
+    }
+    const when = u.waiting ? t("mc.cnt.waiting") : fmtRemain(u.inMs);
+    el.className = `u-${urgencyOf(u)}`;
+    el.textContent = [icon, [u.atEnd && u.label ? t("mc.cnt.after", { label: u.label }) : u.label, when].filter(Boolean).join(" · ")].join(" ");
+    el.title = t(`mc.cnt.${kind}` as I18nKey);
+    return el;
+  }
+
+  #refreshViews() {
+    for (const c of this.#channels) this.#updateCard(c);
+    this.#updateCombined();
+  }
+
+  /** Kanalübergreifend: wann muss der Operator als Nächstes etwas tun (manuell/Live, z. B. externen Regieplatz starten). */
+  #updateAttention() {
+    const list: AttentionItem[] = attentionList(this.#channels.map((c) => ({ key: c.key, name: c.summary.name, list: c.upcoming })), 4);
+    const mk = (u: AttentionItem) => {
+      const el = document.createElement("span");
+      el.className = `it u-${urgencyOf(u)}`;
+      const icon = u.kind === "live" ? "●" : "✋";
+      el.textContent = [icon, [u.channel, u.atEnd && u.label ? t("mc.cnt.after", { label: u.label }) : u.label, u.waiting ? t("mc.cnt.waiting") : fmtRemain(u.inMs)].filter(Boolean).join(" · ")].join(" ");
+      el.title = t(u.kind === "live" ? "mc.cnt.live" : "mc.cnt.manual");
+      el.style.cursor = "pointer";
+      el.addEventListener("click", () => this.#open(u.key));
+      return el;
+    };
+    this.#attn.replaceChildren(
+      Object.assign(document.createElement("span"), { className: "ttl", textContent: t("mc.attn.title"), title: t("mc.attn.tip") }),
+      ...(list.length ? list.map(mk) : [Object.assign(document.createElement("span"), { className: "none", textContent: t("mc.attn.none") })]),
+    );
+    // Kompakt in der Wechselleiste, damit es auch beim Bearbeiten eines Channels sichtbar bleibt.
+    if (!this.#attnMini) {
+      this.#attnMini = document.createElement("div");
+      this.#attnMini.className = "cd-attn-mini";
+    }
+    const first = list[0];
+    this.#attnMini.className = `cd-attn-mini${first ? ` u-${urgencyOf(first)}` : ""}`;
+    this.#attnMini.style.display = first ? "" : "none";
+    this.#attnMini.replaceChildren(...(first ? [mk(first)] : []));
+    this.#attnMini.firstElementChild?.setAttribute("class", "");
+    this.#attnMini.title = t("mc.attn.title");
+    if (!this.#attnMini.isConnected) this.#bar.append(this.#attnMini);
   }
 
   #updateCard(ch: Channel) {
@@ -322,22 +458,16 @@ export class ChannelDesk extends HTMLElement {
     if (v && now !== null) {
       const past = Math.round(this.#winMin * 60_000 * TIMELINE_PAST_SHARE);
       const future = this.#winMin * 60_000 - past;
-      const blocks = buildBlocks(v.items ?? [], ch.tl, now, v.currentItemId, past, future, v.cuedItemId);
-      tlEl.replaceChildren(
-        ...blocks.map((b) => {
-          const el = document.createElement("b");
-          el.style.left = `${b.leftPct}%`;
-          el.style.width = `${b.widthPct}%`;
-          el.textContent = b.label;
-          el.title = b.label;
-          el.className = b.cls;
-          return el;
-        }),
-        Object.assign(document.createElement("u"), { style: `left:${nowOffsetPct(past, future)}%` }),
-      );
+      const { lane, kids } = this.#lanes(ch, now, past, future);
+      tlEl.replaceChildren(lane, ...kids, Object.assign(document.createElement("u"), { style: `left:${nowOffsetPct(past, future)}%` }));
     } else {
       tlEl.replaceChildren();
     }
+    // Zähler: nächstes Live-, manuelles und fehlendes Event
+    const nb = nextByKind(ch.upcoming);
+    this.#q(c, "cnt").replaceChildren(
+      this.#cntChip("live", nb.live), this.#cntChip("manual", nb.manual), this.#cntChip("missing", nb.missing),
+    );
     const stats = this.#q(c, "stats");
     const ends = s.remainingTotalMs > 0 ? new Date(Date.now() + s.remainingTotalMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
     stats.replaceChildren(
@@ -373,25 +503,24 @@ export class ChannelDesk extends HTMLElement {
     const axisRow = mk("row");
     axisRow.append(mk("lbl"), axis);
     const rows = this.#channels.map((c) => {
-      const lane = mk("lane");
+      const wrap = mk("lanewrap");
       const v = c.values;
       const now = v ? playlistNow(c.tl, v.currentItemId, v.playheadPositionMs ?? 0, v.cuedItemId) : null;
-      lane.append(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
       if (v && now !== null) {
-        for (const b of buildBlocks(v.items ?? [], c.tl, now, v.currentItemId, past, future, v.cuedItemId)) {
-          const el = Object.assign(document.createElement("b"), { textContent: b.label, title: b.label, className: b.cls });
-          el.style.left = `${b.leftPct}%`;
-          el.style.width = `${b.widthPct}%`;
-          el.addEventListener("dblclick", () => this.#open(c.key));
-          lane.append(el);
-        }
+        const { lane, kids } = this.#lanes(c, now, past, future);
+        lane.prepend(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
+        wrap.append(lane, ...kids);
+      } else {
+        const lane = mk("lane");
+        lane.append(...ticks.map((k) => mk("grid", `left:${k.leftPct}%`)));
+        wrap.append(lane);
       }
-      lane.append(mk("nowline", `left:${nowPct}%`));
+      wrap.append(mk("nowline", `left:${nowPct}%`));
       const lbl = mk("lbl");
       lbl.append(mk(`cd-dot ${c.summary.health}`), Object.assign(document.createElement("span"), { textContent: c.summary.name }));
       lbl.title = c.summary.name;
       const row = mk("row");
-      row.append(lbl, lane);
+      row.append(lbl, wrap);
       return row;
     });
     this.#allBox.replaceChildren(axisRow, ...rows);
@@ -466,6 +595,7 @@ export class ChannelDesk extends HTMLElement {
     this.#overviewTab.title = t("mc.keys");
     this.#overviewTab.addEventListener("click", () => this.#open(null));
     this.#bar.replaceChildren(this.#overviewTab, ...this.#channels.map((c) => c.switchBtn));
+    this.#updateAttention();
     this.#bar.style.display = this.#channels.length > 0 ? "flex" : "none";
     this.#overviewTab.classList.toggle("active", this.#openKey === null);
     for (const c of this.#channels) c.switchBtn.classList.toggle("active", c.key === this.#openKey);
@@ -479,7 +609,7 @@ export class ChannelDesk extends HTMLElement {
         this.#main.replaceChildren(Object.assign(document.createElement("p"), { className: "cd-empty", textContent: t("mc.empty") }));
       } else {
         this.#grid.replaceChildren(...this.#channels.map((c) => c.card));
-        this.#main.replaceChildren(this.#tools, ...(this.#combined ? [this.#allBox] : []), this.#grid);
+        this.#main.replaceChildren(this.#tools, this.#attn, ...(this.#combined ? [this.#allBox] : []), this.#grid);
         this.#allBtn.classList.toggle("active", this.#combined);
         this.#allBtn.style.borderColor = this.#combined ? "var(--omp-accent,#4aa3ff)" : "";
         this.#syncSelection();
@@ -513,8 +643,12 @@ export class ChannelDesk extends HTMLElement {
     } finally {
       this.#polling = false;
     }
-    for (const c of this.#channels) this.#updateCard(c);
-    this.#updateCombined();
+    for (const c of this.#channels) {
+      const v = c.values;
+      c.upcoming = v?.connected === false ? [] : upcomingList(v?.items ?? [], c.tl, v?.currentItemId, v?.playheadPositionMs ?? 0, v?.operatorWait);
+    }
+    this.#updateAttention();
+    this.#refreshViews();
   }
 
   async #pollOne(c: Channel) {
