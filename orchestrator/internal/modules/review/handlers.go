@@ -829,3 +829,34 @@ func speakersOrOff(n *int) int {
 	}
 	return *n
 }
+
+// removeItems: POST /api/v1/review/items/remove {"assetIds":[…], "deleteAsset":false, "force":false} — nur Administratoren.
+// Je Eintrag ein Ergebnis; ein Fehler bei einem bricht die übrigen nicht ab.
+func (a *api) removeItems() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			AssetIDs    []string `json:"assetIds"`
+			DeleteAsset bool     `json:"deleteAsset"`
+			Force       bool     `json:"force"`
+		}
+		if !readBody(w, r, &b) {
+			return
+		}
+		if len(b.AssetIDs) == 0 || len(b.AssetIDs) > 500 {
+			a.writeErr(w, fmt.Errorf("%w: 1 bis 500 Einträge angeben", ErrValidation), nil)
+			return
+		}
+		out := make([]RemoveResult, 0, len(b.AssetIDs))
+		removed := 0
+		for _, id := range b.AssetIDs {
+			res, err := a.svc.RemoveItem(r.Context(), id, actorOf(r), b.DeleteAsset, b.Force)
+			if err != nil {
+				res.OK, res.Error = false, err.Error()
+			} else if res.OK {
+				removed++
+			}
+			out = append(out, res)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"removed": removed, "results": out})
+	}
+}

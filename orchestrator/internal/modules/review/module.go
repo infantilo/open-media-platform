@@ -146,6 +146,7 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	r.Handle("POST /api/v1/review/items/{id}/revise", module.Feature("review.work"), a.revise())
 	r.Handle("POST /api/v1/review/items/{id}/approve", module.Feature("review.approve"), a.decide(true))
 	r.Handle("POST /api/v1/review/items/{id}/reject", module.Feature("review.approve"), a.decide(false))
+	r.Handle("POST /api/v1/review/items/remove", module.Verb(authz.VerbAdmin), a.removeItems())
 	r.Handle("POST /api/v1/review/items/{id}/archive", module.Feature("review.approve"), a.archive(true))
 	r.Handle("POST /api/v1/review/items/{id}/unarchive", module.Feature("review.approve"), a.archive(false))
 	r.Handle("POST /api/v1/review/items/{id}/proxy", module.Feature("review.work", "review.qc.run"), a.requestProxy())

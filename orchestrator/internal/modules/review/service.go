@@ -1053,6 +1053,76 @@ func (s *Service) Unarchive(ctx context.Context, assetID, actor string, expected
 	}, actor)
 }
 
+// RemoveResult ist das Ergebnis des Entfernens eines Eingangs-Eintrags.
+type RemoveResult struct {
+	AssetID string `json:"assetId"`
+	Title   string `json:"title,omitempty"`
+	OK      bool   `json:"ok"`
+	// AssetDeleted: das Asset selbst wurde zusätzlich als gelöscht markiert (endgültig weg erst mit der Datenbank-Wartung).
+	AssetDeleted bool   `json:"assetDeleted,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+// RemoveItem nimmt ein Asset aus dem Eingang (Nutzerwunsch 2026-11-12, „Eingang aufräumen“): löscht Prüfeintrag, QC-Berichte und
+// -Aufträge, Verlauf, Proxys (Zeilen und Dateien) und Conform-Fassungen. Damit die Registrierung (`ScanNew`) das noch vorhandene
+// Asset nicht sofort wieder einstellt, wird die aktuelle Version als „übersprungen“ vermerkt — eine neue Version kommt wieder
+// in den Eingang. `deleteAsset` markiert zusätzlich das Asset als gelöscht (Zustandsautomat des Assets; wirklich entfernt erst
+// durch „Gelöschte Assets aufräumen“). Ein übernommener Eintrag oder ein laufender QC-Auftrag verlangt `force`.
+func (s *Service) RemoveItem(ctx context.Context, assetID, actor string, deleteAsset, force bool) (RemoveResult, error) {
+	res := RemoveResult{AssetID: assetID}
+	tx, err := s.St.db.BeginTx(ctx, nil)
+	if err != nil {
+		return res, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	it, err := scanItem(tx.QueryRowContext(ctx, `SELECT `+itemCols+itemFrom+` WHERE i.asset_id=$1 FOR UPDATE OF i`, assetID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return res, ErrNotFound
+	}
+	if err != nil {
+		return res, err
+	}
+	res.Title = it.Title
+	if it.Assignee != "" && !force {
+		return res, fmt.Errorf("%w: in Bearbeitung durch %s", ErrClaimed, it.Assignee)
+	}
+	var active bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM qc_jobs WHERE asset_id=$1 AND state IN ('queued','running'))`, assetID).Scan(&active); err != nil {
+		return res, err
+	}
+	if active && !force {
+		return res, fmt.Errorf("%w: Qualitätsprüfung läuft noch", ErrState)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO review_skipped (asset_id, version_id, reason)
+		VALUES ($1, $2, 'aus dem Eingang entfernt') ON CONFLICT (asset_id) DO UPDATE SET version_id = EXCLUDED.version_id, reason = EXCLUDED.reason, at = now()`,
+		assetID, it.SourceVersionID); err != nil {
+		return res, err
+	}
+	for _, table := range []string{"review_history", "review_proxies", "conform_revisions", "qc_reports", "qc_jobs", "review_items"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE asset_id = $1", assetID); err != nil {
+			return res, fmt.Errorf("%s: %w", table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return res, err
+	}
+	_ = os.RemoveAll(filepath.Join(s.DataDir, "proxies", assetID))
+	res.OK = true
+	s.audit(actor, assetID, "removed", map[string]any{"title": it.Title, "file": it.FileName, "state": it.State, "deleteAsset": deleteAsset, "force": force})
+	if deleteAsset && s.Assets != nil {
+		a, err := s.Assets.GetAsset(assetID)
+		if err == nil {
+			if _, err = s.Assets.UpdateAssetStatus(assetID, a.RowVersion, asset.StatusDeleted, actor); err == nil {
+				res.AssetDeleted = true
+			}
+		}
+		if err != nil {
+			res.Error = "Asset nicht als gelöscht markiert: " + err.Error()
+		}
+	}
+	return res, nil
+}
+
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }

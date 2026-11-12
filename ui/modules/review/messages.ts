@@ -1749,6 +1749,46 @@ const TABLE: Record<string, [string, string]> = {
     "Löschen",
     "Delete"
   ],
+  "rv.rm.btn": [
+    "Entfernen …",
+    "Remove …"
+  ],
+  "rv.rm.selected": [
+    "{p0} gewählt",
+    "{p0} selected"
+  ],
+  "rv.rm.all": [
+    "Alle sichtbaren wählen",
+    "Select all visible"
+  ],
+  "rv.rm.title": [
+    "Aus dem Eingang entfernen",
+    "Remove from intake"
+  ],
+  "rv.rm.text": [
+    "{p0} Einträge werden aus dem Eingang entfernt: Prüfeintrag, QC-Berichte, Verlauf, Proxys und Conform-Fassungen. Die Mediendatei und das Asset bleiben bestehen und tauchen nicht wieder auf (eine neue Version kommt wieder in den Eingang).",
+    "{p0} entries are removed from the intake: review entry, QC reports, history, proxies and conform revisions. The media file and the asset stay and do not come back (a new version returns to the intake)."
+  ],
+  "rv.rm.deleteAsset": [
+    "Asset zusätzlich als gelöscht markieren (endgültig weg erst mit „Gelöschte Assets aufräumen“)",
+    "Also mark the asset as deleted (gone for good only with “purge deleted assets”)"
+  ],
+  "rv.rm.force": [
+    "Auch übernommene Einträge und laufende Prüfungen entfernen",
+    "Also remove claimed entries and running checks"
+  ],
+  "rv.rm.do": [
+    "Entfernen",
+    "Remove"
+  ],
+  "rv.rm.done": [
+    "{p0} Einträge entfernt",
+    "{p0} entries removed"
+  ],
+  "rv.rm.failed": [
+    "{p0} entfernt, {p1} nicht: {p2}",
+    "{p0} removed, {p1} not: {p2}"
+  ],
   "rv.sub.delete.q": [
     "Untertitel „{p0}“ löschen? Die Kopie für die Playout-Automation wird entfernt.",
     "Delete subtitle “{p0}”? The copy for playout automation is removed."

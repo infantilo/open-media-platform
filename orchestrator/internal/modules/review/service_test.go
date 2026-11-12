@@ -567,3 +567,58 @@ func TestQCRecordsLoudnessOnAsset(t *testing.T) {
 		t.Fatal("technische Merkmale verloren")
 	}
 }
+
+// Eingang aufräumen: RemoveItem löscht die Eingangsdaten samt Proxy-Ordner, merkt die Version als übersprungen (kein
+// Wiederauftauchen durch ScanNew), lässt das Asset bestehen — oder markiert es auf Wunsch als gelöscht.
+func TestRemoveItemCleansUpAndStaysGone(t *testing.T) {
+	e := newEnv(t, nil)
+	ctx := context.Background()
+	it := e.importReady(t)
+	dir := filepath.Join(e.svc.DataDir, "proxies", it.AssetID)
+	if err := os.MkdirAll(dir, 0o755); err != nil || os.WriteFile(filepath.Join(dir, "x.mp4"), []byte("x"), 0o644) != nil {
+		t.Fatal("Proxy-Ordner anlegen")
+	}
+	// übernommen → ohne force abgelehnt, Eintrag bleibt
+	if _, err := e.svc.Claim(ctx, it.AssetID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.RemoveItem(ctx, it.AssetID, "admin", false, false); !errors.Is(err, ErrClaimed) {
+		t.Fatalf("übernommen: %v, want ErrClaimed", err)
+	}
+	if _, err := e.svc.St.GetItem(ctx, it.AssetID); err != nil {
+		t.Fatalf("Eintrag darf nach Ablehnung nicht fehlen: %v", err)
+	}
+	// mit force: weg, Asset bleibt, Proxy-Ordner weg, Registrierung stellt es nicht wieder ein
+	res, err := e.svc.RemoveItem(ctx, it.AssetID, "admin", false, true)
+	if err != nil || !res.OK || res.AssetDeleted {
+		t.Fatalf("remove: %+v %v", res, err)
+	}
+	if _, err := e.svc.St.GetItem(ctx, it.AssetID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Eintrag existiert noch: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("Proxy-Ordner existiert noch: %v", err)
+	}
+	if a, err := e.svc.Assets.GetAsset(it.AssetID); err != nil || a.Status == asset.StatusDeleted {
+		t.Errorf("Asset muss bestehen bleiben: %+v %v", a, err)
+	}
+	if _, err := e.svc.ScanNew(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.St.GetItem(ctx, it.AssetID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ScanNew hat den entfernten Eintrag wieder eingestellt: %v", err)
+	}
+	// unbekannt
+	if _, err := e.svc.RemoveItem(ctx, "gibt-es-nicht", "admin", false, false); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unbekannt: %v", err)
+	}
+	// zweites Element mit Asset-Löschung
+	other := e.importReady2(t)
+	res2, err := e.svc.RemoveItem(ctx, other.AssetID, "admin", true, false)
+	if err != nil || !res2.OK || !res2.AssetDeleted {
+		t.Fatalf("remove+delete: %+v %v", res2, err)
+	}
+	if a, _ := e.svc.Assets.GetAsset(other.AssetID); a.Status != asset.StatusDeleted {
+		t.Errorf("Asset-Status = %q, want deleted", a.Status)
+	}
+}

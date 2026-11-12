@@ -34,6 +34,10 @@ class ReviewView extends HTMLElement {
   #query = "";
   #items: Item[] = [];
   #list = el("div");
+  /** Für „Entfernen“ gewählte Einträge (nur Administratoren). */
+  #picked = new Set<string>();
+  #rmBtn = el("button");
+  #rmInfo = el("span", "color:var(--omp-text-dim);");
   #detail: ReviewDetail | null = null;
   #timer = 0;
   #loaded = false;
@@ -111,6 +115,11 @@ class ReviewView extends HTMLElement {
       bar.append(imp);
     }
     if (this.#me.isAdmin) {
+      this.#rmBtn = el("button", "padding:3px 10px;", tt("rv.rm.btn"));
+      this.#rmBtn.dataset.role = "remove";
+      this.#rmBtn.addEventListener("click", () => void this.#removeDialog());
+      bar.append(this.#rmBtn, this.#rmInfo);
+      this.#syncPicked();
       const cfg = el("button", "padding:3px 10px;", tt("rv.settings"));
       cfg.addEventListener("click", () => void this.#settingsDialog());
       bar.append(cfg);
@@ -145,6 +154,21 @@ class ReviewView extends HTMLElement {
     }
     const tb = el("table", "width:100%;border-collapse:collapse;font-size:13px;");
     const head = el("tr", "text-align:left;color:var(--omp-text-dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em;");
+    if (this.#me.isAdmin) {
+      const all = el("input") as HTMLInputElement;
+      all.type = "checkbox";
+      all.title = tt("rv.rm.all");
+      all.dataset.role = "pick-all";
+      all.checked = this.#items.length > 0 && this.#items.every((i) => this.#picked.has(i.assetId));
+      all.addEventListener("change", () => {
+        for (const i of this.#items) all.checked ? this.#picked.add(i.assetId) : this.#picked.delete(i.assetId);
+        this.#renderList();
+        this.#syncPicked();
+      });
+      const th = el("th", "padding:6px 8px;width:24px;");
+      th.append(all);
+      head.append(th);
+    }
     for (const h of ["rv.col.file", "rv.col.state", "rv.col.qc", "rv.col.assignee", "rv.col.assigned", "rv.col.duration", "rv.col.format", "rv.col.size", "rv.col.received", ""]) head.append(el("th", "padding:4px 8px;font-weight:500;", h ? tt(h) : ""));
     tb.append(head);
     for (const it of this.#items) {
@@ -162,6 +186,18 @@ class ReviewView extends HTMLElement {
       const name = el("div");
       name.append(el("div", "font-weight:600;", it.title || it.fileName), el("div", "font:11px var(--omp-font-mono);color:var(--omp-text-dim);", `${it.fileName} · ${it.assetId.slice(0, 8)}`));
       const dur = it.timeline ? `${timecodeOf({ ...it.timeline, startFrames: 0 }, it.timeline.durationFrames)}` : "—";
+      if (this.#me.isAdmin) {
+        const cb = el("input") as HTMLInputElement;
+        cb.type = "checkbox";
+        cb.dataset.role = "pick";
+        cb.checked = this.#picked.has(it.assetId);
+        cb.addEventListener("click", (e) => e.stopPropagation());
+        cb.addEventListener("change", () => {
+          if (cb.checked) this.#picked.add(it.assetId); else this.#picked.delete(it.assetId);
+          this.#syncPicked();
+        });
+        tr.append(td(cb));
+      }
       tr.append(
         td(name),
         td(el("span", stateBadge(it.state), tt("rv.state." + it.state))),
@@ -185,6 +221,66 @@ class ReviewView extends HTMLElement {
       tb.append(tr);
     }
     this.#list.append(tb);
+  }
+
+  #syncPicked() {
+    const n = this.#picked.size;
+    this.#rmBtn.disabled = n === 0;
+    this.#rmInfo.textContent = n ? tt("rv.rm.selected", { p0: n }) : "";
+  }
+
+  /** Eingang aufräumen: gewählte Einträge entfernen (Administratoren), mit zwei Optionen und Rückfrage. */
+  async #removeDialog() {
+    const ids = [...this.#picked];
+    if (ids.length === 0) return;
+    const overlay = el("div");
+    overlay.className = "omp-modal-overlay";
+    overlay.style.zIndex = "3000";
+    const m = el("div", "max-width:520px;");
+    m.className = "omp-modal";
+    const h1 = el("div", "margin-bottom:8px;", tt("rv.rm.title"));
+    h1.className = "omp-h1";
+    const text = el("p", "margin:0 0 10px;", tt("rv.rm.text", { p0: ids.length }));
+    const opt = (key: string, role: string): [HTMLLabelElement, HTMLInputElement] => {
+      const cb = el("input") as HTMLInputElement;
+      cb.type = "checkbox";
+      cb.dataset.role = role;
+      const lab = el("label", "display:flex;gap:8px;align-items:flex-start;margin:6px 0;");
+      lab.append(cb, el("span", "", tt(key)));
+      return [lab, cb];
+    };
+    const [delLab, delAsset] = opt("rv.rm.deleteAsset", "rm-asset");
+    const [forceLab, force] = opt("rv.rm.force", "rm-force");
+    const row = el("div", "display:flex;gap:8px;justify-content:flex-end;margin-top:12px;");
+    const cancel = el("button", "", tt("rv.cancel"));
+    const ok = el("button", "", tt("rv.rm.do"));
+    ok.className = "omp-btn-danger";
+    ok.dataset.role = "rm-ok";
+    cancel.addEventListener("click", () => overlay.remove());
+    ok.addEventListener("click", async () => {
+      ok.disabled = true;
+      const res = await call<{ removed: number; results: { assetId: string; title?: string; ok: boolean; error?: string }[] }>("POST", "/items/remove", {
+        assetIds: ids, deleteAsset: delAsset.checked, force: force.checked,
+      });
+      overlay.remove();
+      if (!res.ok) {
+        showToast(errText(res.data as unknown as Record<string, unknown>) || tt("rv.err.generic"));
+        return;
+      }
+      const failed = res.data.results.filter((r) => !r.ok);
+      for (const r of res.data.results) if (r.ok) this.#picked.delete(r.assetId);
+      if (failed.length) {
+        showToast(tt("rv.rm.failed", { p0: res.data.removed, p1: failed.length, p2: failed.slice(0, 3).map((f) => `${f.title || f.assetId.slice(0, 8)} (${f.error})`).join("; ") }));
+      } else {
+        showToast(tt("rv.rm.done", { p0: res.data.removed }));
+      }
+      this.#syncPicked();
+      void this.#refresh();
+    });
+    row.append(cancel, ok);
+    m.append(h1, text, delLab, forceLab, row);
+    overlay.append(m);
+    document.body.append(overlay);
   }
 
   #assignedCell(it: Item): HTMLElement {
