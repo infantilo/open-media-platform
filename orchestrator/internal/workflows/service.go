@@ -1705,7 +1705,7 @@ func (s *Service) applyConnection(ctx context.Context, conn Connection, fromNode
 		return nil
 	}
 	if len(toNode.Receivers) > 0 {
-		receiver, ok := findReceiver(toNode, conn.ToReceiver)
+		receiver, ok := pickReceiver(toNode, fromNode, conn)
 		if !ok {
 			return fmt.Errorf("connection %s -> %s: role %s has no receiver%s", conn.FromRole, conn.ToRole, conn.ToRole, labelSuffix(conn.ToReceiver))
 		}
@@ -1878,6 +1878,34 @@ func isLowresCompanion(label string) bool {
 
 // findReceiver wählt den Receiver eines Nodes nach Label — analog
 // findSender.
+// pickReceiver wählt den Ziel-Receiver einer Verbindung. Mit ausdrücklicher Angabe gilt findReceiver. Ohne Angabe wird nicht
+// blind der erste Receiver genommen (beim Viewer ist das der Zeitcode-Datenport — Bild und Ton landeten dort statt am
+// Videoeingang, Lastfund 2026-11-12), sondern der erste, zu dem die Quelle einen Sender gleichen Formats hat; gibt es keinen,
+// bleibt es beim bisherigen Verhalten (erster Receiver).
+func pickReceiver(to, from registry.NodeView, conn Connection) (registry.ReceiverView, bool) {
+	if conn.ToReceiver != "" || len(to.Receivers) == 0 {
+		return findReceiver(to, conn.ToReceiver)
+	}
+	if conn.FromSender != "" {
+		if snd, ok := findSender(from, conn.FromSender, ""); ok {
+			for _, r := range to.Receivers {
+				if r.Format == snd.Format {
+					return r, true
+				}
+			}
+		}
+		return to.Receivers[0], true
+	}
+	for _, r := range to.Receivers {
+		for _, snd := range from.Senders {
+			if snd.Format == r.Format {
+				return r, true
+			}
+		}
+	}
+	return to.Receivers[0], true
+}
+
 func findReceiver(node registry.NodeView, label string) (registry.ReceiverView, bool) {
 	if label == "" {
 		if len(node.Receivers) == 0 {
