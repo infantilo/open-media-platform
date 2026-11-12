@@ -18,6 +18,9 @@ export interface SettingsOptions {
   config: IngestConfig;
   hosts: { id: string; label: string }[];
   save: (c: IngestConfig) => Promise<{ ok: boolean; message: string }>;
+  /** Statt als Dialog in diesen Behälter zeichnen (Administration → Plattform → Stream Ingest); „Verwerfen“ ruft `onDiscard`. */
+  container?: HTMLElement;
+  onDiscard?: () => void;
 }
 
 const unit = (r: string): string => RESOURCE_UNITS[r] ?? "";
@@ -33,8 +36,9 @@ export function openSettingsForm(o: SettingsOptions): void {
   const overlay = el("div");
   overlay.className = "omp-modal-overlay";
   overlay.style.zIndex = "3000";
-  const m = el("div", "max-width:820px;max-height:92vh;overflow:auto;");
-  m.className = "omp-modal";
+  const embedded = !!o.container;
+  const m = el("div", embedded ? "max-width:900px;" : "max-width:820px;max-height:92vh;overflow:auto;");
+  if (!embedded) m.className = "omp-modal";
   m.dataset.role = "ingest-settings";
   const h1 = el("div", "margin-bottom:4px;", tt("ing.settings"));
   h1.className = "omp-h1";
@@ -307,10 +311,10 @@ export function openSettingsForm(o: SettingsOptions): void {
 
   // ---- Fuß ----
   const row = el("div", "display:flex;gap:8px;justify-content:flex-end;margin-top:4px;");
-  const cancel = el("button", "", tt("ing.close"));
+  const cancel = el("button", "", embedded ? tt("ing.discard") : tt("ing.close"));
   const save = el("button", "", tt("ing.save"));
   save.className = "omp-btn-primary";
-  cancel.addEventListener("click", () => overlay.remove());
+  cancel.addEventListener("click", () => (embedded ? o.onDiscard?.() : overlay.remove()));
   save.addEventListener("click", async () => {
     const problems = validateConfig(c);
     if (problems.length) {
@@ -325,12 +329,16 @@ export function openSettingsForm(o: SettingsOptions): void {
       err.textContent = r.message;
       return;
     }
-    overlay.remove();
+    if (!embedded) overlay.remove();
     showToast(tt("ing.saved"));
   });
   row.append(cancel, save);
   body.append(gen.box, pol.box, rul.box, bud.box, prof.box);
   m.append(h1, el("div", "font-size:12px;color:var(--omp-text-dim);margin-bottom:8px;", tt("ing.settings.hint")), body, err, row);
+  if (o.container) {
+    o.container.replaceChildren(m);
+    return;
+  }
   overlay.addEventListener("keydown", (e) => e.key === "Escape" && overlay.remove());
   overlay.append(m);
   document.body.append(overlay);

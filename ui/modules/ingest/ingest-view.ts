@@ -4,8 +4,6 @@ import { apiFetch, confirmDialog, dateLocale, directory, features, showToast, t 
 import { type Directory, type FeatureSet, groupName, hasFeature, isMine } from "../../kit/features.ts";
 import { openScheduleForm } from "./schedule-form.ts";
 import { planSummary } from "./audio-plan-logic.ts";
-import { openSettingsForm } from "./settings-form.ts";
-import type { IngestConfig } from "./settings-logic.ts";
 import {
   actionKey, canAbort, canCancel, type DragMode, dragModes, dragResult, fmtDuration, fmtInZone, groupLanes, type HostView, isRunning, isTerminal, type Job, layoutBars, RESOURCE_UNITS, resourceLevel, stateColor, ticks,
   usageSeries, type Verdict,
@@ -18,7 +16,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, css = "", text = ""):
   return e;
 }
 
-async function api<T = Record<string, any>>(method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; data: T }> {
+export async function api<T = Record<string, any>>(method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; data: T }> {
   try {
     const res = await apiFetch(`/api/v1/ingest${path}`, { method, headers: body === undefined ? undefined : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
     let data = {} as T;
@@ -31,7 +29,7 @@ async function api<T = Record<string, any>>(method: string, path: string, body?:
   }
 }
 
-const errText = (d: Record<string, any>): string => (d.problems as string[] | undefined)?.join("\n") || String(d.error ?? "");
+export const errText = (d: Record<string, any>): string => (d.problems as string[] | undefined)?.join("\n") || String(d.error ?? "");
 
 interface Capacity {
   from: string;
@@ -171,11 +169,6 @@ class IngestView extends HTMLElement {
       void this.#refresh();
     });
     bar.append(win);
-    if (this.#isAdmin) {
-      const cfg = el("button", "padding:3px 10px;", tt("ing.settings"));
-      cfg.addEventListener("click", () => void this.#settings());
-      bar.append(cfg);
-    }
     root.append(bar);
     if (!this.#cap) {
       root.append(el("div", "color:var(--omp-text-dim);", tt("ing.loading")));
@@ -664,22 +657,6 @@ class IngestView extends HTMLElement {
     overlay.addEventListener("click", (e) => e.target === overlay && overlay.remove());
     overlay.append(m);
     document.body.append(overlay);
-  }
-
-  async #settings() {
-    const r = await api("GET", "/config");
-    if (!r.ok) return;
-    openSettingsForm({
-      config: r.data as unknown as IngestConfig,
-      hosts: (this.#cap?.hosts ?? []).map((h) => ({ id: h.id, label: h.label })),
-      save: async (c) => {
-        const x = await api("PUT", "/config", c);
-        if (!x.ok) return { ok: false, message: errText(x.data) || tt("ing.err") };
-        this.#profiles = (x.data.profiles ?? {}) as Profiles;
-        void this.#refresh();
-        return { ok: true, message: "" };
-      },
-    });
   }
 }
 

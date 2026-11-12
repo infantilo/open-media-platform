@@ -219,6 +219,12 @@ func (*Module) UI() []module.UITab {
 		ID: "ingest", Placement: "main", After: "scheduler",
 		Label:   map[string]string{"de": "Stream Ingest", "en": "Stream ingest"},
 		Element: "omp-ingest-view", Bundle: "/dist/modules/ingest.js",
+	}, {
+		// Einstellungen der Aufnahme gehören in die Administration (Nutzerwunsch 2026-11-12), nicht in den Arbeits-Tab.
+		ID: "ingest-settings", Placement: "admin:platform", After: "review-settings",
+		Label: map[string]string{"de": "Stream Ingest", "en": "Stream ingest"},
+		Group: map[string]string{"de": "Plattform", "en": "Platform"}, Cluster: "operations",
+		Element: "omp-ingest-settings-view", Bundle: "/dist/modules/ingest.js",
 	}}
 }
 

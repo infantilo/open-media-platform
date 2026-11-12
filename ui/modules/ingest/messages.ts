@@ -464,6 +464,10 @@ const TABLE: Record<string, [string, string]> = {
     "Gespeichert — aber {p0} Auftrag/Aufträge nicht zugelassen (Gründe unter „Probleme“).",
     "Saved — but {p0} job(s) were not admitted (see “Problems” for the reasons)."
   ],
+  "ing.discard": [
+    "Verwerfen",
+    "Discard"
+  ],
   "ing.close": [
     "Schließen",
     "Close"
