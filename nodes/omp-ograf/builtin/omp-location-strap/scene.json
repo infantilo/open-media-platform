@@ -1,0 +1,173 @@
+{
+  "format": "omp-ograf-scene/1",
+  "width": 1920,
+  "height": 1080,
+  "elements": [
+    {
+      "id": "r1",
+      "kind": "rect",
+      "name": "Kennung-Fläche",
+      "x": 77,
+      "y": 54,
+      "w": 190,
+      "h": 70,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "{{tagColor}}",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fromLeft",
+          "ms": 450,
+          "delay": 0,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "r2",
+      "kind": "rect",
+      "name": "Ort-Fläche",
+      "x": 267,
+      "y": 54,
+      "w": 640,
+      "h": 70,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "{{bgColor}}",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fromLeft",
+          "ms": 450,
+          "delay": 0,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t3",
+      "kind": "text",
+      "name": "Kennung",
+      "x": 77,
+      "y": 54,
+      "w": 190,
+      "h": 70,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{tag}}",
+      "font": "system-ui, sans-serif",
+      "size": 34,
+      "weight": 800,
+      "color": "#ffffff",
+      "align": "center",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromLeft",
+          "ms": 450,
+          "delay": 80,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t4",
+      "kind": "text",
+      "name": "Ort",
+      "x": 297,
+      "y": 54,
+      "w": 400,
+      "h": 70,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{place}}",
+      "font": "system-ui, sans-serif",
+      "size": 38,
+      "weight": 700,
+      "color": "{{textColor}}",
+      "align": "left",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromLeft",
+          "ms": 450,
+          "delay": 120,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t5",
+      "kind": "text",
+      "name": "Zusatz",
+      "x": 700,
+      "y": 54,
+      "w": 190,
+      "h": 70,
+      "rotation": 0,
+      "opacity": 0.7,
+      "text": "{{extra}}",
+      "font": "system-ui, sans-serif",
+      "size": 30,
+      "weight": 500,
+      "color": "{{textColor}}",
+      "align": "right",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromLeft",
+          "ms": 450,
+          "delay": 160,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    }
+  ]
+}

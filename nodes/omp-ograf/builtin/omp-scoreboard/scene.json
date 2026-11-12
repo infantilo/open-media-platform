@@ -1,0 +1,339 @@
+{
+  "format": "omp-ograf-scene/1",
+  "width": 1920,
+  "height": 1080,
+  "elements": [
+    {
+      "id": "r1",
+      "kind": "rect",
+      "name": "Hintergrund",
+      "x": 77,
+      "y": 54,
+      "w": 960,
+      "h": 96,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "{{bgColor}}",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fromTop",
+          "ms": 500,
+          "delay": 0,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "r2",
+      "kind": "rect",
+      "name": "Farbe A",
+      "x": 77,
+      "y": 54,
+      "w": 18,
+      "h": 96,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "{{colorA}}",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fromTop",
+          "ms": 500,
+          "delay": 0,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "r3",
+      "kind": "rect",
+      "name": "Farbe B",
+      "x": 1019,
+      "y": 54,
+      "w": 18,
+      "h": 96,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "{{colorB}}",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fromTop",
+          "ms": 500,
+          "delay": 0,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "r4",
+      "kind": "rect",
+      "name": "Zeit-Fläche",
+      "x": 790,
+      "y": 54,
+      "w": 247,
+      "h": 96,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "#000000",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fromTop",
+          "ms": 500,
+          "delay": 0,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t5",
+      "kind": "text",
+      "name": "Team A",
+      "x": 110,
+      "y": 54,
+      "w": 230,
+      "h": 96,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{teamA}}",
+      "font": "system-ui, sans-serif",
+      "size": 44,
+      "weight": 800,
+      "color": "{{textColor}}",
+      "align": "left",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromTop",
+          "ms": 500,
+          "delay": 80,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t6",
+      "kind": "text",
+      "name": "Tore A",
+      "x": 340,
+      "y": 54,
+      "w": 100,
+      "h": 96,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{scoreA}}",
+      "font": "system-ui, sans-serif",
+      "size": 56,
+      "weight": 800,
+      "color": "{{textColor}}",
+      "align": "center",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromTop",
+          "ms": 500,
+          "delay": 120,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t7",
+      "kind": "text",
+      "name": "Tore B",
+      "x": 450,
+      "y": 54,
+      "w": 100,
+      "h": 96,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{scoreB}}",
+      "font": "system-ui, sans-serif",
+      "size": 56,
+      "weight": 800,
+      "color": "{{textColor}}",
+      "align": "center",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromTop",
+          "ms": 500,
+          "delay": 120,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t8",
+      "kind": "text",
+      "name": "Team B",
+      "x": 540,
+      "y": 54,
+      "w": 230,
+      "h": 96,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{teamB}}",
+      "font": "system-ui, sans-serif",
+      "size": 44,
+      "weight": 800,
+      "color": "{{textColor}}",
+      "align": "right",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromTop",
+          "ms": 500,
+          "delay": 160,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t9",
+      "kind": "text",
+      "name": "Spielzeit",
+      "x": 800,
+      "y": 58,
+      "w": 227,
+      "h": 52,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{time}}",
+      "font": "system-ui, sans-serif",
+      "size": 40,
+      "weight": 700,
+      "color": "#ffffff",
+      "align": "center",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromTop",
+          "ms": 500,
+          "delay": 200,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t10",
+      "kind": "text",
+      "name": "Abschnitt",
+      "x": 800,
+      "y": 108,
+      "w": 227,
+      "h": 36,
+      "rotation": 0,
+      "opacity": 0.8,
+      "text": "{{period}}",
+      "font": "system-ui, sans-serif",
+      "size": 26,
+      "weight": 500,
+      "color": "#ffffff",
+      "align": "center",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromTop",
+          "ms": 500,
+          "delay": 200,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    }
+  ]
+}

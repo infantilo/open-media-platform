@@ -104,6 +104,7 @@ impl Track {
 pub fn ensure_builtin_template(templates_root: &Path) {
     let dir = templates_root.join("subtitle");
     if dir.join("subtitle.ograf.json").exists() {
+        crate::templates::upgrade_builtin(&dir, "subtitle", include_str!("../builtin/subtitle/subtitle.ograf.json"), include_str!("../builtin/subtitle/subtitle.js"));
         return;
     }
     if std::fs::create_dir_all(&dir).is_ok() {

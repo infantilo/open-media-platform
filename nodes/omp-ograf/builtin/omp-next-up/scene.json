@@ -1,0 +1,173 @@
+{
+  "format": "omp-ograf-scene/1",
+  "width": 1920,
+  "height": 1080,
+  "elements": [
+    {
+      "id": "r1",
+      "kind": "rect",
+      "name": "Label-Fläche",
+      "x": 980,
+      "y": 880,
+      "w": 190,
+      "h": 100,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "{{accentColor}}",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fromRight",
+          "ms": 600,
+          "delay": 0,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "r2",
+      "kind": "rect",
+      "name": "Text-Fläche",
+      "x": 1170,
+      "y": 880,
+      "w": 673,
+      "h": 100,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "{{bgColor}}",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fromRight",
+          "ms": 600,
+          "delay": 0,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t3",
+      "kind": "text",
+      "name": "Label",
+      "x": 980,
+      "y": 880,
+      "w": 190,
+      "h": 100,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{label}}",
+      "font": "system-ui, sans-serif",
+      "size": 32,
+      "weight": 800,
+      "color": "#ffffff",
+      "align": "center",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromRight",
+          "ms": 600,
+          "delay": 100,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t4",
+      "kind": "text",
+      "name": "Titel",
+      "x": 1200,
+      "y": 880,
+      "w": 440,
+      "h": 100,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{title}}",
+      "font": "system-ui, sans-serif",
+      "size": 42,
+      "weight": 700,
+      "color": "{{textColor}}",
+      "align": "left",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromRight",
+          "ms": 600,
+          "delay": 150,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t5",
+      "kind": "text",
+      "name": "Uhrzeit",
+      "x": 1650,
+      "y": 880,
+      "w": 170,
+      "h": 100,
+      "rotation": 0,
+      "opacity": 0.75,
+      "text": "{{time}}",
+      "font": "system-ui, sans-serif",
+      "size": 38,
+      "weight": 500,
+      "color": "{{textColor}}",
+      "align": "right",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromRight",
+          "ms": 600,
+          "delay": 200,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    }
+  ]
+}

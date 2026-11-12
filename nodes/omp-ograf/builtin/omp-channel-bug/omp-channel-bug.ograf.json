@@ -1,0 +1,86 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "omp-channel-bug",
+  "version": "1.0.0",
+  "name": "OMP_Senderlogo (Bug)",
+  "description": "Senderlogo oder Kurzname in einer Bildecke; Logo als Bilddatei im Paket oder Adresse. Blendet weich ein.",
+  "author": {
+    "name": "OpenMediaPlatform"
+  },
+  "main": "omp-channel-bug.js",
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 1,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "logo": {
+        "type": "string",
+        "title": "Logo (Adresse oder Datei im Paket)",
+        "default": ""
+      },
+      "text": {
+        "type": "string",
+        "title": "Kurzname (falls kein Logo)",
+        "default": "OMP"
+      },
+      "corner": {
+        "type": "string",
+        "title": "Ecke",
+        "default": "oben rechts",
+        "enum": [
+          "oben rechts",
+          "oben links",
+          "unten rechts",
+          "unten links"
+        ],
+        "gddType": "select",
+        "gddOptions": {
+          "labels": [
+            "oben rechts",
+            "oben links",
+            "unten rechts",
+            "unten links"
+          ]
+        }
+      },
+      "size": {
+        "type": "integer",
+        "title": "Höhe (% der Bildhöhe)",
+        "default": 9,
+        "minimum": 2,
+        "maximum": 40
+      },
+      "opacity": {
+        "type": "integer",
+        "title": "Deckkraft (%)",
+        "default": 85,
+        "minimum": 10,
+        "maximum": 100
+      },
+      "textColor": {
+        "type": "string",
+        "title": "Textfarbe",
+        "default": "#ffffff",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      }
+    }
+  },
+  "renderRequirements": [
+    {
+      "resolution": {
+        "width": {
+          "ideal": 1920
+        },
+        "height": {
+          "ideal": 1080
+        }
+      },
+      "frameRate": {
+        "ideal": 25
+      }
+    }
+  ]
+}

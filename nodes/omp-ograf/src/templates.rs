@@ -204,7 +204,7 @@ fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
 /// Ältere Installationen tragen eine ältere Fassung der mitgelieferten Vorlage (das Datenverzeichnis wird nur einmal befüllt):
 /// ist die installierte `version` kleiner als die des Programms, werden Manifest und Modul ersetzt. Ohne lesbare Version
 /// (vom Nutzer umgebaut) bleibt die Vorlage unberührt.
-fn upgrade_builtin(dir: &Path, name: &str, manifest: &str, module: &str) {
+pub(crate) fn upgrade_builtin(dir: &Path, name: &str, manifest: &str, module: &str) {
     let path = dir.join(format!("{name}.ograf.json"));
     let Ok(raw) = std::fs::read_to_string(&path) else { return };
     let Ok(json) = serde_json::from_str::<Value>(&raw) else { return };
@@ -228,31 +228,42 @@ pub fn ensure_builtin_pip_wall(templates_root: &Path) {
     }
 }
 
-/// Mitgelieferte Sendevorlagen (Bauchbinde, Schlagzeile, Ticker, Logo, Uhr, Ergebnis, Titelkarte, Danach, Ortsmarke, Zitat,
-/// Trenner „Wipe“, Abspann). Werden wie die anderen mitgelieferten Vorlagen installiert und bei höherer `version` ersetzt.
-const BUILTIN_SET: &[(&str, &str, &str)] = &[
-    ("lower-third", include_str!("../builtin/lower-third/lower-third.ograf.json"), include_str!("../builtin/lower-third/lower-third.js")),
-    ("headline-bar", include_str!("../builtin/headline-bar/headline-bar.ograf.json"), include_str!("../builtin/headline-bar/headline-bar.js")),
-    ("ticker", include_str!("../builtin/ticker/ticker.ograf.json"), include_str!("../builtin/ticker/ticker.js")),
-    ("channel-bug", include_str!("../builtin/channel-bug/channel-bug.ograf.json"), include_str!("../builtin/channel-bug/channel-bug.js")),
-    ("clock", include_str!("../builtin/clock/clock.ograf.json"), include_str!("../builtin/clock/clock.js")),
-    ("scoreboard", include_str!("../builtin/scoreboard/scoreboard.ograf.json"), include_str!("../builtin/scoreboard/scoreboard.js")),
-    ("title-card", include_str!("../builtin/title-card/title-card.ograf.json"), include_str!("../builtin/title-card/title-card.js")),
-    ("next-up", include_str!("../builtin/next-up/next-up.ograf.json"), include_str!("../builtin/next-up/next-up.js")),
-    ("location-strap", include_str!("../builtin/location-strap/location-strap.ograf.json"), include_str!("../builtin/location-strap/location-strap.js")),
-    ("quote", include_str!("../builtin/quote/quote.ograf.json"), include_str!("../builtin/quote/quote.js")),
-    ("wipe-divider", include_str!("../builtin/wipe-divider/wipe-divider.ograf.json"), include_str!("../builtin/wipe-divider/wipe-divider.js")),
-    ("credits", include_str!("../builtin/credits/credits.ograf.json"), include_str!("../builtin/credits/credits.js")),
+/// Mitgelieferte Sendevorlagen mit Präfix `omp-` (Anzeigename `OMP_…`): Bauchbinde, Schlagzeile, Ticker, Logo, Uhr, Ergebnis,
+/// Titelkarte, Danach, Ortsmarke, Zitat, Trenner „Wipe“, Abspann. Mit `scene.json` sind sie Designer-Vorlagen und im Editor auf
+/// der Leinwand bearbeitbar (erzeugt mit `tools/builtin-scenes/gen.ts`). Installation/Ersatz bei höherer `version` wie bei `pip-wall`.
+const BUILTIN_SET: &[(&str, &str, &str, Option<&str>)] = &[
+    ("omp-lower-third", include_str!("../builtin/omp-lower-third/omp-lower-third.ograf.json"), include_str!("../builtin/omp-lower-third/omp-lower-third.js"), Some(include_str!("../builtin/omp-lower-third/scene.json"))),
+    ("omp-headline-bar", include_str!("../builtin/omp-headline-bar/omp-headline-bar.ograf.json"), include_str!("../builtin/omp-headline-bar/omp-headline-bar.js"), Some(include_str!("../builtin/omp-headline-bar/scene.json"))),
+    ("omp-ticker", include_str!("../builtin/omp-ticker/omp-ticker.ograf.json"), include_str!("../builtin/omp-ticker/omp-ticker.js"), None),
+    ("omp-channel-bug", include_str!("../builtin/omp-channel-bug/omp-channel-bug.ograf.json"), include_str!("../builtin/omp-channel-bug/omp-channel-bug.js"), None),
+    ("omp-clock", include_str!("../builtin/omp-clock/omp-clock.ograf.json"), include_str!("../builtin/omp-clock/omp-clock.js"), None),
+    ("omp-scoreboard", include_str!("../builtin/omp-scoreboard/omp-scoreboard.ograf.json"), include_str!("../builtin/omp-scoreboard/omp-scoreboard.js"), Some(include_str!("../builtin/omp-scoreboard/scene.json"))),
+    ("omp-title-card", include_str!("../builtin/omp-title-card/omp-title-card.ograf.json"), include_str!("../builtin/omp-title-card/omp-title-card.js"), Some(include_str!("../builtin/omp-title-card/scene.json"))),
+    ("omp-next-up", include_str!("../builtin/omp-next-up/omp-next-up.ograf.json"), include_str!("../builtin/omp-next-up/omp-next-up.js"), Some(include_str!("../builtin/omp-next-up/scene.json"))),
+    ("omp-location-strap", include_str!("../builtin/omp-location-strap/omp-location-strap.ograf.json"), include_str!("../builtin/omp-location-strap/omp-location-strap.js"), Some(include_str!("../builtin/omp-location-strap/scene.json"))),
+    ("omp-quote", include_str!("../builtin/omp-quote/omp-quote.ograf.json"), include_str!("../builtin/omp-quote/omp-quote.js"), Some(include_str!("../builtin/omp-quote/scene.json"))),
+    ("omp-wipe-divider", include_str!("../builtin/omp-wipe-divider/omp-wipe-divider.ograf.json"), include_str!("../builtin/omp-wipe-divider/omp-wipe-divider.js"), None),
+    ("omp-credits", include_str!("../builtin/omp-credits/omp-credits.ograf.json"), include_str!("../builtin/omp-credits/omp-credits.js"), None),
 ];
 
 pub fn ensure_builtin_broadcast_set(templates_root: &Path) {
-    for (id, manifest, module) in BUILTIN_SET {
+    for (id, manifest, module, scene) in BUILTIN_SET {
         let dir = templates_root.join(id);
-        if dir.join(format!("{id}.ograf.json")).exists() {
-            upgrade_builtin(&dir, id, manifest, module);
-        } else if std::fs::create_dir_all(&dir).is_ok() {
-            let _ = std::fs::write(dir.join(format!("{id}.ograf.json")), manifest);
+        let mpath = dir.join(format!("{id}.ograf.json"));
+        let install = match std::fs::read_to_string(&mpath) {
+            Err(_) => true, // noch nicht vorhanden
+            Ok(raw) => {
+                let old = serde_json::from_str::<Value>(&raw).ok().and_then(|j| j["version"].as_str().and_then(parse_version));
+                let new = serde_json::from_str::<Value>(manifest).ok().and_then(|j| j["version"].as_str().and_then(parse_version));
+                matches!((old, new), (Some(o), Some(n)) if o < n) // ohne lesbare Version: vom Nutzer umgebaut, bleibt
+            }
+        };
+        if install && std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::write(&mpath, manifest);
             let _ = std::fs::write(dir.join(format!("{id}.js")), module);
+            if let Some(sc) = scene {
+                let _ = std::fs::write(dir.join("scene.json"), sc);
+            }
         }
     }
 }
@@ -333,8 +344,8 @@ mod zone_tests {
         }
         assert_eq!(zones["pip-wall"], vec!["pip1", "pip2", "pip3"]);
         assert_eq!(zones["paternoster-frame"], vec!["window"]);
-        assert_eq!(zones["credits"], vec!["video"]);
-        assert!(zones["wipe-divider"].is_empty() && zones["lower-third"].is_empty());
+        assert_eq!(zones["omp-credits"], vec!["video"]);
+        assert!(zones["omp-wipe-divider"].is_empty() && zones["omp-lower-third"].is_empty());
     }
 }
 

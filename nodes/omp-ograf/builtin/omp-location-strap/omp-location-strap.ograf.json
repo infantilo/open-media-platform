@@ -1,0 +1,71 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "omp-location-strap",
+  "version": "1.0.0",
+  "name": "OMP_Ortsmarke (LIVE · Ort)",
+  "description": "Kleine Marke oben links: LIVE-Kennung, Ort und optional Uhrzeit/Zusatz.",
+  "author": {
+    "name": "OpenMediaPlatform"
+  },
+  "main": "omp-location-strap.js",
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 1,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "tag": {
+        "type": "string",
+        "title": "Kennung",
+        "default": "LIVE"
+      },
+      "place": {
+        "type": "string",
+        "title": "Ort",
+        "default": "Berlin"
+      },
+      "extra": {
+        "type": "string",
+        "title": "Zusatz (z. B. Uhrzeit)",
+        "default": ""
+      },
+      "tagColor": {
+        "type": "string",
+        "title": "Kennungsfarbe",
+        "default": "#d90012",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      },
+      "bgColor": {
+        "type": "string",
+        "title": "Hintergrund",
+        "default": "#101826",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      },
+      "textColor": {
+        "type": "string",
+        "title": "Textfarbe",
+        "default": "#ffffff",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      }
+    }
+  },
+  "renderRequirements": [
+    {
+      "resolution": {
+        "width": {
+          "ideal": 1920
+        },
+        "height": {
+          "ideal": 1080
+        }
+      },
+      "frameRate": {
+        "ideal": 25
+      }
+    }
+  ]
+}

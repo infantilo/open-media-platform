@@ -1,0 +1,73 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "omp-ticker",
+  "version": "1.0.0",
+  "name": "OMP_Newsticker (Laufband)",
+  "description": "Laufband am unteren Rand mit Label; Text läuft endlos von rechts nach links. Mehrere Meldungen mit Trennzeichen „  •  “ im Textfeld.",
+  "author": {
+    "name": "OpenMediaPlatform"
+  },
+  "main": "omp-ticker.js",
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 1,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "label": {
+        "type": "string",
+        "title": "Label",
+        "default": "NEWS"
+      },
+      "text": {
+        "type": "string",
+        "title": "Laufschrift",
+        "default": "Erste Meldung  •  Zweite Meldung  •  Dritte Meldung"
+      },
+      "speed": {
+        "type": "integer",
+        "title": "Geschwindigkeit (Sekunden je 100 Zeichen)",
+        "default": 14,
+        "minimum": 2,
+        "maximum": 120
+      },
+      "labelColor": {
+        "type": "string",
+        "title": "Labelfarbe",
+        "default": "#d90012",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      },
+      "bgColor": {
+        "type": "string",
+        "title": "Hintergrund",
+        "default": "#101826",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      },
+      "textColor": {
+        "type": "string",
+        "title": "Textfarbe",
+        "default": "#ffffff",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      }
+    }
+  },
+  "renderRequirements": [
+    {
+      "resolution": {
+        "width": {
+          "ideal": 1920
+        },
+        "height": {
+          "ideal": 1080
+        }
+      },
+      "frameRate": {
+        "ideal": 25
+      }
+    }
+  ]
+}

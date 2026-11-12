@@ -1,0 +1,137 @@
+{
+  "format": "omp-ograf-scene/1",
+  "width": 1920,
+  "height": 1080,
+  "elements": [
+    {
+      "id": "r1",
+      "kind": "rect",
+      "name": "Hintergrund",
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "{{bgColor}}",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fade",
+          "ms": 500,
+          "delay": 0,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t2",
+      "kind": "text",
+      "name": "Titel",
+      "x": 115,
+      "y": 330,
+      "w": 1690,
+      "h": 250,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{title}}",
+      "font": "system-ui, sans-serif",
+      "size": 124,
+      "weight": 800,
+      "color": "{{textColor}}",
+      "align": "center",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fade",
+          "ms": 500,
+          "delay": 150,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "r3",
+      "kind": "rect",
+      "name": "Linie",
+      "x": 833,
+      "y": 610,
+      "w": 254,
+      "h": 9,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "{{accentColor}}",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fade",
+          "ms": 500,
+          "delay": 250,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t4",
+      "kind": "text",
+      "name": "Untertitel",
+      "x": 154,
+      "y": 650,
+      "w": 1612,
+      "h": 100,
+      "rotation": 0,
+      "opacity": 0.85,
+      "text": "{{subtitle}}",
+      "font": "system-ui, sans-serif",
+      "size": 50,
+      "weight": 500,
+      "color": "{{textColor}}",
+      "align": "center",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fade",
+          "ms": 500,
+          "delay": 350,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "omp-credits",
+  "version": "1.0.0",
+  "name": "OMP_Abspann (Squeeze-back)",
+  "description": "Abspann am Event-Beginn: Video beginnt gesqueezt, links erscheinen Regie, Redaktion, Produktionsjahr und Sponsor-Logos, nach der Dauer (Standard 10 s) zieht das Video wieder auf Vollbild. Fenster = Zone „video“; im Panel „Layout-Kopplung“ als „Bild im Fenster“ mit dem Mischer koppeln. Als Child Event: Beginn relativ zum Start, Verzug 0, Dauer = Dauer der Vorlage. Kein OGraf-Standard: nur die Zone ist eine Erweiterung.",
+  "author": {
+    "name": "OpenMediaPlatform"
+  },
+  "v_omp_zones": [
+    {
+      "id": "video",
+      "name": "Video"
+    }
+  ],
+  "main": "omp-credits.js",
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 1,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "duration": {
+        "type": "integer",
+        "title": "Dauer bis Vollbild (ms)",
+        "default": 10000,
+        "minimum": 2000,
+        "maximum": 120000
+      },
+      "title": {
+        "type": "string",
+        "title": "Titel",
+        "default": ""
+      },
+      "directorLabel": {
+        "type": "string",
+        "title": "Beschriftung Regie",
+        "default": "Regie"
+      },
+      "director": {
+        "type": "string",
+        "title": "Regie",
+        "default": ""
+      },
+      "editorLabel": {
+        "type": "string",
+        "title": "Beschriftung Redaktion",
+        "default": "Redaktion"
+      },
+      "editor": {
+        "type": "string",
+        "title": "Redaktion",
+        "default": ""
+      },
+      "yearLabel": {
+        "type": "string",
+        "title": "Beschriftung Jahr",
+        "default": "Produktionsjahr"
+      },
+      "year": {
+        "type": "string",
+        "title": "Produktionsjahr",
+        "default": ""
+      },
+      "extra": {
+        "type": "string",
+        "title": "Zusatzzeilen (z. B. Produktion, Förderer)",
+        "default": ""
+      },
+      "logos": {
+        "type": "string",
+        "title": "Sponsor-Logos (Adressen oder Dateien im Paket, durch Komma getrennt)",
+        "default": ""
+      },
+      "expandMs": {
+        "type": "integer",
+        "title": "Dauer des Aufziehens (ms)",
+        "default": 1100,
+        "minimum": 100,
+        "maximum": 5000
+      },
+      "bgColor": {
+        "type": "string",
+        "title": "Hintergrund",
+        "default": "#0b1020",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      },
+      "accentColor": {
+        "type": "string",
+        "title": "Akzentfarbe",
+        "default": "#d90012",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      }
+    }
+  },
+  "renderRequirements": [
+    {
+      "resolution": {
+        "width": {
+          "ideal": 1920
+        },
+        "height": {
+          "ideal": 1080
+        }
+      },
+      "frameRate": {
+        "ideal": 25
+      }
+    }
+  ]
+}

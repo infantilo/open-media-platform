@@ -1,0 +1,71 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "omp-next-up",
+  "version": "1.0.0",
+  "name": "OMP_Gleich / Danach",
+  "description": "Hinweis auf die nächste Sendung: Label (z. B. DANACH), Titel und Uhrzeit, unten rechts.",
+  "author": {
+    "name": "OpenMediaPlatform"
+  },
+  "main": "omp-next-up.js",
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+  "stepCount": 1,
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "label": {
+        "type": "string",
+        "title": "Label",
+        "default": "DANACH"
+      },
+      "title": {
+        "type": "string",
+        "title": "Titel",
+        "default": "Nächste Sendung"
+      },
+      "time": {
+        "type": "string",
+        "title": "Uhrzeit",
+        "default": ""
+      },
+      "accentColor": {
+        "type": "string",
+        "title": "Akzentfarbe",
+        "default": "#d90012",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      },
+      "bgColor": {
+        "type": "string",
+        "title": "Hintergrund",
+        "default": "#101826",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      },
+      "textColor": {
+        "type": "string",
+        "title": "Textfarbe",
+        "default": "#ffffff",
+        "gddType": "color-rrggbb",
+        "pattern": "^#[0-9a-f]{6}$"
+      }
+    }
+  },
+  "renderRequirements": [
+    {
+      "resolution": {
+        "width": {
+          "ideal": 1920
+        },
+        "height": {
+          "ideal": 1080
+        }
+      },
+      "frameRate": {
+        "ideal": 25
+      }
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "format": "omp-ograf-scene/1",
+  "width": 1920,
+  "height": 1080,
+  "elements": [
+    {
+      "id": "r1",
+      "kind": "rect",
+      "name": "Label-Fläche",
+      "x": 77,
+      "y": 890,
+      "w": 360,
+      "h": 100,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "{{labelColor}}",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fromBottom",
+          "ms": 500,
+          "delay": 0,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "r2",
+      "kind": "rect",
+      "name": "Text-Fläche",
+      "x": 437,
+      "y": 890,
+      "w": 1406,
+      "h": 100,
+      "rotation": 0,
+      "opacity": 1,
+      "fill": "{{bgColor}}",
+      "radius": 0,
+      "stroke": "",
+      "strokeW": 0,
+      "anim": {
+        "in": {
+          "type": "fromBottom",
+          "ms": 500,
+          "delay": 0,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t3",
+      "kind": "text",
+      "name": "Label",
+      "x": 77,
+      "y": 890,
+      "w": 360,
+      "h": 100,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{label}}",
+      "font": "system-ui, sans-serif",
+      "size": 40,
+      "weight": 800,
+      "color": "#ffffff",
+      "align": "center",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromBottom",
+          "ms": 500,
+          "delay": 100,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    },
+    {
+      "id": "t4",
+      "kind": "text",
+      "name": "Schlagzeile",
+      "x": 477,
+      "y": 890,
+      "w": 1330,
+      "h": 100,
+      "rotation": 0,
+      "opacity": 1,
+      "text": "{{text}}",
+      "font": "system-ui, sans-serif",
+      "size": 46,
+      "weight": 700,
+      "color": "{{textColor}}",
+      "align": "left",
+      "valign": "middle",
+      "lineHeight": 1.2,
+      "padding": 0,
+      "autofit": true,
+      "minSize": 16,
+      "anim": {
+        "in": {
+          "type": "fromBottom",
+          "ms": 500,
+          "delay": 150,
+          "ease": "ease-out"
+        },
+        "out": {
+          "type": "fade",
+          "ms": 300,
+          "delay": 0,
+          "ease": "ease-in"
+        }
+      }
+    }
+  ]
+}
