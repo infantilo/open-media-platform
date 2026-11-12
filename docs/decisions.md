@@ -30700,3 +30700,17 @@ LDAP-Bind“ aus 2026-07-10).
 - **Bewertung:** Streuung des Medians 7,4 % (< 10 %, Kriterium aus 98.0 erfüllt). Der **p99 streut stark** (10–18 ms) und ist auf dieser VM **nicht belastbar**; das Plan-Kriterium „p99 +0,5 ms“ ist hier nicht prüfbar. Verbindliche p95/p99-Werte nur von einem echten Host (.60/.61), und nur Vorher/Nachher im selben Lauf. Der Median ist als Abbruchkriterium (+0,1 ms = 100 µs) hier nutzbar: Die Streuung beträgt nur etwa ±8 µs.
 - **Nicht erhoben:** Ausgangswerte „Player→Mischer→Leser“ und Zeitcode-/A-V-Versatz (`tc-offset`, `av-marker`). Beides braucht eigene Testinstanzen über den laufenden Orchestrator, der echte Flows des Nutzers fährt; dort ist erst nach Absprache zu messen (CPU schonen).
 - **Offen aus dem Plan:** E1 (Abbruchgrenzen) nach echter Hostmessung anpassen.
+
+### Nachtrag 98.0: Ausgangswerte Player→Mischer (Testinstanzen, 2026-11-12)
+
+- **Werkzeug:** `tools/latency-baseline/measure.py` (neu): startet „LB Player“ (`omp-channel-player`) und „LB Mixer“ (`omp-video-mixer-me`) über den Orchestrator, spielt den Zählerclip (`tools/tc-offset/make-clip.sh`, 720p25), schneidet Player→PGM und misst je Lauf mit der Sonde (Live-Modus) am Player-Ausgang und am Mischer-PGM; CPU-Ticks und Kontextwechsel beider Nodes aus `/proc/<pid>`. Instanzen werden am Ende gelöscht (geprüft: Instanzliste leer, keine `omp-probe-*` in `/dev/shm`). Die Sonde liest hier nur an eigenen Testflows.
+- **Ergebnis** (Entwicklungs-VM, 3 × 10 s, `nice 10`, je ca. 250 Samples, 0 behind, 0 Timeouts):
+
+  | Messpunkt | Median µs (L1/L2/L3) | Streuung Median | p95 µs | p99 µs |
+  |---|---|---|---|---|
+  | Player-Ausgang | 106,6 / 120,9 / 97,3 | **21,8 %** | 2,1–3,8 ms | 11–16 ms |
+  | Mischer-PGM | 90,6 / 89,7 / 103,7 | **14,8 %** | 1,3–1,6 ms | 4,9–8,8 ms |
+
+  CPU je Node über 10 s: Player 918–1053 Ticks, Mischer 909–1005 Ticks (≈ 9–10 s CPU-Zeit, also je etwa ein Kern; Tick = 10 ms). Kontextwechsel je Node 20–25 freiwillig, 0–2 unfreiwillig.
+- **Bewertung gegen das 98.0-Kriterium (Streuung Median < 10 %):** am Live-Flow **nicht erfüllt** (21,8 % / 14,8 %), im Eigenflow erfüllt (7,4 %). Ursache vermutlich die CPU-Last der Nodes auf der VM (jeweils ein ganzer Kern). Absolut sind das nur ±10 µs bei 90–120 µs Median. Das Abbruchkriterium „Median +0,1 ms“ bleibt daher auf der VM mit grober Auflösung nutzbar (Streuung ±15 µs < 100 µs), aber die 10-%-Vorgabe an die Sonde ist nur für `--self` belegt. Für Vorher/Nachher-Vergleiche: pro Seite mindestens 3 Läufe, Median der Mediane, Entscheidung erst bei Abweichung > 50 µs; belastbarer auf einem echten Host.
+- **Nicht gemessen:** Zeitcode↔Bild-Versatz (`tools/tc-offset/measure.py`) und A/V-Versatz (`av-marker`); der Zeitcodetest startet `cargo test` und belastet die VM zusätzlich, daher erst vor dem ersten [S]-Schritt, nicht jetzt.
