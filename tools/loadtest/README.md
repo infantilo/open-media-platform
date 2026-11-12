@@ -23,3 +23,11 @@ nice python3 media.py cleanup; python3 cleanup.py
 ```
 
 `run.py`/`media.py` (Python, GIL) sind ab ~100 Clients selbst der Engpass; für belastbare Zahlen `gen.go` nehmen.
+
+## Registry-Poll mit vielen Nodes (2026-11-12)
+
+```
+go build -o /tmp/fakenodes tools/loadtest/fakenodes.go && nice /tmp/fakenodes -n 500   # simulierte Nodes (Heartbeat bis SIGTERM)
+curl -s localhost:8000/metrics | grep -E 'omp_registry_(nodes|poll_duration)'
+```
+Die simulierten Nodes erscheinen kurz als offline/neu im UI und lösen SSE-Ereignisse aus; danach per SIGTERM beenden (meldet ab).
