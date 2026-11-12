@@ -70,6 +70,7 @@ import {
   slotUtilization,
   startOfDay,
   type Timeline,
+  dragFloor,
 } from "./scheduler-logic.ts";
 
 // Definition hier bewusst als "unknown-durchgereichtes" Objekt typisiert
@@ -131,6 +132,15 @@ function toDatetimeLocalValue(iso: string): string {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// Mauszeiger über einem Balken: Randbereich = Anfang/Ende verschieben (ew-resize), sonst ganzen Balken verschieben (grab).
+// Gleiche Randbreite und gleiche Voraussetzungen (Start bzw. Stop vorhanden) wie die Moduswahl in #startDrag.
+function barCursor(el: HTMLElement, clientX: number, hasStart: boolean, hasStop: boolean): string {
+  const r = el.getBoundingClientRect();
+  if (hasStart && clientX - r.left <= EDGE_PX) return "ew-resize";
+  if (hasStop && r.right - clientX <= EDGE_PX) return "ew-resize";
+  return "grab";
 }
 
 function snap(minutes: number): number {
@@ -1201,9 +1211,10 @@ class SchedulerView extends HTMLElement {
     const contRight = fullRight > totalMinutes;
     // Tageswechsel innerhalb des Balkens (Stop an einem späteren Tag als Start).
     const dayShift = bar.start && bar.stop ? bar.stop.dateIndex - bar.start.dateIndex : 0;
-    // Ziehen nur bei Balken, die vollständig im Ausschnitt liegen und den Tag
-    // nicht wechseln — für alles andere bleibt der Doppelklick-Editor.
-    const draggable = !contLeft && !contRight && dayShift === 0;
+    // Ziehen geht bei jedem Balken, auch bei solchen über Mitternacht oder über den Rand des Ausschnitts hinaus (Nutzerfund
+    // 2026-11-12: ein über Mitternacht geschobener Event ließ sich nicht mehr bewegen). Gerechnet wird mit der vollen, unbeschnittenen
+    // Lage (fullLeft/fullRight); Anfasser gibt es nur an echten Rändern (nicht am abgeschnittenen Rand).
+    const draggable = true;
 
     const el = document.createElement("div");
     const isPartial = !bar.start || !bar.stop;
@@ -1288,8 +1299,16 @@ class SchedulerView extends HTMLElement {
     el.addEventListener("pointerenter", () => (delBtn.style.opacity = "1"));
     el.addEventListener("pointerleave", () => (delBtn.style.opacity = "0.6"));
 
+    // Mauszeiger: an den Rändern (Anfang/Ende verschieben) ein Pfeil links-rechts, in der Mitte (ganzen Balken verschieben) die Hand.
+    // Nur im Ruhezustand; während des Ziehens setzt #startDrag den Zeiger selbst.
+    if (draggable) {
+      el.addEventListener("pointermove", (ev) => {
+        if (this.#dragging) return;
+        el.style.cursor = barCursor(el, ev.clientX, !!bar.start && !contLeft, !!bar.stop && !contRight);
+      });
+    }
     el.addEventListener("pointerdown", (ev) => {
-      if (draggable) this.#startDrag(ev, el, wf, bar, dateCount, totalMinutes, left, right);
+      if (draggable) this.#startDrag(ev, el, wf, bar, dateCount, totalMinutes, fullLeft, fullRight, contLeft, contRight);
       else ev.stopPropagation(); // sonst startet das Neu-Ziehen der Spur unter dem Balken
     });
     // Doppelklick: exakte HH:MM-Eingabe wie im alten Formular
@@ -1429,6 +1448,8 @@ class SchedulerView extends HTMLElement {
     totalMinutes: number,
     originalLeft: number,
     originalRight: number,
+    contLeft: boolean,
+    contRight: boolean,
   ) {
     const track = el.parentElement;
     if (!track) return;
@@ -1439,7 +1460,11 @@ class SchedulerView extends HTMLElement {
     const elRect = el.getBoundingClientRect();
     const offsetInBarPx = ev.clientX - elRect.left;
     const mode: DragMode =
-      offsetInBarPx <= EDGE_PX && bar.start ? "resize-start" : elRect.right - ev.clientX <= EDGE_PX && bar.stop ? "resize-stop" : "move";
+      offsetInBarPx <= EDGE_PX && bar.start && !contLeft
+        ? "resize-start"
+        : elRect.right - ev.clientX <= EDGE_PX && bar.stop && !contRight
+          ? "resize-stop"
+          : "move";
 
     // "daily" darf beim Ziehen den Tag nicht wechseln (gilt für jeden
     // Tag identisch, ein Tageswechsel wäre bedeutungslos) — auf das
@@ -1447,8 +1472,16 @@ class SchedulerView extends HTMLElement {
     const lockedDateIndex = bar.start?.schedule.kind === "daily" ? Math.floor(originalLeft / DAY_MINUTES) : null;
 
     this.#dragging = true;
-    el.style.cursor = "grabbing";
+    el.style.cursor = mode === "move" ? "grabbing" : "ew-resize";
     el.setPointerCapture(ev.pointerId);
+
+    // Früheste erlaubte Lage ist „jetzt“: nichts darf in die Vergangenheit verschoben werden. Liegt ein Rand schon davor (laufender oder
+    // vergangener Balken), darf er nur nicht noch früher werden. Liegt „jetzt“ links vom sichtbaren Ausschnitt, gilt keine Grenze;
+    // liegt der Ausschnitt ganz in der Vergangenheit, bleibt jeder Rand mindestens da, wo er ist.
+    const nowAbs = this.#nowAbsMinutes();
+    const floorFor = (original: number) => dragFloor(original, nowAbs);
+    const minStart = floorFor(originalLeft);
+    const minStop = floorFor(originalRight);
 
     const pxPerMinute = trackRect.width / totalMinutes;
     let currentLeft = originalLeft;
@@ -1464,27 +1497,37 @@ class SchedulerView extends HTMLElement {
       const deltaMinutes = snap((moveEv.clientX - ev.clientX) / pxPerMinute);
       if (mode === "move") {
         const duration = originalRight - originalLeft;
-        let newLeft = clampToLockedDay(originalLeft + deltaMinutes);
-        newLeft = Math.min(newLeft, totalMinutes - duration);
+        // Der Start bleibt im sichtbaren Ausschnitt bzw. (bei "daily") im Ursprungstag, das ENDE darf hinter Mitternacht oder hinter den
+        // Ausschnitt fallen — dann liegt der Stop am Folgetag (Nutzerwunsch 2026-11-12). Ein Balken, der schon vor dem Ausschnitt
+        // beginnt (Fortsetzung vom Vortag), darf mit seinem Start auch links davon bleiben.
+        const dayLo = lockedDateIndex === null ? Number.NEGATIVE_INFINITY : lockedDateIndex * DAY_MINUTES;
+        const latestStart = lockedDateIndex === null ? totalMinutes - SNAP_MINUTES : lockedDateIndex * DAY_MINUTES + DAY_MINUTES - SNAP_MINUTES;
+        let newLeft = Math.max(originalLeft + deltaMinutes, minStart, dayLo);
+        newLeft = Math.min(newLeft, latestStart);
         currentLeft = newLeft;
         currentRight = newLeft + duration;
       } else if (mode === "resize-start") {
-        currentLeft = Math.min(clampToLockedDay(originalLeft + deltaMinutes), originalRight - MIN_DURATION_MINUTES);
+        currentLeft = Math.min(Math.max(clampToLockedDay(originalLeft + deltaMinutes), minStart), originalRight - MIN_DURATION_MINUTES);
       } else {
-        currentRight = Math.max(clampToLockedDay(originalRight + deltaMinutes), originalLeft + MIN_DURATION_MINUTES);
+        currentRight = Math.max(clampToLockedDay(originalRight + deltaMinutes), originalLeft + MIN_DURATION_MINUTES, minStop);
       }
-      el.style.left = `${(currentLeft / totalMinutes) * 100}%`;
-      el.style.width = `${((currentRight - currentLeft) / totalMinutes) * 100}%`;
+      // Beschnitten an den Rändern des Ausschnitts; dort wie sonst bei Balken über Tageswechsel gestrichelter, offener Rand.
+      const shownL = Math.max(0, currentLeft);
+      const shownR = Math.min(totalMinutes, currentRight);
+      el.style.left = `${(shownL / totalMinutes) * 100}%`;
+      el.style.width = `${(Math.max(0, shownR - shownL) / totalMinutes) * 100}%`;
+      el.style.borderLeftStyle = currentLeft < 0 ? "dashed" : "solid";
+      el.style.borderRightStyle = currentRight > totalMinutes ? "dashed" : "solid";
       // Live-Vorschau der Ressourcen für die neue Position.
       this.#preview = { wfId: wf.id, schedules: this.#dragSchedules(wf, bar, currentLeft, currentRight, mode) };
       this.#repaintResources();
     };
 
-    const onUp = () => {
+    const onUp = (upEv: PointerEvent) => {
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
       el.removeEventListener("pointercancel", onUp);
-      el.style.cursor = "grab";
+      el.style.cursor = barCursor(el, upEv.clientX, !!bar.start && !contLeft, !!bar.stop && !contRight);
       this.#dragging = false;
       this.#preview = null;
       // Ein reiner Klick (auch die zwei Klicks eines Doppelklicks für
@@ -1501,6 +1544,15 @@ class SchedulerView extends HTMLElement {
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);
     el.addEventListener("pointercancel", onUp);
+  }
+
+  // „Jetzt“ in Minuten ab Mitternacht des ersten sichtbaren Tags (wie die Balken-Koordinaten); negativ, wenn der Ausschnitt in der
+  // Zukunft liegt, größer als der Ausschnitt, wenn er in der Vergangenheit liegt. Kalendertage gezählt (Sommerzeit-fest).
+  #nowAbsMinutes(): number {
+    const first = this.#visibleDates()[0] ?? new Date();
+    const now = new Date();
+    const dayDiff = Math.round((startOfDay(now).getTime() - startOfDay(first).getTime()) / 86_400_000);
+    return dayDiff * DAY_MINUTES + now.getHours() * 60 + now.getMinutes();
   }
 
   // Abfrage nach dem Ziehen (Verschieben/Verlängern/Verkürzen): zeigt alte und neue Zeit samt neu entstehender Engpässe;
@@ -1545,18 +1597,20 @@ class SchedulerView extends HTMLElement {
 
     const applyTo = (inst: Instance | undefined, absMinutes: number) => {
       if (!inst) return;
-      const dateIndex = Math.max(0, Math.min(dates.length - 1, Math.floor(absMinutes / DAY_MINUTES)));
-      const minutesOfDay = absMinutes - dateIndex * DAY_MINUTES;
+      // Tagesversatz ab dem ersten sichtbaren Tag, auch davor und dahinter (Ende nach Mitternacht des letzten Tags, Start am Vortag):
+      // der Tag wird per Kalenderrechnung gezählt statt auf einen sichtbaren Tag zu klemmen.
+      const dayOffset = Math.floor(absMinutes / DAY_MINUTES); // auch negativ: Vortag des ersten sichtbaren Tags
+      const minutesOfDay = absMinutes - dayOffset * DAY_MINUTES;
       const target = schedules.find((s) => s.id === inst.schedule.id);
       if (!target) return;
+      const date = addDays(dates[0], dayOffset);
       if (target.kind === "once") {
-        const date = dates[dateIndex];
         const at = new Date(date);
         at.setHours(0, minutesOfDay, 0, 0);
         target.at = at.toISOString();
       } else {
         target.timeOfDay = fmtMinutes(minutesOfDay);
-        if (target.kind === "weekly") target.weekday = dates[dateIndex].getDay();
+        if (target.kind === "weekly") target.weekday = date.getDay();
       }
     };
 

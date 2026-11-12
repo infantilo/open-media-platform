@@ -6,6 +6,7 @@ import {
   runActiveAt,
   AUTO_LANE,
   computeTimeline,
+  dragFloor,
   findBottlenecks,
   isOver,
   laneCapacity,
@@ -465,4 +466,13 @@ Deno.test("Laufender Workflow zählt auf dem tatsächlichen Host bis zum Stop; d
   // Am nächsten Tag beginnt ein neuer Lauf → Prognose (w1 wieder frei platziert)
   const tl2 = computeTimeline(m, scheds, slotsOfDay(at(2026, 10, 3, 0)), 30, now);
   assertEquals(tl2.get(AUTO_LANE)![19].cpuCores, 4);
+});
+
+Deno.test("dragFloor: früheste Lage ist jetzt, bereits Vergangenes nur nicht noch früher", () => {
+  assertEquals(dragFloor(600, 480), 480); // Balken in der Zukunft: nicht vor jetzt
+  assertEquals(dragFloor(300, 480), 300); // Balken hat schon begonnen: nicht noch früher als er ist
+  assertEquals(dragFloor(600, 600), 600);
+  assertEquals(dragFloor(600, -1440 + 30), -1410); // Ausschnitt in der Zukunft: jetzt liegt am Vortag, Grenze gilt trotzdem
+  assertEquals(dragFloor(600, Number.MAX_SAFE_INTEGER), 600); // Ausschnitt in der Vergangenheit: nicht früher als der Balken
+  assertEquals(dragFloor(-120, 480), -120); // Fortsetzung vom Vortag: Start links vom Ausschnitt bleibt erlaubt
 });

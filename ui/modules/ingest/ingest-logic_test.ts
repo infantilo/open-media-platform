@@ -164,3 +164,24 @@ Deno.test("dragResult: einrasten, Mindestdauer, laufend nicht in die Vergangenhe
   const run = { ...j, state: "recording" };
   assertEquals(dragResult(run, "end", -50 * 60000, t("2026-11-11T10:40:00Z")).end, t("2026-11-11T10:41:00Z"));
 });
+
+Deno.test("dragResult: Start nie vor jetzt, bereits Verspätetes nur nicht noch früher", () => {
+  const MIN = 60000, now = Date.parse("2026-11-12T15:14:37Z");
+  const nowCeil = Date.parse("2026-11-12T15:15:00Z");
+  const job = { plannedStart: "2026-11-12T17:00:00Z", plannedEnd: "2026-11-12T18:00:00Z", state: "scheduled" };
+  // Block weit nach links: Start auf „jetzt“ (nächste Minute), Dauer bleibt
+  const mv = dragResult(job, "move", -9 * 3600000, now);
+  assertEquals(mv.start, nowCeil);
+  assertEquals(mv.end - mv.start, 60 * MIN);
+  // Start weit nach links: ebenfalls nicht vor jetzt, Ende bleibt
+  const st = dragResult(job, "start", -9 * 3600000, now);
+  assertEquals(st.start, nowCeil);
+  assertEquals(st.end, Date.parse(job.plannedEnd));
+  // nach rechts unbeeinflusst
+  assertEquals(dragResult(job, "move", 3600000, now).start, Date.parse("2026-11-12T18:00:00Z"));
+  // verspäteter Auftrag (Start liegt schon vor jetzt): nicht noch früher
+  const late = { ...job, plannedStart: "2026-11-12T15:00:00Z", plannedEnd: "2026-11-12T16:00:00Z" };
+  assertEquals(dragResult(late, "move", -3600000, now).start, Date.parse(late.plannedStart));
+  // Ende eines geplanten Auftrags ist von der Grenze nicht betroffen
+  assertEquals(dragResult(job, "end", 3600000, now).end, Date.parse("2026-11-12T19:00:00Z"));
+});

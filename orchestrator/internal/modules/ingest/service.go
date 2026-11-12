@@ -502,6 +502,12 @@ func (s *Service) RescheduleJob(ctx context.Context, id, actor string, start tim
 		s.audit(actor, id, "extended", map[string]any{"end": end})
 		return Decision{Admit: true}, out, nil
 	}
+	// Nichts in die Vergangenheit verschieben (die Oberfläche begrenzt das schon beim Ziehen). Ein Start, der schon vor „jetzt“
+	// liegt (verspäteter Auftrag), darf bleiben oder später werden, nur nicht noch früher. Toleranz: die Zeit, die eine
+	// Bestätigung dauern darf (fünf Minuten wie die Rastung beim Ziehen).
+	if now := s.now(); start.Before(now.Add(-5*time.Minute)) && start.Before(cur.PlannedStart) {
+		return Decision{}, Job{}, &ValidationError{Problems: []string{"Der neue Start liegt in der Vergangenheit — früheste Zeit ist jetzt"}}
+	}
 	_, err = s.St.Mutate(ctx, id, expectedRev, "verschoben durch "+actor, func(x *Job) (map[string]any, error) {
 		if x.State != StBlocked && x.State != StScheduled && x.State != StWaiting {
 			return nil, fmt.Errorf("%w: Zustand %s", ErrState, x.State)

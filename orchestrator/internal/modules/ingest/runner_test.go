@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -646,6 +647,25 @@ func TestRescheduleReadmits(t *testing.T) {
 	d, g, err := e.svc.RescheduleJob(ctx, b.ID, "tester", a.PlannedEnd, 600, -1)
 	if err != nil || !d.Admit || g.State != StScheduled || !g.PlannedStart.Equal(a.PlannedEnd) {
 		t.Fatalf("%v %+v %+v", err, d, g)
+	}
+}
+
+// Nichts in die Vergangenheit verschieben: früheste Zeit ist jetzt (kleine Toleranz für die Dauer einer Bestätigung);
+// ein schon verspäteter Auftrag darf bleiben, nur nicht noch früher werden.
+func TestRescheduleIntoThePastIsRefused(t *testing.T) {
+	e := newIEnv(t, nil)
+	ctx := context.Background()
+	j := e.adhoc(t, 10, 30, nil) // Start in 10 Minuten
+	now := *e.clock
+	if _, _, err := e.svc.RescheduleJob(ctx, j.ID, "tester", now.Add(-10*time.Minute), 1800, -1); err == nil || !strings.Contains(err.Error(), "Vergangenheit") {
+		t.Fatalf("Start vor jetzt muss abgelehnt werden: %v", err)
+	}
+	// knapp vor jetzt (innerhalb der Toleranz) und nach jetzt gehen
+	if _, _, err := e.svc.RescheduleJob(ctx, j.ID, "tester", now.Add(-2*time.Minute), 1800, -1); err != nil {
+		t.Fatalf("innerhalb der Toleranz: %v", err)
+	}
+	if _, _, err := e.svc.RescheduleJob(ctx, j.ID, "tester", now.Add(20*time.Minute), 1800, -1); err != nil {
+		t.Fatalf("Zukunft: %v", err)
 	}
 }
 

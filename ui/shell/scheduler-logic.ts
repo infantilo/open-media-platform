@@ -22,6 +22,15 @@ export interface Schedule {
 
 export const DAY_MINUTES = 1440;
 
+/**
+ * Früheste Lage eines Balkenrands beim Ziehen (Minuten ab Mitternacht des ersten sichtbaren Tags): „jetzt“, nie früher.
+ * Liegt der Rand schon vor „jetzt“ (laufender oder vergangener Balken), darf er nur nicht noch früher werden.
+ * Beide Werte dürfen negativ sein (Vortag des Ausschnitts) oder über den Ausschnitt hinausgehen.
+ */
+export function dragFloor(original: number, nowAbs: number): number {
+  return Math.min(original, nowAbs);
+}
+
 export function startOfDay(d: Date): Date {
   const r = new Date(d);
   r.setHours(0, 0, 0, 0);

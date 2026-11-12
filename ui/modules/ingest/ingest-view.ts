@@ -331,6 +331,9 @@ class IngestView extends HTMLElement {
     let cur = dragResult(job, mode, 0, Date.now());
     let dragging = false;
     this.#dragging = true;
+    // Mauszeiger während des Ziehens (auch außerhalb des Balkens): Hand für den ganzen Balken, Pfeil links-rechts für einen Rand.
+    const prevCursor = document.body.style.cursor;
+    document.body.style.cursor = mode === "move" ? "grabbing" : "ew-resize";
     const move = (e: PointerEvent) => {
       if (!dragging && Math.abs(e.clientX - x0) < 4) return;
       dragging = true;
@@ -346,6 +349,7 @@ class IngestView extends HTMLElement {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
+      document.body.style.cursor = prevCursor;
       this.#dragging = false;
       if (!dragging) return;
       void this.#applyDrag(job, mode, cur);

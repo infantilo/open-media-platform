@@ -369,8 +369,8 @@ export function dragModes(state: string): DragMode[] {
 const snapTo = (t: number, snap: number): number => Math.round(t / snap) * snap;
 
 /**
- * Neue Zeiten nach dem Ziehen um deltaMs. Der gezogene Rand rastet auf `snap` ein; die Dauer bleibt ≥ 1 min; bei laufenden
- * Aufnahmen liegt das Ende frühestens `nowMs` + 1 min (früher beenden = „Jetzt beenden“).
+ * Neue Zeiten nach dem Ziehen um deltaMs. Der gezogene Rand rastet auf `snap` ein; die Dauer bleibt ≥ 1 min; der Start liegt
+ * frühestens bei „jetzt“; bei laufenden Aufnahmen liegt das Ende frühestens `nowMs` + 1 min (früher beenden = „Jetzt beenden“).
  */
 export function dragResult(
   job: Pick<Job, "plannedStart" | "plannedEnd" | "state">,
@@ -383,11 +383,14 @@ export function dragResult(
   const e0 = Date.parse(job.plannedEnd);
   let start = s0;
   let end = e0;
+  // Früheste Lage des Starts ist „jetzt“ (auf die nächste volle Minute aufgerundet): nichts darf in die Vergangenheit geschoben
+  // werden. Liegt der Start schon davor (verspäteter Auftrag), darf er nur nicht noch früher werden.
+  const startFloor = Math.min(s0, Math.ceil(nowMs / 60000) * 60000);
   if (mode === "move") {
-    start = snapTo(s0 + deltaMs, snap);
+    start = Math.max(snapTo(s0 + deltaMs, snap), startFloor);
     end = start + (e0 - s0);
   } else if (mode === "start") {
-    start = Math.min(snapTo(s0 + deltaMs, snap), e0 - MIN_DURATION_MS);
+    start = Math.min(Math.max(snapTo(s0 + deltaMs, snap), startFloor), e0 - MIN_DURATION_MS);
   } else {
     end = Math.max(snapTo(e0 + deltaMs, snap), s0 + MIN_DURATION_MS);
     if (canAbort(job.state)) end = Math.max(end, nowMs + MIN_DURATION_MS);
