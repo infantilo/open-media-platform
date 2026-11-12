@@ -88,6 +88,26 @@
       ]
     },
     {
+      "key": "OMP_SOURCE_VIDEO_MARKER",
+      "i18n": { "en": {"label": "Sync marker (picture)", "description": "On: one white picture per second (aligned with the audio tick) for latency and A/V offset measurements. Use together with test picture \"black\" and audio \"ticks\".", "group": "Signal"} },
+      "label": "Sync-Marker (Bild)",
+      "type": "enum",
+      "description": "An: je Sekunde ein weißes Bild (zeitgleich zum Audio-Tick) für Latenz- und A/V-Versatzmessungen. Zusammen mit Testbild „black“ und Ton „ticks“ verwenden.",
+      "default": "0",
+      "group": "Signal",
+      "choices": [{"value": "0"}, {"value": "1"}]
+    },
+    {
+      "key": "OMP_SOURCE_AUDIO_WAVE",
+      "i18n": { "en": {"label": "Test tone", "description": "sine = continuous tone, ticks = one tick per second (sync marker), silence = silence.", "group": "Signal"} },
+      "label": "Testton",
+      "type": "enum",
+      "description": "sine = Dauerton, ticks = ein Tick je Sekunde (Sync-Marker), silence = Stille.",
+      "default": "sine",
+      "group": "Signal",
+      "choices": [{"value": "sine"}, {"value": "ticks"}, {"value": "silence"}]
+    },
+    {
       "key": "OMP_SOURCE_PREVIEW_PORT",
       "i18n": { "en": {"label": "Preview port", "description": "TCP port of the preview/level server. 0 = automatically a free port (recommended, several instances per host).", "group": "Network (ports)"} },
       "label": "Vorschau-Port",
@@ -1356,6 +1376,16 @@
     }
   ],
   "omp-audio-mixer": [
+    {
+      "key": "OMP_AUDIO_MIX_LATENCY_MS",
+      "i18n": { "en": {"label": "Mix wait time (ms)", "description": "Extra wait of the mixer for late input buffers. Lower = less latency, but too low causes audio dropouts (default 40). Measure with tools/through-latency and tools/.../audio_gap_probe.", "group": "Latency"} },
+      "label": "Misch-Wartezeit (ms)",
+      "type": "int",
+      "description": "Zusätzliche Wartezeit des Mischers auf verspätete Eingangspuffer. Kleiner = weniger Latenz, zu klein = Tonaussetzer (Standard 40). Mit tools/through-latency und audio_gap_probe messen.",
+      "group": "Latenz",
+      "min": 0,
+      "max": 500
+    },
     {
       "key": "OMP_AUDIO_MIXER_AUX_SLOTS",
       "i18n": { "en": {"label": "Aux/N-1 buses", "description": "Number of additional buses (only changeable at start).", "group": "Function"} },
