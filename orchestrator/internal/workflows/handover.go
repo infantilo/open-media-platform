@@ -17,10 +17,14 @@ import (
 )
 
 const (
-	// handoverWaitTimeout begrenzt das Warten; danach wird trotzdem umgezogen (wie ohne Übergabe-Schutz).
-	handoverWaitTimeout  = 25 * time.Second
 	handoverPollInterval = 250 * time.Millisecond
 )
+
+// handoverWaitTimeout begrenzt das Warten; danach wird trotzdem umgezogen (wie ohne Übergabe-Schutz). Die Frist muss
+// den längsten Weg eines Verbrauchers abdecken: der Tonmischer wartet bis 20 s auf die neue Quelle und hängt dann
+// Kanal für Kanal um (je bis 15 s). Mit den früheren 25 s endete die alte Instanz, während noch Kanäle an ihr hingen.
+// Ein Node, der fertig ist, beendet das Warten sofort — die Frist kostet nur im Fehlerfall Zeit.
+var handoverWaitTimeout = newDurVar(90 * time.Second)
 
 // senderPairs koppelt die Sender zweier Instanzen derselben Rolle: bevorzugt gleiches Format UND gleiches Label
 // (Label = Rolle + Index, bei jeder Instanz gleich), sonst der nächste freie Sender gleichen Formats. Die
@@ -79,7 +83,7 @@ func (s *Service) awaitHandover(wf Workflow, role, oldNodeID, newNodeID string) 
 		bases = append(bases, node.APIBaseURL)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), handoverWaitTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), handoverWaitTimeout.Load())
 	defer cancel()
 	for _, base := range bases {
 		if !s.waitHandoverIdle(ctx, base) {

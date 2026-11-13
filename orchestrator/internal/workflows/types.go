@@ -219,7 +219,17 @@ const DefaultConfirmWindowSeconds = 30
 type RolePlacementPolicy struct {
 	Escalation           string `json:"escalation,omitempty"`
 	ConfirmWindowSeconds int    `json:"confirmWindowSeconds,omitempty"`
+	// OnHostFailure (Kapitel 100 Punkt 2): was geschieht, wenn der Host dieser Rolle ausfällt und sie keinen
+	// Standby hat. "" = Systemvorgabe (OMP_HOST_FAILURE_RELOCATE, Standard: umziehen), "relocate" = auf einem
+	// anderen Host neu starten (Zustand aus der letzten Sicherung), "stay" = nichts tun, nur Alarm.
+	OnHostFailure string `json:"onHostFailure,omitempty"`
 }
+
+// Werte für RolePlacementPolicy.OnHostFailure.
+const (
+	HostFailureRelocate = "relocate"
+	HostFailureStay     = "stay"
+)
 
 // Connection ist ein Eintrag im Verbindungs-Template: Rolle→Rolle, nicht
 // Port→Port (ARCHITECTURE.md §6.2 wörtlich: "Rolle→Rolle, wird beim
@@ -437,6 +447,26 @@ type RoleRuntime struct {
 	// §7.2-Referenz "sichtbarer Status im UI"), beeinflusst kein
 	// Orchestrator-Verhalten selbst.
 	StandbyActive bool `json:"standbyActive,omitempty"`
+	// SeedRole: Name der Rolle, mit deren Rollen-Seed diese Instanz gestartet wurde, falls er vom Namen der Rolle
+	// abweicht, die sie gerade erfüllt (nach einer Standby-Übernahme bzw. einem neu aufgebauten Standby). Damit
+	// bekommt ein neu gestarteter Standby nie die NMOS-IDs der noch laufenden übernommenen Instanz.
+	SeedRole string `json:"seedRole,omitempty"`
+	// Umzugs-Journal (Kapitel 100 Punkt 7): MigratingTo ist die auf dem Zielhost gestartete, noch nicht
+	// umgeschaltete Instanz; MigratedFrom die nach dem Umschalten noch nicht gestoppte alte Instanz. Bricht der
+	// Orchestrator mitten im Umzug ab (Neustart, Führungswechsel), räumt reconcileMigrationJournal damit auf,
+	// statt eine der beiden unreferenziert weiterlaufen zu lassen. MigrationBy/-Nonce/-At: wer den Umzug führt.
+	MigratingTo    string      `json:"migratingTo,omitempty"`
+	MigratedFrom   *RuntimeRef `json:"migratedFrom,omitempty"`
+	MigrationBy    string      `json:"migrationBy,omitempty"`
+	MigrationNonce string      `json:"migrationNonce,omitempty"`
+	MigrationAt    *time.Time  `json:"migrationAt,omitempty"`
+}
+
+// RuntimeRef benennt eine Instanz samt Node und Host (Umzugs-Journal, s. RoleRuntime.MigratedFrom).
+type RuntimeRef struct {
+	InstanceID string `json:"instanceId"`
+	NodeID     string `json:"nodeId,omitempty"`
+	HostID     string `json:"hostId,omitempty"`
 }
 
 // ExportedWorkflow ist das Datei-Format für Kapitel 12 Teil 3

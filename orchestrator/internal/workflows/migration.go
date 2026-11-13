@@ -441,6 +441,14 @@ func (s *Service) MigrateRole(ctx context.Context, workflowID, role, targetHostI
 // zweites, noch selteneres Overtaking-Ereignis im exakt selben
 // Zeitfenster, kein regulärer Pfad.
 func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID, reason string) {
+	s.runMigration(workflowID, role, oldInstanceID, targetHostID, reason, false)
+}
+
+// runMigration ist executeMigration mit dem Sonderfall oldLost: der Host der alten Instanz ist ausgefallen
+// (hostloss.go). Dann gibt es nichts mehr zu erhalten — der Zustand kommt aus der letzten Sicherung, die neue Instanz
+// bekommt den Rollen-Seed (gleiche NMOS-IDs wie die verlorene, Verbraucher finden ihre Quelle von selbst wieder), es
+// gibt keinen Rücksprung, und der Stop der alten Instanz wird beim Launcher vorgemerkt, bis ihr Host wieder da ist.
+func (s *Service) runMigration(workflowID, role, oldInstanceID, targetHostID, reason string, oldLost bool) {
 	defer s.finishMigrationAttempt(oldInstanceID)
 
 	wf, ok := s.stillBacks(workflowID, role, oldInstanceID)
@@ -552,7 +560,12 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		}
 	}
 	roleEnv = s.withRoleHooks(roleEnv, wf.Definition, roleDef)
-	roleEnv = withRoleStateKey(roleEnv, wf.ID, roleDef.Name)
+	if oldLost {
+		roleEnv = withRoleSeed(roleEnv, wf.ID, seedRoleName(wf, role))
+		roleEnv[launcher.StateKeyEnv] = roleStateKey(wf.ID, roleDef.Name)
+	} else {
+		roleEnv = withRoleStateKey(roleEnv, wf.ID, roleDef.Name)
+	}
 	// D13-Fix (2026-08-20, s. ioPortExtraEnv-Doku in ioports.go): ohne
 	// dies startet die neue Instanz auf dem Zielhost mit dem eingebauten
 	// device-number-Default statt dem hier gerade neu geclaimten Port —
@@ -622,11 +635,26 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		}
 	}
 
-	// Schritt 2: auf ihre Registrierung warten.
+	// Umzugs-Journal, Teil 1: die neue Instanz an der (noch gültigen) alten Zuordnung vermerken. Bricht der
+	// Orchestrator ab, bevor umgeschaltet ist, wird sie beim nächsten Lauf wieder abgebaut.
+	s.journalMigration(workflowID, role, oldInstanceID, func(rt *RoleRuntime) { rt.MigratingTo = newInst.ID })
+	clearJournal := func() {
+		s.journalMigration(workflowID, role, oldInstanceID, func(rt *RoleRuntime) {
+			rt.MigratingTo, rt.MigrationBy, rt.MigrationNonce, rt.MigrationAt = "", "", "", nil
+		})
+	}
+
+	// Schritt 2: auf ihre Registrierung warten. Mit Rollen-Seed (oldLost) meldet sich die neue Instanz unter der
+	// Node-ID der verlorenen an — dort zählt allein die neue Instanz-ID.
+	excludeNodeID := oldNodeID
+	if oldLost {
+		excludeNodeID = ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
-	node, err := s.awaitFreshRegistration(ctx, newInst.ID, oldNodeID)
+	node, err := s.awaitFreshRegistration(ctx, newInst.ID, excludeNodeID)
 	cancel()
 	if err != nil {
+		clearJournal()
 		slog.Warn("workflows: executeMigration: new instance failed to register, stopping it and keeping old instance",
 			"workflow", workflowID, "role", role, "instance", newInst.ID, "error", err)
 		if stopErr := s.launcher.Stop(newInst.ID); stopErr != nil {
@@ -653,20 +681,31 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		return
 	}
 	wf = fresh
+	oldRuntime := wf.Runtime[role]
 
 	// Schritt 3: Betriebszustand von der noch laufenden ALTEN Instanz
 	// erfassen, BEVOR die Runtime unten mutiert wird — restoreOneRoleState
 	// löst danach gegen die NEUE Runtime auf (identisches Muster wie
-	// promoteStandby, s. dortige Doku).
-	senderToAlias := s.buildSenderAliasIndex(wf)
-	s.captureOneRoleState(wf, role, senderToAlias)
+	// promoteStandby, s. dortige Doku). Eine verlorene Instanz antwortet
+	// nicht mehr: dort gilt die letzte Sicherung.
+	if !oldLost {
+		senderToAlias := s.buildSenderAliasIndex(wf)
+		s.captureOneRoleState(wf, role, senderToAlias)
+	}
 	s.markUnrestored(wf.ID, role)
 
 	// Schritt 5 (Teil 1): Runtime auf die neue Instanz umschreiben und
 	// sofort committen — macht die neue Zuordnung zur DB-Wahrheit, bevor
 	// der langsamere Connections-Teil beginnt (gleicher früher-Commit-
-	// Grund wie promoteStandby).
-	wf.Runtime[role] = RoleRuntime{InstanceID: newInst.ID, NodeID: node.ID, HostID: targetHostID}
+	// Grund wie promoteStandby). Umzugs-Journal, Teil 2: die alte Instanz
+	// steht ab jetzt als "noch zu stoppen" an der neuen Zuordnung.
+	now := time.Now()
+	wf.Runtime[role] = RoleRuntime{
+		InstanceID: newInst.ID, NodeID: node.ID, HostID: targetHostID,
+		StandbyActive: oldRuntime.StandbyActive, SeedRole: oldRuntime.SeedRole,
+		MigratedFrom: &RuntimeRef{InstanceID: oldInstanceID, NodeID: oldRuntime.NodeID, HostID: oldRuntime.HostID},
+		MigrationBy:  s.identity, MigrationNonce: s.processNonce(), MigrationAt: &now,
+	}
 	wf.UpdatedAt = time.Now()
 	if err := s.store.UpdateRuntime(wf); err != nil {
 		// Die alte Instanz bleibt die gültige Zuordnung (nichts wurde gespeichert): die neue wieder abbauen, statt sie
@@ -678,6 +717,7 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		dropBinding(newInst.ID)
 		releaseNewPortOnAbort()
 		s.clearUnrestored(workflowID, role)
+		clearJournal()
 		s.publishMigrationEvent(migrationEvent{
 			WorkflowID: workflowID, Role: role, FromInstanceID: oldInstanceID, ToInstanceID: newInst.ID, TargetHostID: targetHostID,
 			Reason: reason, Status: "failed", At: time.Now(),
@@ -698,6 +738,7 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	// identisch zu promoteStandby/rewireAfterRestart, inkl. Freshness-
 	// Re-Check PRO Verbindung (eine einzelne applyConnection kann selbst
 	// mehrere Sekunden dauern).
+	failedConnections := 0
 	for _, conn := range wf.Definition.Connections {
 		if conn.FromRole != role && conn.ToRole != role {
 			continue
@@ -722,12 +763,30 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		connectCancel()
 		if err != nil {
 			slog.Warn("workflows: executeMigration: reconnect failed", "workflow", wf.ID, "connection", conn, "error", err)
+			failedConnections++
 		}
 	}
 
 	if _, ok := s.stillBacks(wf.ID, role, newInst.ID); !ok {
 		slog.Info("workflows: executeMigration: role superseded before teardown, leaving old instance running",
 			"workflow", wf.ID, "role", role)
+		return
+	}
+
+	// Rücksprung (Kapitel 100 Punkt 6): ließ sich eine Verbindung der Rolle nicht auf die neue Instanz legen, wäre
+	// der Umzug ein Signalausfall — die alte Instanz läuft noch und trägt das Signal. Also zurück auf sie, statt
+	// sie trotzdem zu stoppen. (Nicht möglich, wenn die alte verloren ist.)
+	if failedConnections > 0 && !oldLost {
+		slog.Warn("workflows: executeMigration: connections to the new instance failed, rolling back to the old instance",
+			"workflow", wf.ID, "role", role, "failed", failedConnections, "newInstance", newInst.ID)
+		if s.rollbackMigration(wf.ID, role, oldRuntime, newInst.ID) {
+			dropBinding(newInst.ID)
+			releaseNewPortOnAbort()
+			s.publishMigrationEvent(migrationEvent{
+				WorkflowID: wf.ID, Role: role, FromInstanceID: oldInstanceID, ToInstanceID: newInst.ID, TargetHostID: targetHostID,
+				Reason: "rolled-back-connection-failed", Status: "failed", At: time.Now(),
+			})
+		}
 		return
 	}
 
@@ -745,10 +804,16 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	// erst hier freigegeben (gezielt per ReleasePort, nicht per
 	// Release(workflowID, role) — der neue Claim für dasselbe
 	// (workflowID, role) muss bestehen bleiben, s. Kommentar oben).
-	if err := s.launcher.Stop(oldInstanceID); err != nil {
+	if err := s.launcher.Stop(oldInstanceID); errors.Is(err, launcher.ErrStopDeferred) {
+		slog.Info("workflows: executeMigration: old instance's host is unreachable, stop is deferred until it returns", "workflow", wf.ID, "role", role, "instance", oldInstanceID)
+	} else if err != nil && !errors.Is(err, launcher.ErrUnknownInstance) {
 		slog.Warn("workflows: executeMigration: stop old instance failed", "workflow", wf.ID, "role", role, "instance", oldInstanceID, "error", err)
 	}
 	dropBinding(oldInstanceID)
+	// Umzugs-Journal schließen: alte Instanz gestoppt (oder ihr Stop beim Launcher vorgemerkt).
+	s.journalMigration(wf.ID, role, newInst.ID, func(rt *RoleRuntime) {
+		rt.MigratedFrom, rt.MigrationBy, rt.MigrationNonce, rt.MigrationAt = nil, "", "", nil
+	})
 	if hasOldPort {
 		if err := s.ioPorts.ReleasePort(oldPortHostID, oldPortID); err != nil {
 			slog.Warn("workflows: executeMigration: release old io port claim failed", "workflow", wf.ID, "role", role, "error", err)
@@ -761,4 +826,174 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	})
 	slog.Info("workflows: placement migration completed",
 		"workflow", wf.ID, "role", role, "from", oldInstanceID, "to", newInst.ID, "targetHost", targetHostID)
+}
+
+// SetIdentity setzt den Namen dieses Orchestrators für das Umzugs-Journal (main.go: die eigene URL). Vor dem ersten
+// Umzug verdrahten.
+func (s *Service) SetIdentity(id string) { s.identity = id }
+
+// processNonce unterscheidet Prozessläufe desselben Orchestrators: ein Journal-Eintrag mit eigener Identität, aber
+// fremdem Nonce stammt aus einem früheren Lauf und ist damit sicher abgebrochen.
+func (s *Service) processNonce() string {
+	s.nonceOnce.Do(func() {
+		if id, err := newID(); err == nil {
+			s.nonce = id
+		} else {
+			s.nonce = time.Now().Format(time.RFC3339Nano)
+		}
+	})
+	return s.nonce
+}
+
+// journalMigration ändert die Journal-Felder der Rolle, solange sie noch von instanceID erfüllt wird (sonst wurde der
+// Umzug überholt und der Eintrag ist mit der Zuordnung verschwunden).
+func (s *Service) journalMigration(workflowID, role, instanceID string, mutate func(*RoleRuntime)) {
+	wf, ok := s.stillBacks(workflowID, role, instanceID)
+	if !ok {
+		return
+	}
+	rt := wf.Runtime[role]
+	if rt.MigrationBy == "" {
+		now := time.Now()
+		rt.MigrationBy, rt.MigrationNonce, rt.MigrationAt = s.identity, s.processNonce(), &now
+	}
+	mutate(&rt)
+	wf.Runtime[role] = rt
+	if err := s.store.UpdateRuntime(wf); err != nil {
+		slog.Warn("workflows: migration journal update failed", "workflow", workflowID, "role", role, "error", err)
+	}
+}
+
+// rollbackMigration schreibt die Zuordnung der Rolle auf die alte Instanz zurück, legt ihre Verbindungen wieder auf
+// sie und stoppt die neue. Liefert false, wenn die Rolle inzwischen überholt wurde (dann bleibt alles, wie es ist).
+func (s *Service) rollbackMigration(workflowID, role string, oldRuntime RoleRuntime, newInstanceID string) bool {
+	wf, ok := s.stillBacks(workflowID, role, newInstanceID)
+	if !ok {
+		return false
+	}
+	newNodeID := wf.Runtime[role].NodeID
+	oldRuntime.MigratingTo, oldRuntime.MigratedFrom = "", nil
+	oldRuntime.MigrationBy, oldRuntime.MigrationNonce, oldRuntime.MigrationAt = "", "", nil
+	wf.Runtime[role] = oldRuntime
+	wf.UpdatedAt = time.Now()
+	if err := s.store.UpdateRuntime(wf); err != nil {
+		slog.Warn("workflows: rollbackMigration: commit failed, keeping the new instance", "workflow", workflowID, "role", role, "error", err)
+		return false
+	}
+	s.publish(wf)
+	// Die alte Instanz hat ihren Zustand nie verloren: nichts einzuspielen.
+	s.clearUnrestored(workflowID, role)
+	s.reapplyRoleConnections(wf, role, oldRuntime.InstanceID, "rollbackMigration")
+	// Verbraucher, die schon auf die neue Instanz gewechselt haben, zurückholen, bevor sie verschwindet.
+	if _, ok := s.stillBacks(workflowID, role, oldRuntime.InstanceID); ok {
+		s.awaitHandover(wf, role, newNodeID, oldRuntime.NodeID)
+	}
+	if err := s.launcher.Stop(newInstanceID); err != nil && !errors.Is(err, launcher.ErrUnknownInstance) {
+		slog.Warn("workflows: rollbackMigration: stop of the new instance failed", "instance", newInstanceID, "error", err)
+	}
+	return true
+}
+
+// reapplyRoleConnections wendet alle Verbindungen der Rolle erneut an (bestmöglich), solange sie von instanceID
+// erfüllt wird. Liefert die Zahl der fehlgeschlagenen Verbindungen.
+func (s *Service) reapplyRoleConnections(wf Workflow, role, instanceID, who string) int {
+	failed := 0
+	for _, conn := range wf.Definition.Connections {
+		if conn.FromRole != role && conn.ToRole != role {
+			continue
+		}
+		if _, ok := s.stillBacks(wf.ID, role, instanceID); !ok {
+			return failed
+		}
+		fromNode, ok := s.nodeForRole(wf, conn.FromRole)
+		if !ok {
+			continue
+		}
+		toNode, ok := s.nodeForRole(wf, conn.ToRole)
+		if !ok {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
+		err := s.applyConnection(ctx, conn, fromNode, toNode, roleNodeType(wf, conn.ToRole))
+		cancel()
+		if err != nil {
+			slog.Warn("workflows: "+who+": reconnect failed", "workflow", wf.ID, "connection", conn, "error", err)
+			failed++
+		}
+	}
+	return failed
+}
+
+// migrationJournalStale: so alt muss der Journal-Eintrag eines ANDEREN Cluster-Mitglieds sein, bevor er als
+// abgebrochen gilt (ein Umzug dauert im ungünstigsten Fall wenige Minuten). Einträge eines früheren eigenen
+// Prozesslaufs gelten sofort als abgebrochen.
+const migrationJournalStale = 10 * time.Minute
+
+// reconcileMigrationJournal räumt abgebrochene Umzüge auf (Aufruf im Takt des Failover-Wächters, nur Leader):
+//   - MigratingTo gesetzt: es wurde nie umgeschaltet — die neue Instanz wird wieder abgebaut.
+//   - MigratedFrom gesetzt: umgeschaltet, die alte Instanz aber nicht mehr gestoppt — Verbindungen der Rolle werden
+//     noch einmal angewendet (der Abbruch kann mitten darin gelegen haben), dann wird die alte Instanz gestoppt.
+func (s *Service) reconcileMigrationJournal(wf Workflow) {
+	for role, rt := range wf.Runtime {
+		if rt.MigratingTo == "" && rt.MigratedFrom == nil {
+			continue
+		}
+		oldID := rt.InstanceID
+		if rt.MigratedFrom != nil {
+			oldID = rt.MigratedFrom.InstanceID
+		}
+		s.migrations.mu.Lock()
+		inFlight := s.migrations.migratingInstances[oldID]
+		s.migrations.mu.Unlock()
+		if inFlight {
+			continue // läuft in diesem Prozess
+		}
+		ownRun := rt.MigrationBy == s.identity && rt.MigrationNonce == s.processNonce()
+		foreign := rt.MigrationBy != s.identity
+		if foreign && rt.MigrationAt != nil && time.Since(*rt.MigrationAt) < migrationJournalStale {
+			continue // ein anderes Mitglied kann noch daran arbeiten
+		}
+		if ownRun && rt.MigrationAt != nil && time.Since(*rt.MigrationAt) < 5*time.Second {
+			continue // gerade erst eingetragen, die Buchführung zieht noch nach
+		}
+		role, rt := role, rt
+		if !s.claimMigrationAttempt(oldID) {
+			continue
+		}
+		safego.Go("workflows.recoverMigration", func() {
+			defer s.releaseMigrationClaim(oldID)
+			s.recoverMigration(wf.ID, role, rt)
+		})
+	}
+}
+
+func (s *Service) recoverMigration(workflowID, role string, rt RoleRuntime) {
+	wf, ok := s.stillBacks(workflowID, role, rt.InstanceID)
+	if !ok {
+		return
+	}
+	stale := rt.MigratingTo
+	if rt.MigratedFrom != nil {
+		stale = rt.MigratedFrom.InstanceID
+		s.reapplyRoleConnections(wf, role, rt.InstanceID, "recoverMigration")
+	}
+	slog.Warn("workflows: cleaning up an interrupted migration", "workflow", workflowID, "role", role, "keeps", rt.InstanceID, "stops", stale)
+	if stale != "" {
+		if err := s.launcher.Stop(stale); err != nil && !errors.Is(err, launcher.ErrUnknownInstance) && !errors.Is(err, launcher.ErrStopDeferred) {
+			slog.Warn("workflows: recoverMigration: stop failed", "instance", stale, "error", err)
+		}
+		if s.authz != nil {
+			_ = s.authz.DeleteInstanceBinding(stale, workflowID)
+		}
+		if rel, ok := s.ioPorts.(interface{ ReleaseClaimedByInstance(string) error }); ok && rt.MigratingTo != "" {
+			_ = rel.ReleaseClaimedByInstance(stale)
+		}
+	}
+	s.journalMigration(workflowID, role, rt.InstanceID, func(r *RoleRuntime) {
+		r.MigratingTo, r.MigratedFrom, r.MigrationBy, r.MigrationNonce, r.MigrationAt = "", nil, "", "", nil
+	})
+	s.publishMigrationEvent(migrationEvent{
+		WorkflowID: workflowID, Role: role, FromInstanceID: stale, ToInstanceID: rt.InstanceID,
+		Reason: "interrupted-cleaned-up", Status: "done", At: time.Now(),
+	})
 }

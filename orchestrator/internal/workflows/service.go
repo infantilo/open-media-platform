@@ -317,6 +317,12 @@ type Service struct {
 	hostUnseenMu sync.Mutex
 	hostUnseen   map[string]time.Time
 	promoting    sync.Map
+	// relocating (hostloss.go): Hosts, deren Rollen gerade wegen Ausfalls umziehen bzw. frühester nächster Versuch.
+	relocating sync.Map // hostID -> time.Time (nächster Versuch) | struct{}{} (läuft)
+	// identity/nonce (Umzugs-Journal): wer dieser Orchestrator ist und welcher Prozesslauf.
+	identity  string
+	nonceOnce sync.Once
+	nonce     string
 	// migrations (D6 Teil 4, migration.go) — Buchführung für
 	// auto-confirm-window-Timer und laufende Migrationsversuche. Immer
 	// initialisiert (nie nil, s. NewService), damit migration.go ohne
@@ -2357,6 +2363,13 @@ func validate(def Definition) error {
 		case EscalationAdvisory, EscalationAutoConfirmWindow, EscalationAuto, EscalationPinned:
 		default:
 			return fmt.Errorf("%w: role %q has unknown placement escalation %q", ErrValidation, r.Name, esc)
+		}
+		if r.Placement != nil {
+			switch r.Placement.OnHostFailure {
+			case "", HostFailureRelocate, HostFailureStay:
+			default:
+				return fmt.Errorf("%w: role %q has unknown onHostFailure %q", ErrValidation, r.Name, r.Placement.OnHostFailure)
+			}
 		}
 	}
 

@@ -212,6 +212,7 @@ func (s *Service) promoteStandby(wf Workflow, primaryRole, standbyRole, trigger 
 		NodeID:        standbyRuntime.NodeID,
 		HostID:        standbyRuntime.HostID,
 		StandbyActive: true,
+		SeedRole:      seedRoleName(wf, standbyRole),
 	}
 
 	// Übernahme SOFORT committen, bevor der langsame Teil (State-Restore,
@@ -302,6 +303,18 @@ func (s *Service) promoteStandby(wf Workflow, primaryRole, standbyRole, trigger 
 		At:             time.Now(),
 	})
 	slog.Info("workflows: standby promoted", "workflow", wf.ID, "role", primaryRole, "standbyRole", standbyRole, "trigger", trigger)
+
+	// Abgrenzung: die alte Primärinstanz erfüllt keine Rolle mehr. Sie wird gestoppt bzw. — ist ihr Host nicht
+	// erreichbar — ihr Stop vorgemerkt, damit sie nach dem Ende einer Netztrennung nicht weiter neben der
+	// übernommenen Instanz sendet. Danach wird die Redundanz wiederhergestellt (neuer Standby auf einem anderen
+	// Host), sofern der automatische Wiederanlauf nicht abgeschaltet ist.
+	workflowID := wf.ID
+	safego.Go("workflows.fenceAfterFailover", func() {
+		s.fenceInstance(workflowID, fromInstanceID)
+		if primaryDef, ok := roleByName(wf, primaryRole); ok && relocatesOnHostLoss(primaryDef) {
+			s.rearmStandby(workflowID, primaryRole)
+		}
+	})
 }
 
 // RunFailoverWatcher läuft bis ctx endet, im failoverCheckInterval-Takt
@@ -351,7 +364,9 @@ func (s *Service) failoverTick() {
 			s.captureOneRoleState(wf, role.Name, senderToAlias)
 			s.checkHostOffline(wf, role.Name, standbyRole)
 		}
+		s.reconcileMigrationJournal(wf)
 	}
+	s.checkLostHosts(wfs)
 }
 
 // checkHostOffline implementiert Trigger 2. rt.HostID=="" (lokal beim
