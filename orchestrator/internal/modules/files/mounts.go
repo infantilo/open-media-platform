@@ -173,7 +173,10 @@ func (m *Module) mountResult(root Root, host string, err error) {
 			root.Name, root.Path, since.Format("15:04:05"), err.Error())
 	}
 	m.alert(kind, sev, root.ID, root.Name, msg)
-	m.event("omp."+strings.ReplaceAll(kind, "-", "."), map[string]any{"root": root.Name, "path": root.Path, "state": state, "since": since})
+	// Subject muss unter `omp.files.>` liegen (Stream OMP_EVENTS): "file-root-unreachable" -> omp.files.root-unreachable.
+	// Früher "omp."+kind mit Punkten (omp.file.root.unreachable) lag außerhalb des Streams, JetStream lehnte jedes Publish ab
+	// und die Outbox versuchte es endlos alle 5 s.
+	m.event("omp.files."+strings.TrimPrefix(kind, "file-"), map[string]any{"root": root.Name, "path": root.Path, "state": state, "since": since})
 	m.audit("system", "file-root", root.ID, "file.mount."+state, map[string]any{"root": root.Name, "path": root.Path, "error": err.Error()})
 }
 

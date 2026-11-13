@@ -1073,7 +1073,7 @@ verwaltet sie: ansehen, einem Asset zuordnen, hochladen, löschen und wiederhers
 **Hängende Mounts blockieren nichts:** Jede Dateioperation hat eine Frist (lesend 3,5 s, ändernd 25 s) und läuft in einem eigenen Strang; ein NFS-/SMB-Mount, der nicht antwortet, bringt die Oberfläche, den
 Orchestrator, den Host-Agent und andere Orte nie zum Stehen. Der Ort meldet dann sofort „Mount hängt“ (rote Zeile an der Karte, Marke in der Administration); weitere Operationen darauf werden ohne Wartezeit abgewiesen,
 höchstens ein hängender Strang je Ort bleibt zurück und erledigt sich, sobald der Mount wieder antwortet. Ein Takt-Test (alle 30 s) prüft jeden Ort auch ohne Bedienung. **Zwei Fehlschläge in Folge** lösen den Alarm aus:
-`file-mount-hung` (kritisch: Mount hängt), `file-root-unreachable` (Warnung: Host offline, Pfad fehlt, nicht freigegeben) und bei Erholung `file-mount-recovered`; dazu Audit und Ereignis (`omp.file.mount.hung` …).
+`file-mount-hung` (kritisch: Mount hängt), `file-root-unreachable` (Warnung: Host offline, Pfad fehlt, nicht freigegeben) und bei Erholung `file-mount-recovered`; dazu Audit und Ereignis (`omp.files.mount-hung` …).
 Dateizustände auf einem solchen Ort werden „nicht erreichbar“, nie „fehlt“.
 
 **Dateizustand („Datei fehlt“):** Je Representation merkt sich der Orchestrator, ob die Datei da ist (*vorhanden*, *fehlt*, *nicht erreichbar*, *nicht prüfbar*). Geprüft wird im Hintergrund (Standard alle 6 Stunden, in Stapeln),
