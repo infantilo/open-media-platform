@@ -48,6 +48,9 @@ type Metrics struct {
 	// das Feld automatisch, sofern der Payload es enthält; ein älterer
 	// Host-Agent ohne dieses Feld liefert einfach nil, kein Fehler).
 	Instances []InstanceMetrics `json:"instances,omitempty"`
+	// RunningInstanceIDs: alle vom Host-Agent geführten Instanz-IDs (Spiegel von telemetry.Sample); nil = der
+	// Agent meldet die Liste nicht (ältere Version) — dann findet kein Abgleich statt.
+	RunningInstanceIDs []string `json:"runningInstanceIds"`
 	// Net ist nil, wenn der Host-Agent kein Interface für die
 	// Bandbreiten-Telemetrie konfiguriert hat (OMP_HOST_AGENT_NET_IFACE,
 	// s. host-agent/main.go) — Spiegelbild von

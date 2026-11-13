@@ -468,7 +468,9 @@ func main() {
 
 		running := executor.Instances()
 		keepPIDs := make(map[int]bool, len(running))
+		sample.RunningInstanceIDs = make([]string, 0, len(running))
 		for _, inst := range running {
+			sample.RunningInstanceIDs = append(sample.RunningInstanceIDs, inst.InstanceID)
 			keepPIDs[inst.PID] = true
 			cpu, rss, ok := procSampler.Sample(inst.PID)
 			if !ok {

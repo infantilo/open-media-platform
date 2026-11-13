@@ -403,6 +403,9 @@ func (e *Executor) start(req Request) Response {
 		return Response{OK: true, PID: pid}
 	}
 	e.mu.Unlock()
+	// Läuft die Instanz noch als verwaister Prozess eines früheren Agents (den dieser nicht mehr führt und dessen
+	// Ende er nie melden könnte), wird sie beendet, statt eine zweite daneben zu starten.
+	reapOrphans(req.InstanceID, stopGracePeriod)
 	for k := range req.ExtraEnv {
 		if !allowedExtraEnvKeys[k] {
 			return Response{OK: false, Error: fmt.Sprintf("extraEnv key %q not allowed", k)}

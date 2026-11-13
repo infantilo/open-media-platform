@@ -40,6 +40,12 @@ type Sample struct {
 	// bei einer älteren Agent-Version egal (json.Unmarshal ignoriert
 	// fehlende Felder).
 	Instances []InstanceSample `json:"instances,omitempty"`
+	// RunningInstanceIDs: IDs ALLER Instanzen, die dieser Agent gerade führt (auch solche ohne Messwert in
+	// Instances). Der Orchestrator gleicht damit seine Buchführung ab: fehlt eine dort als laufend geführte
+	// Instanz mehrfach hintereinander (Agent- oder Host-Neustart, verlorenes Exit-Ereignis), startet er sie neu.
+	// Bewusst ohne omitempty: eine leere Liste ("nichts läuft") muss von "Feld fehlt" (älterer Agent, null)
+	// unterscheidbar sein.
+	RunningInstanceIDs []string `json:"runningInstanceIds"`
 	// Net ist nil, wenn OMP_HOST_AGENT_NET_IFACE nicht gesetzt ist (s.
 	// main.go) — kein konfiguriertes Interface bedeutet "nicht
 	// gemessen", nicht "0 Bandbreite" (gleiche Ehrlichkeitslinie wie

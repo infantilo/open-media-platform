@@ -349,6 +349,7 @@ func main() {
 	}()
 	healthTracker := health.NewTracker()
 	hostMetricsTracker := hosts.NewTracker()
+	var remoteReconcile atomic.Pointer[func(hostID string, running []string)]
 	hostHistory := hosts.NewHistory()
 
 	// ARCHITECTURE.md §20.4 Restlücke "NATS-Verschlüsselung" — eigenes
@@ -377,6 +378,11 @@ func main() {
 		// Touch() hat ihn gerade validiert und mit ReceivedAt versehen.
 		if m, ok := hostMetricsTracker.Get(hostID); ok && !m.Goodbye {
 			hostHistory.Record(hostID, m)
+			// Kapitel 100 Punkt 1: Abgleich der Instanz-Buchführung mit dem, was der Agent als laufend meldet
+			// (erst verdrahtet, sobald Launcher und Cluster-Knoten existieren).
+			if f := remoteReconcile.Load(); f != nil && m.RunningInstanceIDs != nil {
+				(*f)(hostID, m.RunningInstanceIDs)
+			}
 		}
 	}, natsTLSConfig)
 	if err != nil {
@@ -703,6 +709,12 @@ func main() {
 	// braucht dieses Gating NICHT: nur der Prozess, der ein Kind selbst
 	// geforkt hat, kann dessen Ende überhaupt beobachten, das ist
 	// bereits von Natur aus single-owner).
+	reconcileFn := func(hostID string, running []string) {
+		if clusterNode.IsLeader() { // wie HandleRemoteExit: nur der Leader führt Crash-Zähler und startet neu
+			launcherSvc.ReconcileRemote(hostID, running)
+		}
+	}
+	remoteReconcile.Store(&reconcileFn)
 	if nc != nil {
 		go subscribeWhileLeader(ctx, clusterNode, nc, "omp.host.*.events", func(msg *nats.Msg) {
 			hostID, ok := hostIDFromEventsSubject(msg.Subject)

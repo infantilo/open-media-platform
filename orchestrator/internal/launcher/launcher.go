@@ -401,6 +401,10 @@ type Launcher struct {
 	mu             sync.Mutex
 	instances      map[string]Instance
 	pendingRestore []Instance // beim Laden nicht mehr laufende, nicht abgestürzte Instanzen (RestoreLocal/RestoreRemote)
+	// remoteMissing/remoteBusy (ReconcileRemote): Zähler aufeinanderfolgender Agent-Meldungen, in denen eine als
+	// laufend geführte entfernte Instanz fehlte, bzw. Instanzen, deren (Neu-)Start gerade läuft.
+	remoteMissing map[string]int
+	remoteBusy    map[string]bool
 	// adoptedAtLoad: beim Laden noch laufende lokale Instanzen (per PID bzw. Container wiedererkannt). Sie sind keine
 	// Kindprozesse dieses Orchestrators mehr; RestoreLocal hängt ihnen wieder eine Überwachung an (superviseAdopted).
 	adoptedAtLoad []string
@@ -2139,6 +2143,9 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 	if ev.InstanceID == "" {
 		return
 	}
+	// Während Backoff und Start-Kommando fehlt die Instanz beim Agent zu Recht — ReconcileRemote zählt das nicht.
+	l.setRemoteBusy(ev.InstanceID, true)
+	defer l.setRemoteBusy(ev.InstanceID, false)
 
 	l.mu.Lock()
 	current, tracked := l.instances[ev.InstanceID]
@@ -2797,6 +2804,8 @@ func (l *Launcher) restoreRemoteOne(inst Instance) {
 		slog.Info("launcher: skip restore, instance was removed meanwhile", "id", inst.ID, "host_id", inst.HostID)
 		return
 	}
+	l.setRemoteBusy(inst.ID, true)
+	defer l.setRemoteBusy(inst.ID, false)
 	// Sofort sichtbar machen (Kachel mit „startet…“), statt erst nach dem ersten Erfolg.
 	l.mu.Lock()
 	l.instances[inst.ID] = inst
@@ -2865,4 +2874,77 @@ func (l *Launcher) stillPersisted(id string) bool {
 		}
 	}
 	return false
+}
+
+// remoteMissingThreshold: so viele Agent-Meldungen in Folge (Takt 5 s) muss eine Instanz fehlen, bevor sie als
+// beendet gilt. Eine einzelne Meldung kann vor einem gerade erfolgten Start entstanden sein.
+const remoteMissingThreshold = 3
+
+func (l *Launcher) setRemoteBusy(id string, on bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if on {
+		if l.remoteBusy == nil {
+			l.remoteBusy = map[string]bool{}
+		}
+		l.remoteBusy[id] = true
+		delete(l.remoteMissing, id)
+		return
+	}
+	delete(l.remoteBusy, id)
+}
+
+// ReconcileRemote gleicht die Buchführung mit der Liste der Instanzen ab, die der Host-Agent von hostID in seiner
+// Telemetrie als laufend meldet (running; nur mit einer echten Liste aufrufen, nie für Agents ohne das Feld).
+// Eine hier als laufend geführte Instanz, die remoteMissingThreshold-mal in Folge fehlt, wird wie ein gemeldetes
+// Prozessende behandelt (HandleRemoteExit: Crash-Loop-Bremse, Neustart unter derselben ID, Neuverkabelung).
+//
+// Das deckt die Fälle ab, in denen es kein Exit-Ereignis gibt: Neustart des Host-Agents (er führt seine Instanzen
+// nur im Speicher, systemd beendet die Kindprozesse mit), Neustart des Hosts, ein verlorenes Ereignis, ein
+// Führungswechsel im Moment des Absturzes. Nur auf dem Cluster-Leader aufrufen. Liefert die IDs, für die ein
+// Neustart angestoßen wurde.
+func (l *Launcher) ReconcileRemote(hostID string, running []string) []string {
+	if hostID == "" {
+		return nil
+	}
+	present := make(map[string]bool, len(running))
+	for _, id := range running {
+		present[id] = true
+	}
+	var lost []string
+	l.mu.Lock()
+	if l.remoteMissing == nil {
+		l.remoteMissing = map[string]int{}
+	}
+	for id, inst := range l.instances {
+		if inst.HostID != hostID {
+			continue
+		}
+		if inst.Crashed || l.remoteBusy[id] || present[id] {
+			delete(l.remoteMissing, id)
+			continue
+		}
+		l.remoteMissing[id]++
+		if l.remoteMissing[id] >= remoteMissingThreshold {
+			delete(l.remoteMissing, id)
+			lost = append(lost, id)
+		}
+	}
+	for id := range l.remoteMissing {
+		if _, tracked := l.instances[id]; !tracked {
+			delete(l.remoteMissing, id)
+		}
+	}
+	l.mu.Unlock()
+
+	for _, id := range lost {
+		slog.Warn("launcher: remote instance no longer reported by its host agent, restarting", "id", id, "host_id", hostID)
+		payload, err := json.Marshal(remoteExitEvent{InstanceID: id, ExitCode: -1,
+			StderrTail: "vom Host-Agent nicht mehr als laufend gemeldet (Neustart des Agents oder des Hosts)"})
+		if err != nil {
+			continue
+		}
+		safego.Go("launcher.reconcileRemote", func() { l.HandleRemoteExit(hostID, payload) })
+	}
+	return lost
 }
