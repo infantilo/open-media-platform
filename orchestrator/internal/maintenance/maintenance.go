@@ -4,10 +4,11 @@
 // andere Hosts umgezogen — kein Signalausfall, solange ein Zielhost existiert.
 //
 // Bewusste Grenzen (ehrlich statt stillem Ausfall): Eigenständige, nicht
-// Workflow-gebundene Instanzen haben keinen Make-before-break-Pfad
-// (instancemigrate ist Stop-dann-Start) und bleiben stehen; sie werden als
-// "Rest" gemeldet, der Bediener entscheidet. Dasselbe gilt für Rollen ohne
-// Zielhost oder ohne freien I/O-Port auf dem Ziel.
+// Workflow-gebundene Instanzen werden nicht automatisch umgezogen und bleiben
+// stehen; sie werden als "Rest" gemeldet, der Bediener zieht sie einzeln um
+// (instancemigrate, seit 2026-11-02 ebenfalls Make-before-break, aber ohne
+// Platzwahl und ohne Warten auf die Übergabe bei den Verbrauchern). Dasselbe
+// gilt für Rollen ohne Zielhost oder ohne freien I/O-Port auf dem Ziel.
 package maintenance
 
 import (
@@ -35,8 +36,8 @@ type Item struct {
 	Reason     string `json:"reason,omitempty"`
 }
 
-// ReasonStandalone: eigenständige Instanz ohne Workflow — kein Make-before-break-Umzug möglich,
-// nur manuell per Stop-dann-Start (POST /api/v1/instances/{id}/migrate). Die UI übersetzt den Code.
+// ReasonStandalone: eigenständige Instanz ohne Workflow — kein automatischer Umzug, nur manuell
+// (POST /api/v1/instances/{id}/migrate). Die UI übersetzt den Code.
 const ReasonStandalone = "standalone"
 
 // ReasonHostBound: Rolle/Instanz ist an Hardware dieses Hosts gebunden (Katalog hostBound, Escalation
