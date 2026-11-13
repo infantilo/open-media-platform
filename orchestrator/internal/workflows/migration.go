@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"log/slog"
@@ -603,6 +604,23 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 			slog.Warn("workflows: executeMigration: update new io port claim instance id failed", "workflow", workflowID, "role", role, "error", err)
 		}
 	}
+	// Control-Plane-Nodes (Automation, Studio-Logik, ...) holen ihr Service-Token über eine Bindung auf ihre
+	// Instanz-ID (s. runStart/runRestartRole). Die neue Instanz hat eine neue ID — ohne eigene Bindung verlöre die
+	// Rolle mit dem Umzug ihren Zugriff auf den Proxy und steuerte nichts mehr.
+	controlPlane := s.authz != nil && s.IsControlPlaneNodeType(roleDef.NodeType)
+	if controlPlane {
+		if _, err := s.authz.Create(newInst.ID, workflowID, authz.AnyNode, authz.VerbOperate); err != nil {
+			slog.Warn("workflows: executeMigration: failed to provision service-token role binding", "workflow", workflowID, "role", role, "instance", newInst.ID, "error", err)
+		}
+	}
+	dropBinding := func(instanceID string) {
+		if !controlPlane {
+			return
+		}
+		if err := s.authz.DeleteInstanceBinding(instanceID, workflowID); err != nil {
+			slog.Warn("workflows: executeMigration: failed to clean up instance role binding", "workflow", workflowID, "role", role, "instance", instanceID, "error", err)
+		}
+	}
 
 	// Schritt 2: auf ihre Registrierung warten.
 	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
@@ -614,6 +632,7 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		if stopErr := s.launcher.Stop(newInst.ID); stopErr != nil {
 			slog.Warn("workflows: executeMigration: cleanup of failed new instance failed", "instance", newInst.ID, "error", stopErr)
 		}
+		dropBinding(newInst.ID)
 		releaseNewPortOnAbort()
 		s.publishMigrationEvent(migrationEvent{
 			WorkflowID: workflowID, Role: role, FromInstanceID: oldInstanceID, ToInstanceID: newInst.ID, TargetHostID: targetHostID,
@@ -630,6 +649,7 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		if stopErr := s.launcher.Stop(newInst.ID); stopErr != nil {
 			slog.Warn("workflows: executeMigration: cleanup after supersede failed", "instance", newInst.ID, "error", stopErr)
 		}
+		dropBinding(newInst.ID)
 		return
 	}
 	wf = fresh
@@ -649,7 +669,19 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	wf.Runtime[role] = RoleRuntime{InstanceID: newInst.ID, NodeID: node.ID, HostID: targetHostID}
 	wf.UpdatedAt = time.Now()
 	if err := s.store.UpdateRuntime(wf); err != nil {
-		slog.Warn("workflows: executeMigration: early commit failed", "workflow", workflowID, "role", role, "error", err)
+		// Die alte Instanz bleibt die gültige Zuordnung (nichts wurde gespeichert): die neue wieder abbauen, statt sie
+		// unreferenziert weiterlaufen zu lassen und ihren Port belegt zu halten.
+		slog.Warn("workflows: executeMigration: early commit failed, stopping new instance and keeping old one", "workflow", workflowID, "role", role, "error", err)
+		if stopErr := s.launcher.Stop(newInst.ID); stopErr != nil {
+			slog.Warn("workflows: executeMigration: cleanup after failed commit failed", "instance", newInst.ID, "error", stopErr)
+		}
+		dropBinding(newInst.ID)
+		releaseNewPortOnAbort()
+		s.clearUnrestored(workflowID, role)
+		s.publishMigrationEvent(migrationEvent{
+			WorkflowID: workflowID, Role: role, FromInstanceID: oldInstanceID, ToInstanceID: newInst.ID, TargetHostID: targetHostID,
+			Reason: reason, Status: "failed", At: time.Now(),
+		})
 		return
 	}
 	s.publish(wf)
@@ -716,6 +748,7 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	if err := s.launcher.Stop(oldInstanceID); err != nil {
 		slog.Warn("workflows: executeMigration: stop old instance failed", "workflow", wf.ID, "role", role, "instance", oldInstanceID, "error", err)
 	}
+	dropBinding(oldInstanceID)
 	if hasOldPort {
 		if err := s.ioPorts.ReleasePort(oldPortHostID, oldPortID); err != nil {
 			slog.Warn("workflows: executeMigration: release old io port claim failed", "workflow", wf.ID, "role", role, "error", err)
