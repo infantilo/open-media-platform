@@ -398,9 +398,16 @@ type Launcher struct {
 	restartObserver  RestartObserver
 	failoverObserver FailoverObserver
 
-	mu              sync.Mutex
-	instances       map[string]Instance
-	pendingRestore  []Instance // beim Laden nicht mehr laufende, nicht abgestürzte Instanzen (RestoreLocal/RestoreRemote)
+	mu             sync.Mutex
+	instances      map[string]Instance
+	pendingRestore []Instance // beim Laden nicht mehr laufende, nicht abgestürzte Instanzen (RestoreLocal/RestoreRemote)
+	// adoptedAtLoad: beim Laden noch laufende lokale Instanzen (per PID bzw. Container wiedererkannt). Sie sind keine
+	// Kindprozesse dieses Orchestrators mehr; RestoreLocal hängt ihnen wieder eine Überwachung an (superviseAdopted).
+	adoptedAtLoad []string
+	// deadAtLoad: beim Laden nicht mehr laufende lokale Zeilen mit Herkunft (Origin), die nicht wiederhergestellt
+	// werden (abgestürzt, Podman). Ob die Zeile diesem Orchestrator gehört, steht erst nach SetOrchestratorURL fest —
+	// RestoreLocal löscht nur die eigenen; die eines Cluster-Partners bleiben unberührt.
+	deadAtLoad      []Instance
 	importedCatalog map[string]CatalogEntry
 	// remoteTypeCheck (Kap. 85): prüft vor einem Remote-Start, ob der importierte Microservice auf dem Host installiert ist.
 	remoteTypeCheck func(nodeType, version, hostID string) error
@@ -1629,8 +1636,16 @@ func (l *Launcher) execEntry(entry CatalogEntry, id, label, launchSecret string,
 // Stop() die Instanz aus l.instances entfernt hat oder wenn die
 // Crash-Loop-Bremse greift.
 func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label string, extraEnv map[string]string, cmd *exec.Cmd, stderrTail *tailBuffer) {
+	l.superviseWait(id, nodeType, entry, label, extraEnv, cmd.Wait, stderrTail)
+}
+
+// superviseWait ist supervise mit austauschbarem ersten Warten: wait blockiert bis zum Ende des laufenden
+// Prozesses. Für selbst gestartete Kindprozesse ist das cmd.Wait, für nach einem Orchestrator-Neustart
+// wiedererkannte Prozesse (kein Kind mehr) ein PID-Poll (superviseAdopted). Nach dem ersten Neustart ist der
+// Prozess in beiden Fällen ein Kind und es gilt wieder cmd.Wait.
+func (l *Launcher) superviseWait(id, nodeType string, entry CatalogEntry, label string, extraEnv map[string]string, wait func() error, stderrTail *tailBuffer) {
 	for {
-		waitErr := cmd.Wait()
+		waitErr := wait()
 
 		l.mu.Lock()
 		current, stillTracked := l.instances[id]
@@ -1728,8 +1743,74 @@ func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label stri
 			l.restartObserver.InstanceRestarted(id)
 		}
 
-		cmd, stderrTail = newCmd, newStderrTail
+		wait, stderrTail = newCmd.Wait, newStderrTail
 	}
+}
+
+// adoptPollInterval: Takt, in dem eine wiedererkannte (nicht mehr als Kindprozess wartbare) Instanz auf ihr Ende
+// geprüft wird. var statt const, damit Tests ihn verkürzen können.
+var adoptPollInterval = time.Second
+
+// errAdoptedExit beschreibt das Ende eines wiedererkannten Prozesses (Exit-Code und stderr sind nicht mehr greifbar).
+var errAdoptedExit = errors.New("nach Orchestrator-Neustart wiedererkannter Prozess beendet")
+
+// superviseAdopted überwacht eine nach einem Orchestrator-Neustart per PID/Container wiedererkannte lokale Instanz.
+// Ohne dies bliebe ihr Absturz unbemerkt: kein instance.crashed, kein automatischer Neustart, kein Failover — der
+// ursprüngliche supervise-Lauf endete mit dem alten Orchestrator-Prozess.
+func (l *Launcher) superviseAdopted(inst Instance) {
+	entry, err := l.resolveCatalogEntry(inst.Type, inst.Version)
+	if err == nil && inst.ContainerID == "" {
+		if entry.Runner != runnerProcess {
+			err = ErrUnsupportedRunner
+		} else {
+			entry, _, err = l.applyBinary(entry, inst.NodeVersion)
+		}
+	}
+	if inst.ContainerID != "" {
+		if err != nil {
+			slog.Warn("launcher: adopted container cannot be supervised, catalog entry missing", "id", inst.ID, "type", inst.Type, "error", err)
+			return
+		}
+		l.supervisePodman(inst.ID, inst.Type, entry, inst.Label, inst.ExtraEnv, inst.ContainerID)
+		return
+	}
+	pid := inst.PID
+	wait := func() error {
+		for processAlive(pid) {
+			time.Sleep(adoptPollInterval)
+			l.mu.Lock()
+			cur, tracked := l.instances[inst.ID]
+			l.mu.Unlock()
+			if !tracked || cur.PID != pid {
+				return nil // gestoppt oder bereits anderweitig ersetzt
+			}
+		}
+		return errAdoptedExit
+	}
+	if err != nil {
+		// Kein (passender) Katalogeintrag mehr: Neustart unmöglich, das Ende wird aber gemeldet.
+		resolveErr := err
+		_ = wait()
+		l.mu.Lock()
+		cur, tracked := l.instances[inst.ID]
+		if tracked && cur.PID == pid {
+			cur.Crashed = true
+			cur.CrashMessage = fmt.Sprintf("%v (kein Neustart möglich: %v)", errAdoptedExit, resolveErr)
+			l.instances[inst.ID] = cur
+			if perr := l.persistInstanceLocked(inst.ID); perr != nil {
+				slog.Warn("launcher: failed to persist instance state", "error", perr)
+			}
+		}
+		l.mu.Unlock()
+		if tracked && cur.PID == pid {
+			l.publishCrash(cur)
+			if l.failoverObserver != nil {
+				l.failoverObserver.InstanceGaveUp(inst.ID)
+			}
+		}
+		return
+	}
+	l.superviseWait(inst.ID, inst.Type, entry, inst.Label, inst.ExtraEnv, wait, newTailBuffer(crashStderrLines))
 }
 
 // supervisePodman — Podman-Pendant zu supervise() (Kapitel 17 Teil 4):
@@ -2343,6 +2424,9 @@ func (l *Launcher) loadState() {
 		}
 		if alive {
 			l.instances[inst.ID] = inst
+			if inst.HostID == "" && !inst.Crashed {
+				l.adoptedAtLoad = append(l.adoptedAtLoad, inst.ID)
+			}
 			continue
 		}
 		// Nicht mehr laufend (Reboot/Absturz des Orchestrators): eine nicht abgestürzte Prozess-
@@ -2350,6 +2434,12 @@ func (l *Launcher) loadState() {
 		// andere (abgestürzt, Podman) wird wie bisher verworfen.
 		if !inst.Crashed && inst.ContainerID == "" {
 			l.pendingRestore = append(l.pendingRestore, inst)
+			continue
+		}
+		// Lokale Zeile mit Herkunft: sie kann einem Cluster-Partner auf einem anderen Rechner gehören, dessen
+		// Prozess/Container hier gar nicht sichtbar ist. Erst RestoreLocal kennt die eigene Adresse und entscheidet.
+		if inst.HostID == "" && inst.Origin != "" {
+			l.deadAtLoad = append(l.deadAtLoad, inst)
 			continue
 		}
 		if err := l.store.Delete(inst.ID); err != nil {
@@ -2602,7 +2692,31 @@ func (l *Launcher) RestoreLocal() {
 	}
 	l.mu.Lock()
 	l.pendingRestore = rest
+	dead := l.deadAtLoad
+	l.deadAtLoad = nil
+	var adopt []Instance
+	for _, id := range l.adoptedAtLoad {
+		// Nur eigene Instanzen: laufen mehrere Orchestratoren auf demselben Rechner, erkennt jeder dieselbe PID wieder —
+		// überwachen (und neu starten) darf sie nur ihr Starter.
+		if inst, ok := l.instances[id]; ok && (inst.Origin == "" || inst.Origin == l.orchestratorURL) {
+			adopt = append(adopt, inst)
+		}
+	}
+	l.adoptedAtLoad = nil
 	l.mu.Unlock()
+
+	for _, inst := range dead {
+		if inst.Origin != l.orchestratorURL {
+			continue // Zeile eines Cluster-Partners
+		}
+		if err := l.store.Delete(inst.ID); err != nil {
+			slog.Warn("launcher: failed to drop dead instance from persisted state", "id", inst.ID, "error", err)
+		}
+	}
+	for _, inst := range adopt {
+		inst := inst
+		safego.Go("launcher.superviseAdopted", func() { l.superviseAdopted(inst) })
+	}
 }
 
 // RespawnedAtBoot liefert die IDs der von RestoreLocal frisch gestarteten Instanzen (sie laufen ohne
@@ -2677,6 +2791,12 @@ func (l *Launcher) restoreRemoteOne(inst Instance) {
 	if err != nil {
 		return
 	}
+	// Die Vormerkung stammt vom Start dieses Orchestrators, die Führung kann er viel später übernehmen. Hat ein
+	// anderes Cluster-Mitglied die Instanz inzwischen gestoppt (Zeile gelöscht), darf sie nicht wieder auferstehen.
+	if !l.stillPersisted(inst.ID) {
+		slog.Info("launcher: skip restore, instance was removed meanwhile", "id", inst.ID, "host_id", inst.HostID)
+		return
+	}
 	// Sofort sichtbar machen (Kachel mit „startet…“), statt erst nach dem ersten Erfolg.
 	l.mu.Lock()
 	l.instances[inst.ID] = inst
@@ -2689,6 +2809,13 @@ func (l *Launcher) restoreRemoteOne(inst Instance) {
 		l.mu.Unlock()
 		if !tracked {
 			return // Stop() während der Wiederholungen
+		}
+		if !l.stillPersisted(inst.ID) {
+			l.mu.Lock()
+			delete(l.instances, inst.ID)
+			l.mu.Unlock()
+			slog.Info("launcher: abort restore, instance was removed meanwhile", "id", inst.ID, "host_id", inst.HostID)
+			return
 		}
 		resp, err := l.sendCommand(inst.HostID, remoteCommand{
 			Action: "start", Type: inst.Type, Version: inst.Version, InstanceID: inst.ID, Label: inst.Label,
@@ -2723,4 +2850,19 @@ func (l *Launcher) restoreRemoteOne(inst Instance) {
 	_ = l.persistInstanceLocked(inst.ID)
 	l.mu.Unlock()
 	l.publishCrash(inst)
+}
+
+// stillPersisted meldet, ob id noch in der (im Cluster geteilten) Instanz-Tabelle steht. Ein Lesefehler gilt als
+// "ja" — lieber eine Instanz zu viel wiederherstellen als eine laufende Sendung nicht.
+func (l *Launcher) stillPersisted(id string) bool {
+	saved, err := l.store.List()
+	if err != nil {
+		return true
+	}
+	for _, inst := range saved {
+		if inst.ID == id {
+			return true
+		}
+	}
+	return false
 }
