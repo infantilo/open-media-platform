@@ -36,3 +36,23 @@ func TestStopAllStopsEveryInstance(t *testing.T) {
 		t.Fatalf("instances after StopAll = %d, want 0", n)
 	}
 }
+
+// TestKillEndsInstanceWithoutMarkingItStopped — "kill" beendet hart; das Ende zählt als Absturz (nicht als Stop).
+func TestKillEndsInstanceWithoutMarkingItStopped(t *testing.T) {
+	e := NewExecutor([]catalog.Entry{{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "5"}}}, "", "", "", "host-1", nil)
+	if resp := e.Handle(Request{Action: "start", Type: "sleeper", InstanceID: "kill-1"}); !resp.OK {
+		t.Fatalf("start: %s", resp.Error)
+	}
+	if resp := e.Handle(Request{Action: "kill", InstanceID: "kill-1"}); !resp.OK {
+		t.Fatalf("kill: %s", resp.Error)
+	}
+	e.mu.Lock()
+	marked := e.stopping["kill-1"]
+	e.mu.Unlock()
+	if marked {
+		t.Fatalf("kill marked the instance as stopping — its end would not be reported as a crash")
+	}
+	if resp := e.Handle(Request{Action: "kill", InstanceID: "nope"}); resp.OK {
+		t.Fatalf("kill of an unknown instance must fail")
+	}
+}

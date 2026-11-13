@@ -2764,7 +2764,19 @@
   },
   {
     "method": "POST",
+    "path": "/api/v1/workflows/{id}/roles/{role}/rearm-standby",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
     "path": "/api/v1/workflows/{id}/roles/{role}/restart",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/workflows/{id}/roles/{role}/state-hold",
     "auth": "verb:Admin",
     "domain": "core"
   },
@@ -2772,6 +2784,12 @@
     "method": "POST",
     "path": "/api/v1/workflows/{id}/start",
     "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/workflows/{id}/state-holds",
+    "auth": "auth",
     "domain": "core"
   },
   {

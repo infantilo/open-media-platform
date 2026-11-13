@@ -186,6 +186,12 @@ type WorkflowService interface {
 	// Doku: bedienerausgelöster Make-before-break-Umzug einer laufenden
 	// Rolle auf einen anderen Host (Drag-Umzug im Flow-Editor).
 	MigrateRole(ctx context.Context, id, role, targetHostID string) error
+	// RearmStandby (Kapitel 100): nach einer Standby-Übernahme einen neuen Standby aufbauen.
+	RearmStandby(ctx context.Context, id, role string) error
+	// Gehaltener Zustand nach Absturz-Neustart (Kapitel 100, workflows/statehold.go).
+	HeldStates(id string) ([]string, error)
+	RestoreHeldState(ctx context.Context, id, role string) error
+	DiscardHeldState(id, role string) error
 	Pause(ctx context.Context, id string, confirm bool) error
 	Export(id string, includeBindings bool) (workflows.ExportedWorkflow, error)
 	Import(exported workflows.ExportedWorkflow, ownerOrgID string) (workflows.Workflow, error)
@@ -712,6 +718,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/workflows/{id}/stop", g.requireVerbGlobal(authz.VerbAdmin, handleStopWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/pause", g.requireVerbGlobal(authz.VerbAdmin, handlePauseWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/restart", g.requireVerbGlobal(authz.VerbAdmin, handleRestartWorkflowRole(workflowSvc)))
+	mux.HandleFunc("GET /api/v1/workflows/{id}/state-holds", g.requireAuth(handleWorkflowStateHolds(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/state-hold", g.requireVerbGlobal(authz.VerbAdmin, handleWorkflowStateHoldAction(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/rearm-standby", g.requireVerbGlobal(authz.VerbAdmin, handleRearmStandby(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/migrate", g.requireVerbGlobal(authz.VerbAdmin, blockMaintenanceHost(options.maintenance, "targetHostId", handleMigrateWorkflowRole(workflowSvc))))
 	// requireVerbGlobal(VerbConfigure) statt requireAuth (Nutzerwunsch
 	// 2026-07-28): der optionale ?includeBindings=true-Parameter (s.

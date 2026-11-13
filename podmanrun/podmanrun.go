@@ -215,6 +215,14 @@ func Stop(containerID string, grace time.Duration) error {
 	return nil
 }
 
+// Kill beendet einen Container sofort (SIGKILL) — für hängende Instanzen, deren Ende als Absturz gelten soll.
+func Kill(containerID string) error {
+	if out, err := exec.Command(Binary, "kill", containerID).CombinedOutput(); err != nil {
+		return fmt.Errorf("podman kill %s: %w (%s)", containerID, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Wait blockiert bis der Container endet und liefert den Exit-Code.
 func Wait(containerID string) (int, error) {
 	out, err := exec.Command(Binary, "wait", containerID).Output()

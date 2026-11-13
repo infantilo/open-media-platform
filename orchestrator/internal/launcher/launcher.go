@@ -3149,3 +3149,45 @@ func (l *Launcher) ReconcileRemote(hostID string, running []string) []string {
 	}
 	return lost
 }
+
+// ErrNotRunning wird von Kick geliefert, wenn die Instanz abgestürzt geführt wird oder ihr Stop vorgemerkt ist.
+var ErrNotRunning = errors.New("launcher: instance is not running")
+
+// Kick beendet den Prozess einer Instanz hart (SIGKILL), ohne sie aus der Buchführung zu nehmen: das Ende gilt als
+// Absturz und läuft durch dieselbe Überwachung wie jeder andere (Crash-Loop-Bremse, Neustart unter derselben ID,
+// Neuverkabelung). Gedacht für hängende Instanzen — Prozess lebt, liefert aber nichts mehr und reagiert auf nichts.
+// Entfernte Instanzen brauchen einen Host-Agent, der das Kommando "kill" kennt.
+func (l *Launcher) Kick(id string) error {
+	l.mu.Lock()
+	inst, ok := l.instances[id]
+	l.mu.Unlock()
+	if !ok {
+		inst, ok = l.adoptRemoteFromStore(id)
+	}
+	if !ok {
+		return ErrUnknownInstance
+	}
+	if inst.Crashed || inst.StopPending {
+		return ErrNotRunning
+	}
+	if inst.HostID != "" {
+		if l.nc == nil {
+			return ErrRemoteUnavailable
+		}
+		resp, err := l.sendCommand(inst.HostID, remoteCommand{Action: "kill", InstanceID: id})
+		if err != nil {
+			return fmt.Errorf("launcher: remote kill on host %s: %w", inst.HostID, err)
+		}
+		if !resp.OK {
+			return fmt.Errorf("launcher: remote kill on host %s failed: %s", inst.HostID, resp.Error)
+		}
+		return nil
+	}
+	if inst.ContainerID != "" {
+		return killPodmanContainer(inst.ContainerID)
+	}
+	if inst.PID <= 0 {
+		return ErrNotRunning
+	}
+	return syscall.Kill(inst.PID, syscall.SIGKILL)
+}

@@ -238,6 +238,7 @@ func (s *Service) pinRoleState(wf Workflow) {
 func (s *Service) captureRoleStateMode(wf Workflow, role string, senderToAlias map[string]string, mode captureMode) error {
 	if mode == capturePin {
 		s.clearUnrestored(wf.ID, role)
+		s.setStateHold(wf.ID, role, false)
 	} else {
 		saved, _ := s.store.GetRoleState(wf.ID)
 		// Die Rolle hat ihren gespeicherten Zustand noch nicht (erfolgreich)
@@ -247,6 +248,11 @@ func (s *Service) captureRoleStateMode(wf Workflow, role string, senderToAlias m
 		// Start ihre Einstellungen). Der Merker steht auch im gespeicherten
 		// Eintrag und überlebt so einen Orchestrator-Neustart.
 		if s.isUnrestored(wf.ID, role) || hasUnrestoredMarker(saved[role]) {
+			return nil
+		}
+		// Nach einem Absturz-Neustart ist der Node leer; sein gesicherter Stand bleibt stehen, bis jemand entscheidet
+		// (einspielen oder verwerfen, s. statehold.go). Ein ausdrückliches Speichern (Pin) hebt das auf.
+		if hasMarker(saved[role], heldMarkerKey) {
 			return nil
 		}
 		if mode == captureAuto {
@@ -455,12 +461,13 @@ func (s *Service) restoreOneRoleStateN(wf Workflow, role string, raw json.RawMes
 	err := s.restoreOneRoleStateTry(wf, role, raw, retries)
 	if err == nil {
 		s.clearUnrestored(wf.ID, role)
+		s.setStateHold(wf.ID, role, false) // der gesicherte Stand ist im Node: die Sicherung darf wieder laufen
 	}
 	return err
 }
 
 func (s *Service) restoreOneRoleStateTry(wf Workflow, role string, raw json.RawMessage, retries int) error {
-	raw = stripUnrestoredMarker(raw)
+	raw = stripMarker(stripUnrestoredMarker(raw), heldMarkerKey)
 	// Schon in einem früheren Durchlauf eingespielt: nur noch prüfen, nie erneut schreiben.
 	verifyOnly := s.wasPosted(wf.ID, role)
 	var lastErr error

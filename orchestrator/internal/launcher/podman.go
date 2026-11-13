@@ -57,3 +57,5 @@ func dataVolumeName(nodeType string) string { return podmanrun.DataVolumeName(no
 
 // removeDataVolume löscht das Datenvolumen eines Node-Typs. Variable für Tests.
 var removeDataVolume = podmanrun.RemoveDataVolume
+
+func killPodmanContainer(containerID string) error { return podmanrun.Kill(containerID) }

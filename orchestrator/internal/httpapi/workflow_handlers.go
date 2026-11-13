@@ -355,8 +355,79 @@ func handleImportWorkflow(svc WorkflowService) http.HandlerFunc {
 	}
 }
 
+// handleRearmStandby liefert POST /api/v1/workflows/{id}/roles/{role}/rearm-standby: läuft die Rolle nach einer
+// Übernahme auf ihrem Standby, wird ein neuer Standby auf einem anderen Host aufgebaut (workflows.Service.
+// RearmStandby). Antwortet sofort; der Fortschritt kommt als SSE-Ereignis "workflow.standby". 409, wenn es nichts
+// wiederherzustellen gibt.
+func handleRearmStandby(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		if err := svc.RearmStandby(r.Context(), id, r.PathValue("role")); err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+	}
+}
+
+// handleWorkflowStateHolds liefert GET /api/v1/workflows/{id}/state-holds: die Rollen, deren gesicherter Zustand nach
+// einem Absturz-Neustart gehalten wird ({"roles":[...]}).
+func handleWorkflowStateHolds(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		roles, err := svc.HeldStates(id)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string][]string{"roles": roles})
+	}
+}
+
+// handleWorkflowStateHoldAction liefert POST /api/v1/workflows/{id}/roles/{role}/state-hold mit
+// {"action":"restore"} (gehaltenen Zustand in den laufenden Node einspielen) oder {"action":"discard"} (aufgeben,
+// der jetzige Stand gilt). 409, wenn für die Rolle nichts gehalten wird.
+func handleWorkflowStateHoldAction(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		var body struct {
+			Action string `json:"action"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		var err error
+		switch body.Action {
+		case "restore":
+			err = svc.RestoreHeldState(r.Context(), id, r.PathValue("role"))
+		case "discard":
+			err = svc.DiscardHeldState(id, r.PathValue("role"))
+		default:
+			http.Error(w, `action must be "restore" or "discard"`, http.StatusBadRequest)
+			return
+		}
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
 func writeWorkflowError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, workflows.ErrNothingToRearm), errors.Is(err, workflows.ErrNoHeldState):
+		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, workflows.ErrNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, workflows.ErrValidation), errors.Is(err, workflows.ErrLatencyBudgetInsufficient):

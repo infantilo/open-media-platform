@@ -367,6 +367,7 @@ func (s *Service) failoverTick() {
 		s.reconcileMigrationJournal(wf)
 	}
 	s.checkLostHosts(wfs)
+	s.checkHungNodes(wfs)
 }
 
 // checkHostOffline implementiert Trigger 2. rt.HostID=="" (lokal beim

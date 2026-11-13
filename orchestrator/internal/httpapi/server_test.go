@@ -623,6 +623,16 @@ func (f fakeWorkflowService) RestartRole(ctx context.Context, id, role, format s
 	return f.restartRoleErr
 }
 
+func (f fakeWorkflowService) RearmStandby(ctx context.Context, id, role string) error { return nil }
+func (f fakeWorkflowService) HeldStates(id string) ([]string, error)                  { return []string{"mix"}, nil }
+func (f fakeWorkflowService) RestoreHeldState(ctx context.Context, id, role string) error {
+	if role != "mix" {
+		return workflows.ErrNoHeldState
+	}
+	return nil
+}
+func (f fakeWorkflowService) DiscardHeldState(id, role string) error { return nil }
+
 func (f fakeWorkflowService) MigrateRole(ctx context.Context, id, role, targetHostID string) error {
 	return f.migrateRoleErr
 }

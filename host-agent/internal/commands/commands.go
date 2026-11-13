@@ -333,6 +333,8 @@ func (e *Executor) Handle(req Request) Response {
 		return e.start(req)
 	case "stop":
 		return e.stop(req)
+	case "kill":
+		return e.kill(req)
 	case "update":
 		return e.update(req)
 	case "software":
@@ -687,4 +689,26 @@ func (e *Executor) StopAll() int {
 		e.stop(Request{Action: "stop", InstanceID: id})
 	}
 	return len(ids)
+}
+
+// kill beendet eine Instanz sofort (SIGKILL), OHNE sie als "wird gestoppt" zu merken: ihr Ende wird wie ein Absturz
+// gemeldet (ExitEvent) und der Orchestrator startet sie über seine Crash-Loop-Bremse neu. Für hängende Instanzen
+// (Prozess lebt, antwortet aber nicht mehr), bei denen ein SIGTERM nichts mehr bewirkt.
+func (e *Executor) kill(req Request) Response {
+	e.mu.Lock()
+	running, ok := e.instances[req.InstanceID]
+	e.mu.Unlock()
+	if !ok {
+		return Response{OK: false, Error: "instance not running on this host"}
+	}
+	if running.containerID != "" {
+		if err := podmanrun.Kill(running.containerID); err != nil {
+			return Response{OK: false, Error: err.Error()}
+		}
+		return Response{OK: true}
+	}
+	if err := running.cmd.Process.Kill(); err != nil {
+		return Response{OK: false, Error: err.Error()}
+	}
+	return Response{OK: true}
 }

@@ -319,6 +319,8 @@ type Service struct {
 	promoting    sync.Map
 	// relocating (hostloss.go): Hosts, deren Rollen gerade wegen Ausfalls umziehen bzw. frühester nächster Versuch.
 	relocating sync.Map // hostID -> time.Time (nächster Versuch) | struct{}{} (läuft)
+	// hang (hang.go): Beobachtung nicht mehr gesund gemeldeter Rollen-Nodes.
+	hang hangState
 	// identity/nonce (Umzugs-Journal): wer dieser Orchestrator ist und welcher Prozesslauf.
 	identity  string
 	nonceOnce sync.Once
@@ -1339,6 +1341,12 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 	wf, err := s.store.Get(workflowID)
 	if err != nil || wf.Status != StatusStarted {
 		return
+	}
+
+	// Der neu gestartete Node ist leer. Seinen zuletzt gesicherten Stand halten (statehold.go): die periodische
+	// Sicherung darf ihn nicht mit dem leeren überschreiben; eingespielt wird er nur auf Bedienerentscheidung.
+	if s.setStateHold(workflowID, role, true) {
+		slog.Warn("workflows: role restarted after a crash, keeping its last saved state until restored or discarded", "workflow", workflowID, "role", role)
 	}
 
 	// Nicht awaitRegistration (das nimmt jede Registrierung mit
