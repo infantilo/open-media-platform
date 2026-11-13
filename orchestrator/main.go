@@ -709,7 +709,12 @@ func main() {
 			if !ok {
 				return
 			}
-			launcherSvc.HandleRemoteExit(hostID, msg.Data)
+			// Eigene Goroutine je Ereignis: HandleRemoteExit wartet den Neustart-Backoff ab und schickt dann ein
+			// Start-Kommando (bis remoteCommandTimeout). Im NATS-Callback liefe das streng nacheinander — fallen auf
+			// einem Host viele Instanzen zugleich aus, käme die letzte erst nach Minuten wieder, und Ereignisse
+			// anderer Hosts stauten sich dahinter.
+			data := append([]byte(nil), msg.Data...)
+			safego.Go("launcher.HandleRemoteExit", func() { launcherSvc.HandleRemoteExit(hostID, data) })
 		})
 	}
 
