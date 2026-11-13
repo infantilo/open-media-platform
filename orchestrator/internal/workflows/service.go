@@ -2177,7 +2177,11 @@ func (s *Service) runStop(wf Workflow, targetStatus string) {
 		if rt.InstanceID != "" {
 			// Eine Instanz, die es nicht mehr gibt (z. B. von Hand im laufenden Workflow gestoppt), ist beim Stoppen schon
 			// erledigt — kein Grund, den ganzen Workflow auf „failed“ zu setzen (und damit löschen zu sperren).
-			if err := s.launcher.Stop(rt.InstanceID); err != nil && !errors.Is(err, launcher.ErrUnknownInstance) {
+			// Ebenso ein vorgemerkter Stop (Host nicht erreichbar): der Launcher holt ihn nach, sobald der Host
+			// wieder da ist.
+			if err := s.launcher.Stop(rt.InstanceID); errors.Is(err, launcher.ErrStopDeferred) {
+				slog.Warn("workflows: stop deferred, host not reachable", "workflow", wf.ID, "role", role, "instance", rt.InstanceID)
+			} else if err != nil && !errors.Is(err, launcher.ErrUnknownInstance) {
 				errs = append(errs, fmt.Sprintf("role %s: %v", role, err))
 			}
 			// Root-Cause-Fix (Nutzerfund 2026-09-24): die Service-Token-

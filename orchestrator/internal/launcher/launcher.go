@@ -96,6 +96,10 @@ var (
 	// gesetztem hostID aufgerufen wird, der Launcher aber ohne
 	// NATSRequester konstruiert wurde (kein Kommandokanal verdrahtet).
 	ErrRemoteUnavailable = errors.New("launcher: remote hosts not available (no NATS connection configured)")
+	// ErrStopDeferred wird (umhüllt) von Stop() geliefert, wenn der Host einer entfernten Instanz nicht
+	// antwortete: der Stop ist vorgemerkt (Instance.StopPending) und wird nachgeholt, statt die Instanz zu
+	// vergessen. Aufrufer dürfen das als "wird erledigt" werten.
+	ErrStopDeferred = errors.New("launcher: stop deferred until the host is reachable again")
 )
 
 // stopGracePeriod ist die Wartezeit zwischen SIGTERM und SIGKILL beim
@@ -150,6 +154,11 @@ type Instance struct {
 	// unterstützt (dokumentierte Folgearbeit, docs/decisions.md D6 Teil
 	// 2 — der Host-Agent meldet einen Absturz noch nicht zurück).
 	Crashed bool `json:"crashed,omitempty"`
+	// StopPending: die Instanz soll gestoppt werden, ihr Host war dafür aber nicht erreichbar. Sie bleibt geführt
+	// (und gespeichert), bis der Host-Agent den Stop bestätigt hat — RetryPendingStops holt ihn nach, sobald der
+	// Host wieder Telemetrie sendet. So läuft nach einer Netztrennung keine vergessene Instanz weiter (Abgrenzung
+	// nach Failover/Umzug). Eine vorgemerkte Instanz wird nie neu gestartet oder wiederhergestellt.
+	StopPending bool `json:"stopPending,omitempty"`
 	// Outdated: das Binary dieses Typs wurde seit dem Prozessstart
 	// ersetzt (System-Update) — die Instanz läuft noch mit dem alten
 	// Stand, bis sie neu gestartet wird. Wird erst beim Ausliefern der
@@ -405,6 +414,8 @@ type Launcher struct {
 	// laufend geführte entfernte Instanz fehlte, bzw. Instanzen, deren (Neu-)Start gerade läuft.
 	remoteMissing map[string]int
 	remoteBusy    map[string]bool
+	// seenInStore (SyncRemoteFromStore): entfernte Instanzen, deren Zeile dieser Prozess schon in der Tabelle sah.
+	seenInStore map[string]bool
 	// adoptedAtLoad: beim Laden noch laufende lokale Instanzen (per PID bzw. Container wiedererkannt). Sie sind keine
 	// Kindprozesse dieses Orchestrators mehr; RestoreLocal hängt ihnen wieder eine Überwachung an (superviseAdopted).
 	adoptedAtLoad []string
@@ -951,12 +962,16 @@ const resourceSampleInterval = 5 * time.Second
 func (l *Launcher) Run(ctx context.Context) {
 	ticker := time.NewTicker(resourceSampleInterval)
 	defer ticker.Stop()
+	tick := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			l.sampleLocalResources()
+			if tick++; tick%2 == 0 { // alle 10 s
+				l.SyncRemoteFromStore()
+			}
 		}
 	}
 }
@@ -2150,7 +2165,11 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 	l.mu.Lock()
 	current, tracked := l.instances[ev.InstanceID]
 	l.mu.Unlock()
-	if !tracked || current.HostID != hostID {
+	if !tracked {
+		// Im Cluster kann ein anderes Mitglied die Instanz gestartet haben (geteilte Tabelle).
+		current, tracked = l.adoptRemoteFromStore(ev.InstanceID)
+	}
+	if !tracked || current.HostID != hostID || current.StopPending {
 		// Unbekannte/fremde Instanz — z. B. ein bereits per Stop()
 		// entfernter Eintrag, dessen Exit-Event nach der lokalen
 		// Buchführung ankam (Race zwischen Stop() und Prozessende,
@@ -2198,7 +2217,7 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 	l.mu.Lock()
 	current, tracked = l.instances[ev.InstanceID]
 	l.mu.Unlock()
-	if !tracked {
+	if !tracked || current.StopPending {
 		// Stop() während des Backoffs — nicht mehr neu starten.
 		return
 	}
@@ -2246,7 +2265,7 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 
 	l.mu.Lock()
 	current, tracked = l.instances[ev.InstanceID]
-	if !tracked {
+	if !tracked || current.StopPending {
 		// Stop() lief exakt während des Neustart-Kommandos — den frisch
 		// gestarteten Ersatzprozess wieder stoppen, nicht verwaisen
 		// lassen (gleiches Prinzip wie supervise()'s "newCmd.Process.Kill()").
@@ -2326,26 +2345,194 @@ func crashMessage(waitErr error, stderrTail string) string {
 func (l *Launcher) Stop(id string) error {
 	l.mu.Lock()
 	inst, ok := l.instances[id]
-	if ok {
-		delete(l.instances, id)
-		// Crash-Loop-Buchführung endet mit der Instanz — ein bewusst
-		// gestoppter, später erneut gestarteter Node (neue Instanz-ID)
-		// fängt bei der Bremse wieder bei null an.
-		delete(l.restarts, id)
-		if err := l.store.Delete(id); err != nil {
-			slog.Warn("launcher: failed to persist instance state", "error", err)
-		}
-	}
 	l.mu.Unlock()
-
+	if !ok {
+		// Im Cluster kann ein anderes Mitglied die Instanz gestartet haben (geteilte Tabelle).
+		inst, ok = l.adoptRemoteFromStore(id)
+	}
 	if !ok {
 		return ErrUnknownInstance
 	}
 
-	if inst.HostID != "" {
-		return l.stopRemote(inst)
+	if inst.HostID == "" {
+		l.forget(id)
+		return l.stopLocal(inst)
 	}
-	return l.stopLocal(inst)
+
+	// Entfernte Instanz: erst als "wird gestoppt" markieren (ab jetzt startet sie niemand mehr neu), dann den Agent
+	// fragen. Vergessen wird sie erst, wenn der Agent den Stop bestätigt hat.
+	l.mu.Lock()
+	if cur, still := l.instances[id]; still {
+		cur.StopPending = true
+		l.instances[id] = cur
+		delete(l.restarts, id)
+		delete(l.remoteMissing, id)
+	}
+	l.mu.Unlock()
+	l.setRemoteBusy(id, true) // der Tabellen-Abgleich darf die Markierung nicht mit dem gespeicherten Stand überschreiben
+	defer l.setRemoteBusy(id, false)
+
+	err := l.stopRemote(inst)
+	if err == nil {
+		l.forget(id)
+		return nil
+	}
+	l.mu.Lock()
+	if _, still := l.instances[id]; still {
+		if perr := l.persistInstanceLocked(id); perr != nil {
+			slog.Warn("launcher: failed to persist instance state", "error", perr)
+		}
+	}
+	l.mu.Unlock()
+	slog.Warn("launcher: remote stop failed, keeping the instance as stop-pending", "id", id, "host_id", inst.HostID, "error", err)
+	return fmt.Errorf("%w: %v", ErrStopDeferred, err)
+}
+
+// forget entfernt id aus Buchführung und Speicher.
+func (l *Launcher) forget(id string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.instances, id)
+	// Crash-Loop-Buchführung endet mit der Instanz — ein bewusst
+	// gestoppter, später erneut gestarteter Node (neue Instanz-ID)
+	// fängt bei der Bremse wieder bei null an.
+	delete(l.restarts, id)
+	delete(l.remoteMissing, id)
+	if err := l.store.Delete(id); err != nil {
+		slog.Warn("launcher: failed to persist instance state", "error", err)
+	}
+}
+
+// RetryPendingStops holt vorgemerkte Stops (Instance.StopPending) für hostID nach. Aufruf, sobald der Host wieder
+// Telemetrie sendet (main.go, nur Leader). Der Stop ist beim Agent idempotent: läuft die Instanz nach einem
+// Host-Neustart ohnehin nicht mehr, bestätigt er trotzdem. Liefert die IDs, für die ein Versuch gestartet wurde.
+func (l *Launcher) RetryPendingStops(hostID string) []string {
+	if hostID == "" || l.nc == nil {
+		return nil
+	}
+	var pending []Instance
+	l.mu.Lock()
+	for id, inst := range l.instances {
+		if inst.HostID == hostID && inst.StopPending && !l.remoteBusy[id] {
+			if l.remoteBusy == nil {
+				l.remoteBusy = map[string]bool{}
+			}
+			l.remoteBusy[id] = true
+			pending = append(pending, inst)
+		}
+	}
+	l.mu.Unlock()
+	ids := make([]string, 0, len(pending))
+	for _, inst := range pending {
+		inst := inst
+		ids = append(ids, inst.ID)
+		safego.Go("launcher.retryPendingStop", func() {
+			defer l.setRemoteBusy(inst.ID, false)
+			if err := l.stopRemote(inst); err != nil {
+				return // nächster Versuch mit der nächsten Meldung des Hosts
+			}
+			l.forget(inst.ID)
+			slog.Info("launcher: deferred stop completed", "id", inst.ID, "host_id", inst.HostID)
+		})
+	}
+	return ids
+}
+
+// adoptRemoteFromStore lädt eine hier unbekannte, aber in der geteilten Tabelle stehende ENTFERNTE Instanz in die
+// eigene Buchführung (Cluster: ein anderes Mitglied hat sie gestartet). Lokale Instanzen eines anderen Mitglieds
+// werden nicht übernommen — ihr Prozess liegt auf dessen Rechner.
+func (l *Launcher) adoptRemoteFromStore(id string) (Instance, bool) {
+	saved, err := l.store.List()
+	if err != nil {
+		return Instance{}, false
+	}
+	for _, inst := range saved {
+		if inst.ID != id || inst.HostID == "" {
+			continue
+		}
+		l.mu.Lock()
+		if cur, ok := l.instances[id]; ok {
+			inst = cur
+		} else {
+			l.instances[id] = inst
+		}
+		if l.seenInStore == nil {
+			l.seenInStore = map[string]bool{}
+		}
+		l.seenInStore[id] = true
+		l.mu.Unlock()
+		return inst, true
+	}
+	return Instance{}, false
+}
+
+// SyncRemoteFromStore gleicht die Buchführung ENTFERNTER Instanzen mit der im Cluster geteilten Tabelle ab: Zeilen,
+// die ein anderes Mitglied angelegt hat, werden übernommen; hier geführte Instanzen, deren Zeile ein anderes Mitglied
+// gelöscht hat (gestoppt), verschwinden. Der Launcher-Zustand lag vorher nur im Speicher des Mitglieds, das die
+// Instanz gestartet hatte — nach einem Führungswechsel verwarf der neue Leader deren Exit-Ereignisse, und Stop über
+// ein anderes Mitglied meldete "unbekannte Instanz". Instanzen in Arbeit (Start/Stop/Wiederherstellung) und noch
+// zur Wiederherstellung vorgemerkte bleiben unberührt. Lokale Instanzen sind nicht betroffen.
+func (l *Launcher) SyncRemoteFromStore() {
+	// Lesen unter der Sperre: jede Änderung schreibt Speicher und Tabelle gemeinsam unter l.mu — ein Lesen davor
+	// sähe einen Stand, der beim Vergleich schon überholt sein kann (frisch gestartete Instanz "fehlt").
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	saved, err := l.store.List()
+	if err != nil {
+		return
+	}
+	byID := make(map[string]Instance, len(saved))
+	for _, inst := range saved {
+		byID[inst.ID] = inst
+	}
+	if l.seenInStore == nil {
+		l.seenInStore = map[string]bool{}
+	}
+	pending := make(map[string]bool, len(l.pendingRestore))
+	for _, inst := range l.pendingRestore {
+		pending[inst.ID] = true
+	}
+	for id, inst := range byID {
+		if inst.HostID == "" || pending[id] || l.remoteBusy[id] {
+			continue
+		}
+		l.seenInStore[id] = true
+		cur, ok := l.instances[id]
+		if !ok {
+			l.instances[id] = inst
+			continue
+		}
+		// Von einem anderen Mitglied geänderter Stand (Neustart, Absturz, Stop-Vormerkung) gewinnt, solange hier
+		// nichts in Arbeit ist: geschrieben wird immer von dem Mitglied, das gerade handelt.
+		if cur.PID != inst.PID || cur.Crashed != inst.Crashed || cur.StopPending != inst.StopPending || cur.RestartCount != inst.RestartCount || cur.Label != inst.Label {
+			l.instances[id] = inst
+		}
+	}
+	for id, inst := range l.instances {
+		if inst.HostID == "" || l.remoteBusy[id] {
+			continue
+		}
+		if _, ok := byID[id]; ok {
+			continue
+		}
+		if !l.seenInStore[id] {
+			// Nie in der Tabelle gesehen: das Speichern beim Start ist gescheitert (Datenbank kurz weg). Die Instanz
+			// läuft — nachtragen statt vergessen.
+			if err := l.persistInstanceLocked(id); err != nil {
+				slog.Warn("launcher: failed to persist instance state", "error", err)
+			}
+			continue
+		}
+		delete(l.instances, id)
+		delete(l.restarts, id)
+		delete(l.remoteMissing, id)
+		delete(l.seenInStore, id)
+	}
+	for id := range l.seenInStore {
+		if _, ok := byID[id]; !ok {
+			delete(l.seenInStore, id)
+		}
+	}
 }
 
 func (l *Launcher) stopLocal(inst Instance) error {
@@ -2420,7 +2607,14 @@ func (l *Launcher) loadState() {
 		slog.Warn("launcher: failed to read persisted instance state", "error", err)
 		return
 	}
+	l.seenInStore = map[string]bool{}
 	for _, inst := range saved {
+		l.seenInStore[inst.ID] = true
+		// Vorgemerkter Stop einer entfernten Instanz: weiter führen (RetryPendingStops), nie wiederherstellen.
+		if inst.HostID != "" && inst.StopPending {
+			l.instances[inst.ID] = inst
+			continue
+		}
 		// Kapitel 17 Teil 4: ContainerID gesetzt heißt Podman-Instanz,
 		// podmanContainerRunning statt processAlive prüfen — gleiche
 		// Nachsicht/Wiedererkennungslogik wie beim Prozess-Runner, nur
@@ -2461,7 +2655,14 @@ func (l *Launcher) loadState() {
 // Voll-Dumps aller Instanzen bei jeder Änderung). Aufrufer muss l.mu
 // bereits halten und id muss in l.instances existieren.
 func (l *Launcher) persistInstanceLocked(id string) error {
-	return l.store.Put(l.instances[id])
+	err := l.store.Put(l.instances[id])
+	if err == nil {
+		if l.seenInStore == nil {
+			l.seenInStore = map[string]bool{}
+		}
+		l.seenInStore[id] = true
+	}
+	return err
 }
 
 // processAlive prüft per Signal 0 (Standard-Unix-Idiom, sendet kein
@@ -2814,9 +3015,9 @@ func (l *Launcher) restoreRemoteOne(inst Instance) {
 	var lastErr string
 	for {
 		l.mu.Lock()
-		_, tracked := l.instances[inst.ID]
+		cur, tracked := l.instances[inst.ID]
 		l.mu.Unlock()
-		if !tracked {
+		if !tracked || cur.StopPending {
 			return // Stop() während der Wiederholungen
 		}
 		if !l.stillPersisted(inst.ID) {
@@ -2920,7 +3121,7 @@ func (l *Launcher) ReconcileRemote(hostID string, running []string) []string {
 		if inst.HostID != hostID {
 			continue
 		}
-		if inst.Crashed || l.remoteBusy[id] || present[id] {
+		if inst.Crashed || inst.StopPending || l.remoteBusy[id] || present[id] {
 			delete(l.remoteMissing, id)
 			continue
 		}

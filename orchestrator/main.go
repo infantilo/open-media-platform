@@ -380,7 +380,7 @@ func main() {
 			hostHistory.Record(hostID, m)
 			// Kapitel 100 Punkt 1: Abgleich der Instanz-Buchführung mit dem, was der Agent als laufend meldet
 			// (erst verdrahtet, sobald Launcher und Cluster-Knoten existieren).
-			if f := remoteReconcile.Load(); f != nil && m.RunningInstanceIDs != nil {
+			if f := remoteReconcile.Load(); f != nil {
 				(*f)(hostID, m.RunningInstanceIDs)
 			}
 		}
@@ -710,7 +710,11 @@ func main() {
 	// geforkt hat, kann dessen Ende überhaupt beobachten, das ist
 	// bereits von Natur aus single-owner).
 	reconcileFn := func(hostID string, running []string) {
-		if clusterNode.IsLeader() { // wie HandleRemoteExit: nur der Leader führt Crash-Zähler und startet neu
+		if !clusterNode.IsLeader() { // wie HandleRemoteExit: nur der Leader führt Crash-Zähler und startet neu
+			return
+		}
+		launcherSvc.RetryPendingStops(hostID) // der Host ist wieder da: vorgemerkte Stops nachholen
+		if running != nil {                   // nil = älterer Agent ohne die Liste
 			launcherSvc.ReconcileRemote(hostID, running)
 		}
 	}

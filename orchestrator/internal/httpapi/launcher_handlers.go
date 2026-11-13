@@ -388,7 +388,12 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 func handleDeleteInstance(svc LauncherService, ioPortStore IOPortInventoryStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		if err := svc.Stop(id); err != nil {
+		if err := svc.Stop(id); errors.Is(err, launcher.ErrStopDeferred) {
+			// Host nicht erreichbar: der Stop ist vorgemerkt und wird nachgeholt (Instance.stopPending). Der I/O-Port
+			// bleibt bis dahin belegt — die Instanz kann dort noch laufen.
+			writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true, "deferred": true})
+			return
+		} else if err != nil {
 			writeLauncherError(w, err)
 			return
 		}
