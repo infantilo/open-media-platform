@@ -1151,6 +1151,7 @@ func main() {
 	// Wartungsmodus für Hosts: Sperre + Make-before-break-Evakuierung (internal/maintenance).
 	maintenanceMgr := maintenance.NewManager(hostStore, placementEngine, workflowSvc, maintenanceInstances{launcherSvc}, hub)
 	maintenanceMgr.Restore()
+	go maintenanceMgr.ResumeAfterRestart(ctx, 45*time.Second, clusterNode.IsLeader)
 
 	// D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1): führt Start/Stop-
 	// Zeitpläne aus, unabhängig vom HTTP-Handler.

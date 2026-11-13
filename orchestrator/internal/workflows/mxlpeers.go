@@ -56,3 +56,8 @@ func mxlPeerConflict(nodes []registry.NodeView, edges []graph.Edge, instHost map
 	}
 	return "", false
 }
+
+// MXLPeerConflict ist mxlPeerConflict für andere Pakete (Einzelumzug eigenständiger Instanzen, instancemigrate).
+func MXLPeerConflict(nodes []registry.NodeView, edges []graph.Edge, instHost map[string]string, oldNodeID, targetHost string) (string, bool) {
+	return mxlPeerConflict(nodes, edges, instHost, nil, oldNodeID, targetHost)
+}

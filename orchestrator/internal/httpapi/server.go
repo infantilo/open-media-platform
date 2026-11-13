@@ -378,6 +378,13 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	if mover, ok := options.nodeValues.(instancemigrate.OptionMover); ok {
 		instanceMigrateSvc.SetOptionMover(mover)
 	}
+	// Kap. 100.9: Workflow-Rollen nicht einzeln umziehen; Übergabe-Aufrufe an Nodes mit Token/mTLS.
+	if rf, ok := workflowSvc.(instancemigrate.RoleFinder); ok {
+		instanceMigrateSvc.SetRoleFinder(rf)
+	}
+	if nodeClient != nil {
+		instanceMigrateSvc.SetHTTPClient(nodeClient)
+	}
 	// Sicherheits-Härtung 2026-08-10 (ARCHITECTURE.md §20.4): prozesslokal
 	// statt injiziert — reines In-Memory-Rate-Limiting braucht keinen
 	// austauschbaren Test-Doppelgänger, der über die ohnehin schon sehr

@@ -126,6 +126,36 @@ func (m *Manager) Restore() {
 	}
 }
 
+// ResumeAfterRestart setzt nach einem Neustart eine unterbrochene Evakuierung fort (Kap. 100.10): nach `delay`
+// (Telemetrie der Hosts muss wieder da sein) wird für jeden wiederhergestellten Wartungs-Host, auf dem noch
+// Workflow-Rollen stehen, die Evakuierung erneut angestoßen — aber nur, wenn dieser Orchestrator die Führung hat
+// (leader == nil: immer). Eigenständige Instanzen bleiben wie bisher Handarbeit. Einmalig; ctx bricht ab.
+func (m *Manager) ResumeAfterRestart(ctx context.Context, delay time.Duration, leader func() bool) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(delay):
+	}
+	if leader != nil && !leader() {
+		return
+	}
+	m.mu.Lock()
+	var ids []string
+	for id, e := range m.entries {
+		if !e.running {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range ids {
+		if len(m.evac.RolesOn(id)) == 0 {
+			continue
+		}
+		slog.Info("maintenance: Evakuierung nach Neustart fortgesetzt", "host", id)
+		_ = m.Enter(id)
+	}
+}
+
 // Enter versetzt den Host in den Wartungsmodus und startet die Evakuierung.
 // Idempotent; ein erneuter Aufruf nach "blocked" versucht die Reste nochmal.
 func (m *Manager) Enter(hostID string) error {

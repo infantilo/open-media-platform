@@ -493,7 +493,8 @@ func writeInstanceMigrateError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, instancemigrate.ErrUnknownInstance):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, instancemigrate.ErrSameHost), errors.Is(err, instancemigrate.ErrNotRegistered):
+	case errors.Is(err, instancemigrate.ErrSameHost), errors.Is(err, instancemigrate.ErrNotRegistered),
+		errors.Is(err, instancemigrate.ErrWorkflowRole), errors.Is(err, instancemigrate.ErrMXLPeer):
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)

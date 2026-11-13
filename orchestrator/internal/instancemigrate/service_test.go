@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -433,5 +435,111 @@ func TestMigrateInstanceKeepsOldRunningWhenNewNeverRegisters(t *testing.T) {
 	defer g.mu.Unlock()
 	if len(g.calls) != 0 {
 		t.Fatalf("keine Kante darf umgeschaltet werden: %+v", g.calls)
+	}
+}
+
+func (f *fakeLauncher) List() []launcher.Instance {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]launcher.Instance, 0, len(f.byID))
+	for _, i := range f.byID {
+		out = append(out, i)
+	}
+	return out
+}
+
+type fakeRoles struct{ id string }
+
+func (r fakeRoles) FindRoleForInstance(id string) (string, string, bool) {
+	if id == r.id {
+		return "wf-1", "automation", true
+	}
+	return "", "", false
+}
+
+func TestMigrateInstanceRejectsWorkflowRole(t *testing.T) {
+	nodes := &fakeNodes{}
+	l := newFakeLauncher()
+	svc := NewService(nodes, l, &fakeGraph{})
+	svc.SetRoleFinder(fakeRoles{id: "old-1"})
+	l.seed(launcher.Instance{ID: "old-1", Type: "omp-scaler", HostID: "host-a"})
+	nodes.add(registry.NodeView{ID: "node-old", InstanceID: "old-1"})
+	if err := svc.MigrateInstance(context.Background(), "old-1", "host-b"); !errors.Is(err, ErrWorkflowRole) {
+		t.Fatalf("error = %v, want ErrWorkflowRole", err)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.stopped) != 0 || len(l.pinsUsed) != 0 {
+		t.Fatal("nichts darf gestartet oder gestoppt werden")
+	}
+}
+
+func TestMigrateInstanceRejectsMXLPeerOnOtherHost(t *testing.T) {
+	nodes := &fakeNodes{}
+	l := newFakeLauncher()
+	g := &fakeGraph{}
+	svc := NewService(nodes, l, g)
+	l.seed(launcher.Instance{ID: "old-1", Type: "omp-scaler", HostID: "host-a"})
+	l.seed(launcher.Instance{ID: "peer-1", Type: "omp-viewer", HostID: "host-a"})
+	nodes.add(registry.NodeView{ID: "node-old", InstanceID: "old-1", Senders: []registry.SenderView{{ID: "send-old", Transport: "urn:x-nmos:transport:mxl"}}})
+	nodes.add(registry.NodeView{ID: "node-peer", InstanceID: "peer-1", Label: "Viewer", Receivers: []registry.ReceiverView{{ID: "recv-peer"}}})
+	g.g = graph.Graph{Edges: []graph.Edge{{FromSender: "send-old", ToReceiver: "recv-peer"}}}
+	if err := svc.MigrateInstance(context.Background(), "old-1", "host-b"); !errors.Is(err, ErrMXLPeer) {
+		t.Fatalf("error = %v, want ErrMXLPeer", err)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.pinsUsed) != 0 {
+		t.Fatal("es darf nichts gestartet werden")
+	}
+}
+
+// Der Einzelumzug meldet den Sender-Tausch und stoppt die alte Instanz erst, wenn der Verbraucher die Übergabe beendet hat.
+func TestMigrateInstanceWaitsForHandover(t *testing.T) {
+	origPoll, origWait := registrationPollInterval, handoverWait
+	registrationPollInterval, handoverWait = 10*time.Millisecond, 5*time.Second
+	t.Cleanup(func() { registrationPollInterval, handoverWait = origPoll, origWait })
+
+	var mu sync.Mutex
+	var posted, stopSawDone, doneFlag bool
+	polls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /handover", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		posted = true
+		mu.Unlock()
+	})
+	mux.HandleFunc("GET /params/handoverPending", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		polls++
+		pending := polls < 3
+		doneFlag = !pending
+		mu.Unlock()
+		fmt.Fprintf(w, `{"value":%v}`, pending)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	nodes := &fakeNodes{}
+	l := newFakeLauncher()
+	svc := NewService(nodes, l, &fakeGraph{})
+	l.seed(launcher.Instance{ID: "old-1", Type: "omp-scaler", HostID: "host-a"})
+	nodes.add(registry.NodeView{ID: "node-old", InstanceID: "old-1", Senders: []registry.SenderView{{ID: "send-old", Label: "out"}}})
+	nodes.add(registry.NodeView{ID: "node-viewer", InstanceID: "v-1", APIBaseURL: srv.URL})
+	l.onStarted = func(i launcher.Instance) {
+		nodes.add(registry.NodeView{ID: "node-" + i.ID, InstanceID: i.ID, Senders: []registry.SenderView{{ID: "send-" + i.ID, Label: "out"}}})
+	}
+	l.onStop = func(string) {
+		mu.Lock()
+		stopSawDone = doneFlag
+		mu.Unlock()
+	}
+	if err := svc.MigrateInstanceSync(context.Background(), "old-1", "host-b"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !posted || !stopSawDone {
+		t.Fatalf("posted=%v stopSawDone=%v polls=%d", posted, stopSawDone, polls)
 	}
 }

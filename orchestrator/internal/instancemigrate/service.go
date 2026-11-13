@@ -19,9 +19,12 @@
 package instancemigrate
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -30,6 +33,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
 
 var (
@@ -50,6 +54,23 @@ var ErrNotRegistered = errors.New("instancemigrate: instance is not registered a
 // ErrSameHost wird geliefert, wenn targetHostID bereits der aktuelle
 // Host der Instanz ist — ein Umzug wäre ein wirkungsloser Stop+Start.
 var ErrSameHost = errors.New("instancemigrate: instance is already on the target host")
+
+// ErrWorkflowRole: die Instanz erfüllt eine Workflow-Rolle. Ein Einzelumzug ließe die Zuordnung des Workflows auf
+// die alte, dann gestoppte Instanz zeigen — dafür gibt es den Rollen-Umzug (workflows.Service.MigrateRole).
+var ErrWorkflowRole = errors.New("instancemigrate: instance belongs to a workflow role, migrate the role instead")
+
+// ErrMXLPeer: die Instanz hängt über MXL (host-lokal) an einem Node auf einem anderen Host als dem Ziel — nach dem
+// Umzug bliebe dessen Signal stehen.
+var ErrMXLPeer = errors.New("instancemigrate: instance is connected via MXL to a node on another host than the target")
+
+// RoleFinder meldet, ob eine Instanz eine Workflow-Rolle erfüllt (workflows.Service).
+type RoleFinder interface {
+	FindRoleForInstance(instanceID string) (workflowID, role string, ok bool)
+}
+
+// handoverWait: so lange wartet der Einzelumzug darauf, dass Verbraucher (Viewer, Bild-/Tonmischer) die neue Quelle
+// übernommen haben, bevor die alte Instanz stoppt (gleiche Frist wie beim Rollen-Umzug). var für Tests.
+var handoverWait = 90 * time.Second
 
 // NodeLister liefert den zuletzt bekannten Node-Snapshot — dieselbe
 // Teilmenge wie graph.NodeLister/workflows' eigene, hier separat
@@ -90,7 +111,15 @@ type Service struct {
 	options  OptionMover
 	// httpClient für Zustandsabfragen an Nodes (nil = http.DefaultClient).
 	httpClient *http.Client
+	// roles: optional; verhindert den Einzelumzug von Workflow-Rollen.
+	roles RoleFinder
 }
+
+// SetRoleFinder verdrahtet die Prüfung "gehört die Instanz zu einem Workflow?".
+func (s *Service) SetRoleFinder(f RoleFinder) { s.roles = f }
+
+// SetHTTPClient setzt den Client für Anfragen an Node-APIs (Token/mTLS wie im übrigen Orchestrator).
+func (s *Service) SetHTTPClient(c *http.Client) { s.httpClient = c }
 
 // SetOptionMover setzt den Speicher, dessen Instanz-Optionen bei RestartInPlace mitwandern.
 func (s *Service) SetOptionMover(m OptionMover) { s.options = m }
@@ -120,38 +149,70 @@ type edgeRef struct {
 // "angestoßen", nicht "fertig" zurück, beobachtbar per SSE/Poll auf
 // /api/v1/instances bzw. /api/v1/graph.
 func (s *Service) MigrateInstance(ctx context.Context, oldInstanceID, targetHostID string) error {
-	inst, ok := s.launcher.Get(oldInstanceID)
-	if !ok {
-		return fmt.Errorf("%w: %q", ErrUnknownInstance, oldInstanceID)
+	inst, edges, carry, err := s.prepareMigration(ctx, oldInstanceID, targetHostID)
+	if err != nil {
+		return err
 	}
-	if inst.HostID == targetHostID {
-		return fmt.Errorf("%w: %q", ErrSameHost, oldInstanceID)
-	}
-	oldNode, ok := s.findNodeByInstance(oldInstanceID)
-	if !ok {
-		return fmt.Errorf("%w: %q", ErrNotRegistered, oldInstanceID)
-	}
-	edges := s.captureEdges(ctx, oldNode)
-	carry := s.captureCarried(oldNode)
-
 	safego.Go("instancemigrate.migrate", func() {
-		s.migrate(inst, targetHostID, edges, carry)
+		_ = s.migrate(inst, targetHostID, edges, carry)
 	})
 	return nil
 }
 
+// MigrateInstanceSync ist MigrateInstance, wartet aber auf das Ergebnis (Host-Wartung: der Fortschritt je Instanz
+// wird gemeldet). Ein Fehler heißt: die alte Instanz läuft unverändert weiter.
+func (s *Service) MigrateInstanceSync(ctx context.Context, oldInstanceID, targetHostID string) error {
+	inst, edges, carry, err := s.prepareMigration(ctx, oldInstanceID, targetHostID)
+	if err != nil {
+		return err
+	}
+	return s.migrate(inst, targetHostID, edges, carry)
+}
+
+// prepareMigration prüft alles, was sich vor dem ersten Seiteneffekt prüfen lässt, und erfasst Kanten und Zustand.
+func (s *Service) prepareMigration(ctx context.Context, oldInstanceID, targetHostID string) (launcher.Instance, []edgeRef, carried, error) {
+	inst, ok := s.launcher.Get(oldInstanceID)
+	if !ok {
+		return inst, nil, carried{}, fmt.Errorf("%w: %q", ErrUnknownInstance, oldInstanceID)
+	}
+	if inst.HostID == targetHostID {
+		return inst, nil, carried{}, fmt.Errorf("%w: %q", ErrSameHost, oldInstanceID)
+	}
+	if s.roles != nil {
+		if wfID, role, isRole := s.roles.FindRoleForInstance(oldInstanceID); isRole {
+			return inst, nil, carried{}, fmt.Errorf("%w (workflow %s, role %s)", ErrWorkflowRole, wfID, role)
+		}
+	}
+	oldNode, ok := s.findNodeByInstance(oldInstanceID)
+	if !ok {
+		return inst, nil, carried{}, fmt.Errorf("%w: %q", ErrNotRegistered, oldInstanceID)
+	}
+	g := s.graph.Graph(ctx)
+	if ll, ok := s.launcher.(interface{ List() []launcher.Instance }); ok {
+		instHost := map[string]string{}
+		for _, in := range ll.List() {
+			instHost[in.ID] = in.HostID
+		}
+		if peer, bad := workflows.MXLPeerConflict(s.nodes.List(), g.Edges, instHost, oldNode.ID, targetHostID); bad {
+			return inst, nil, carried{}, fmt.Errorf("%w: %s", ErrMXLPeer, peer)
+		}
+	}
+	return inst, s.captureEdges(ctx, oldNode), s.captureCarried(oldNode), nil
+}
+
 // migrate zieht eine eigenständige Instanz make-before-break auf den Zielhost um (Nutzerforderung
 // 2026-11-02): die NEUE Instanz startet und registriert sich, während die alte weiterläuft; der Zustand
-// der alten wird erst dann frisch abgenommen, die Kanten werden auf die neue umgeschaltet, und
-// ERST ZULETZT wird die alte gestoppt. Scheitert der Start oder die Registrierung auf dem Zielhost,
-// bleibt die alte Instanz unberührt (kein Rücksprung nötig, kein Signalausfall).
-func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []edgeRef, carry carried) {
+// der alten wird erst dann frisch abgenommen, die Kanten werden auf die neue umgeschaltet, die Verbraucher
+// (Viewer, Bild-/Tonmischer) übernehmen die neue Quelle, und ERST ZULETZT wird die alte gestoppt. Scheitert
+// der Start oder die Registrierung auf dem Zielhost, bleibt die alte Instanz unberührt (kein Rücksprung
+// nötig, kein Signalausfall).
+func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []edgeRef, carry carried) error {
 	oldInstanceID, nodeType := inst.ID, inst.Type
 
 	newInst, err := s.launcher.StartPinned(nodeType, inst.Version, targetHostID, inst.Label, inst.ExtraEnv, oldInstanceID, "")
 	if err != nil {
 		slog.Warn("instancemigrate: Start auf dem Zielhost gescheitert — alte Instanz läuft unverändert weiter", "instance", oldInstanceID, "type", nodeType, "targetHost", targetHostID, "error", err)
-		return
+		return fmt.Errorf("start on target host: %w", err)
 	}
 	regCtx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
 	newNode, err := s.awaitRegistration(regCtx, newInst.ID)
@@ -159,11 +220,12 @@ func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []e
 	if err != nil {
 		slog.Warn("instancemigrate: neue Instanz registriert sich nicht — alte läuft unverändert weiter", "instance", oldInstanceID, "newInstance", newInst.ID, "error", err)
 		_ = s.launcher.Stop(newInst.ID)
-		return
+		return err
 	}
 
 	// Zustand der alten Instanz JETZT noch einmal abnehmen: sie lief während des Starts weiter.
-	if oldNode, ok := s.findNodeByInstance(oldInstanceID); ok {
+	oldNode, haveOld := s.findNodeByInstance(oldInstanceID)
+	if haveOld {
 		carry = s.captureCarried(oldNode)
 	}
 	newNode = s.restoreOwnState(carry, newNode)
@@ -171,13 +233,88 @@ func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []e
 	s.reconnect(context.Background(), newNode, edges)
 	s.moveOptions(oldInstanceID, newInst.ID)
 	s.restoreCarried(carry, newNode)
+	if haveOld {
+		s.handover(oldNode, newNode)
+	}
 
 	// Erst jetzt die alte Instanz beenden (die Kanten laufen bereits über die neue).
-	if err := s.launcher.Stop(oldInstanceID); err != nil {
+	if err := s.launcher.Stop(oldInstanceID); err != nil && !errors.Is(err, launcher.ErrStopDeferred) {
 		slog.Error("instancemigrate: alte Instanz ließ sich nach dem Umzug nicht stoppen — beide laufen", "instance", oldInstanceID, "newInstance", newInst.ID, "error", err)
-		return
+		return nil // umgezogen ist sie
 	}
 	slog.Info("instancemigrate: migration completed (make-before-break)", "oldInstance", oldInstanceID, "newInstance", newInst.ID, "targetHost", targetHostID)
+	return nil
+}
+
+// handover meldet den Sender-Tausch allen Nodes mit Node-API (Nodes ohne /handover antworten 404 und werden
+// übergangen) und wartet, bis jeder, der eine Übergabe meldet (`handoverPending`), fertig ist — erst dann darf die
+// alte Instanz stoppen. Eine eigenständige Instanz hat keine Workflow-Definition, aus der sich ihre Verbraucher
+// ablesen ließen (Bild-/Tonmischer entdecken Quellen selbst), deshalb gehen alle Nodes mit.
+func (s *Service) handover(oldNode, newNode registry.NodeView) {
+	pairs := workflows.SenderPairs(oldNode.Senders, newNode.Senders)
+	if len(pairs) == 0 {
+		return
+	}
+	type repl struct {
+		Old string `json:"old"`
+		New string `json:"new"`
+	}
+	body := struct {
+		Replacements []repl `json:"replacements"`
+	}{}
+	for _, p := range pairs {
+		body.Replacements = append(body.Replacements, repl{Old: p[0], New: p[1]})
+	}
+	raw, _ := json.Marshal(body)
+	client := s.client()
+
+	var waiting []string
+	for _, n := range s.nodes.List() {
+		if n.APIBaseURL == "" || n.ID == oldNode.ID {
+			continue
+		}
+		if n.ID != newNode.ID {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.APIBaseURL+"/handover", bytes.NewReader(raw))
+			if err == nil {
+				req.Header.Set("Content-Type", "application/json")
+				if resp, derr := client.Do(req); derr == nil {
+					_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+					resp.Body.Close()
+				}
+			}
+			cancel()
+		}
+		waiting = append(waiting, n.APIBaseURL)
+	}
+
+	deadline := time.Now().Add(handoverWait)
+	for _, base := range waiting {
+		for {
+			pending := false
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			if req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/params/handoverPending", nil); err == nil {
+				if resp, derr := client.Do(req); derr == nil {
+					var out struct {
+						Value bool `json:"value"`
+					}
+					if resp.StatusCode == http.StatusOK && json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&out) == nil {
+						pending = out.Value
+					}
+					resp.Body.Close()
+				}
+			}
+			cancel()
+			if !pending {
+				break
+			}
+			if time.Now().After(deadline) {
+				slog.Warn("instancemigrate: Übergabe nicht rechtzeitig fertig, fahre fort", "node", base)
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
 }
 
 func (s *Service) findNodeByInstance(instanceID string) (registry.NodeView, bool) {

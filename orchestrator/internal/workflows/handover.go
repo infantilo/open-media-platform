@@ -157,3 +157,8 @@ func (s *Service) handoverPending(ctx context.Context, base string) (pending, su
 	}
 	return out.Value, true
 }
+
+// SenderPairs ist senderPairs für andere Pakete (instancemigrate).
+func SenderPairs(oldSenders, newSenders []registry.SenderView) [][2]string {
+	return senderPairs(oldSenders, newSenders)
+}

@@ -92,3 +92,22 @@ func TestStandaloneInstanceBlocks(t *testing.T) {
 		t.Fatalf("remaining = %+v", st.Remaining)
 	}
 }
+
+type resumeFlags struct{ fakeFlags }
+
+func (resumeFlags) MaintenanceHosts() ([]string, error) { return []string{"h"}, nil }
+
+func TestResumeAfterRestartEvacuatesOnlyAsLeader(t *testing.T) {
+	flags := &resumeFlags{fakeFlags{on: map[string]bool{}}}
+	ev := &fakeEvac{roles: []Item{{Kind: "role", InstanceID: "i1"}}, release: make(chan struct{})}
+	m := NewManager(flags, &fakeGate{on: map[string]bool{}}, ev, fakeInsts{}, nil)
+	m.Restore()
+	m.ResumeAfterRestart(context.Background(), time.Millisecond, func() bool { return false })
+	if st, _ := m.Status("h"); st.State == "evacuating" {
+		t.Fatal("Follower darf nicht evakuieren")
+	}
+	m.ResumeAfterRestart(context.Background(), time.Millisecond, func() bool { return true })
+	wait(t, m, "evacuating")
+	close(ev.release)
+	wait(t, m, "drained")
+}
