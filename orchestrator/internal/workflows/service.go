@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -1212,6 +1213,74 @@ func (s *Service) awaitFreshRegistration(ctx context.Context, instanceID, exclud
 	}
 }
 
+// restartedSettle: so lange wird bei gleicher Node-ID ohne prüfbare Node-API
+// gewartet, bevor die Registrierung als die des neuen Prozesses gilt (ein
+// Registry-Poll dauert registry.PollInterval = 2 s).
+const restartedSettle = 3 * time.Second
+
+// awaitRestartedRegistration wartet nach einem automatischen Neustart von
+// instanceID auf die Registrierung des NEUEN Prozesses. Zwei Fälle:
+//
+//   - Node-ID anders als previousNodeID (Start ohne Rollen-Seed): wie
+//     awaitFreshRegistration.
+//   - Node-ID gleich (Rollen-Seed, s. withRoleSeed): die Registry zeigt unter
+//     derselben ID erst noch den Eintrag des toten Prozesses. Der neue Prozess
+//     lauscht auf einem neuen Port — der Eintrag gilt als frisch, sobald seine
+//     Node-API antwortet (der tote Prozess antwortet nicht mehr). Ohne
+//     Node-API-Adresse wird restartedSettle abgewartet.
+func (s *Service) awaitRestartedRegistration(ctx context.Context, instanceID, previousNodeID string) (registry.NodeView, error) {
+	ticker := time.NewTicker(registrationPollInterval.Load())
+	defer ticker.Stop()
+	started := time.Now()
+
+	for {
+		for _, n := range s.nodes.List() {
+			if n.InstanceID != instanceID {
+				continue
+			}
+			if n.ID != previousNodeID {
+				return n, nil
+			}
+			if n.APIBaseURL == "" {
+				if time.Since(started) >= restartedSettle {
+					return n, nil
+				}
+				continue
+			}
+			if s.nodeAPIAnswers(ctx, n.APIBaseURL) {
+				return n, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return registry.NodeView{}, fmt.Errorf("timed out waiting for registration of restarted instance %s", instanceID)
+		case <-ticker.C:
+		}
+	}
+}
+
+// nodeAPIAnswers meldet, ob hinter base ein Prozess HTTP spricht (jede
+// Antwort zählt, auch 401/404 — es geht nur um "lebt dort jemand").
+func (s *Service) nodeAPIAnswers(ctx context.Context, base string) bool {
+	client := s.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	pctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(pctx, http.MethodGet, base+"/descriptor.json", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	resp.Body.Close()
+	return true
+}
+
 // InstanceRestarted implementiert launcher.RestartObserver (K7-Teil-1,
 // docs/END-GOAL-FEATURES.md §7.3a/§7.6): der Launcher ruft dies auf,
 // sobald er eine abgestürzte Instanz automatisch in derselben Instanz-ID
@@ -1271,9 +1340,16 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 	// kill -9 verifiziert: ohne diese Unterscheidung blieb die
 	// Verbindung auf den (kurz danach verschwindenden) toten Sender der
 	// alten Registrierung stehen, statt auf den neuen umzuschwenken.
+	//
+	// Rollen mit Rollen-Seed (withRoleSeed, seit 2026-08-10 jede über runStart/
+	// runRestartRole gestartete Rolle) melden sich nach dem Neustart aber unter
+	// DERSELBEN Node-ID wieder an — eine reine "andere ID"-Prüfung liefe dort
+	// immer in den Timeout und die Rolle bliebe unverkabelt. Deshalb
+	// awaitRestartedRegistration: andere ID ODER gleiche ID, deren Node-API
+	// (neuer Prozess, neuer Port) tatsächlich antwortet.
 	previousNodeID := wf.Runtime[role].NodeID
 	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
-	node, err := s.awaitFreshRegistration(ctx, instanceID, previousNodeID)
+	node, err := s.awaitRestartedRegistration(ctx, instanceID, previousNodeID)
 	cancel()
 	if err != nil {
 		slog.Warn("workflows: rewireAfterRestart: registration timed out", "workflow", wf.ID, "role", role, "error", err)
