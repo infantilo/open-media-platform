@@ -543,3 +543,82 @@ func TestMigrateInstanceWaitsForHandover(t *testing.T) {
 		t.Fatalf("posted=%v stopSawDone=%v polls=%d", posted, stopSawDone, polls)
 	}
 }
+
+// TestRelocateLostRewiresWithoutTouchingTheDeadNode: der Host ist ausgefallen, der alte Node steht noch in der Registry
+// (seine Node-API antwortet nicht). Der Umzug startet die neue Instanz, verkabelt sie und bricht nicht am toten Node ab;
+// der Stop der alten Instanz wird nur angestoßen (beim Launcher vorgemerkt).
+func TestRelocateLostRewiresWithoutTouchingTheDeadNode(t *testing.T) {
+	original := registrationPollInterval
+	registrationPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { registrationPollInterval = original })
+
+	var hits int
+	var mu sync.Mutex
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		http.Error(w, "dead", http.StatusInternalServerError)
+	}))
+	defer dead.Close()
+
+	nodes := &fakeNodes{}
+	l := newFakeLauncher()
+	g := &fakeGraph{}
+	svc := NewService(nodes, l, g)
+	l.seed(launcher.Instance{ID: "old-1", Type: "omp-scaler", Label: "Scaler", HostID: "host-a"})
+	nodes.add(registry.NodeView{ID: "node-old", InstanceID: "old-1", APIBaseURL: dead.URL,
+		Senders: []registry.SenderView{{ID: "send-old"}}})
+	g.g = graph.Graph{Edges: []graph.Edge{{FromSender: "send-old", ToReceiver: "recv-external"}}}
+	l.onStarted = func(inst launcher.Instance) {
+		nodes.add(registry.NodeView{ID: "node-new", InstanceID: inst.ID, Senders: []registry.SenderView{{ID: "send-new"}}})
+	}
+
+	if err := svc.RelocateLost(context.Background(), "old-1", "host-b"); err != nil {
+		t.Fatalf("RelocateLost() error = %v", err)
+	}
+	g.mu.Lock()
+	calls := append([]connectCall{}, g.calls...)
+	g.mu.Unlock()
+	if len(calls) != 1 || calls[0] != (connectCall{"send-new", "recv-external"}) {
+		t.Fatalf("Connect calls = %+v", calls)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hits != 0 {
+		t.Fatalf("der tote Node wurde %d-mal angefragt", hits)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.stopped) != 1 || l.stopped[0] != "old-1" {
+		t.Fatalf("stopped = %v", l.stopped)
+	}
+}
+
+// TestRelocateLostWithoutRegisteredOldNode: der alte Node ist schon aus der Registry — es gibt nichts zu verkabeln,
+// die Instanz startet trotzdem auf dem Zielhost.
+func TestRelocateLostWithoutRegisteredOldNode(t *testing.T) {
+	original := registrationPollInterval
+	registrationPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { registrationPollInterval = original })
+
+	nodes := &fakeNodes{}
+	l := newFakeLauncher()
+	svc := NewService(nodes, l, &fakeGraph{})
+	l.seed(launcher.Instance{ID: "old-1", Type: "omp-scaler", HostID: "host-a"})
+	l.onStarted = func(inst launcher.Instance) {
+		nodes.add(registry.NodeView{ID: "node-new", InstanceID: inst.ID})
+	}
+	if err := svc.RelocateLost(context.Background(), "old-1", "host-b"); err != nil {
+		t.Fatalf("RelocateLost() error = %v", err)
+	}
+	l.mu.Lock()
+	stopped := append([]string(nil), l.stopped...)
+	l.mu.Unlock()
+	if len(stopped) != 1 || stopped[0] != "old-1" {
+		t.Fatalf("stopped = %v", stopped)
+	}
+	if err := svc.RelocateLost(context.Background(), "gone", "host-b"); !errors.Is(err, ErrUnknownInstance) {
+		t.Fatalf("unknown: %v", err)
+	}
+}

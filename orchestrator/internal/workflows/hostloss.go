@@ -9,6 +9,9 @@
 // (launcher.RetryPendingStops). Das ist die Abgrenzung gegen eine Doppelsendung nach einer Netztrennung; zusätzlich
 // kann sich der Host-Agent selbst abgrenzen (OMP_HOST_AGENT_FENCE_AFTER).
 //
+// Eigenständige Instanzen (Launcher-Instanzen ohne Workflow-Rolle) ziehen nach derselben Frist und demselben Schalter
+// um (hostloss_standalone.go); Hardware-gebundene Node-Typen (Katalog hostBound) bleiben.
+//
 // Bewusst NICHT ausgelöst wird der Umzug, wenn der Host-Agent sich abgemeldet hat (Goodbye: absichtliches Beenden,
 // z. B. Aktualisierung) oder der Host in Wartung ist — dort hat ein Bediener die Hand am Host.
 package workflows
@@ -112,6 +115,11 @@ func (s *Service) checkLostHosts(wfs []Workflow) {
 			}
 		}
 	}
+	for _, hostID := range s.standaloneLostHosts() {
+		if s.hostLostForRelocation(hostID) {
+			lost[hostID] = true
+		}
+	}
 	for hostID := range lost {
 		if v, ok := s.relocating.Load(hostID); ok {
 			next, isTime := v.(time.Time)
@@ -124,6 +132,7 @@ func (s *Service) checkLostHosts(wfs []Workflow) {
 		safego.Go("workflows.relocateFromLostHost", func() {
 			defer func() { s.relocating.Store(hostID, time.Now().Add(hostLossRetryInterval)) }()
 			s.relocateFromLostHost(hostID)
+			s.relocateStandaloneFromLostHost(hostID)
 		})
 	}
 }

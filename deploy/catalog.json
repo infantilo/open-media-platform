@@ -417,6 +417,7 @@
   },
   {
     "type": "omp-gpio",
+    "hostBound": true,
     "label": "GPIO",
     "runner": "process",
     "command": ["../nodes/target/release/omp-gpio"],
@@ -439,6 +440,7 @@
   },
   {
     "type": "omp-midi-gateway",
+    "hostBound": true,
     "label": "MIDI-Gateway",
     "runner": "process",
     "command": ["../nodes/target/release/omp-midi-gateway"],
@@ -499,6 +501,7 @@
   },
   {
     "type": "omp-lowlat-mixer",
+    "hostBound": true,
     "label": "Studio-Mischer (niedrige Latenz)",
     "runner": "process",
     "command": [

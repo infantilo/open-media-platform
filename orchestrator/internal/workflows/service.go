@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
@@ -318,6 +319,8 @@ type Service struct {
 	hostUnseen   map[string]time.Time
 	promoting    sync.Map
 	// relocating (hostloss.go): Hosts, deren Rollen gerade wegen Ausfalls umziehen bzw. frühester nächster Versuch.
+	// standalone (hostloss_standalone.go): Umzug eigenständiger Instanzen bei Host-Ausfall (instancemigrate.Service).
+	standalone atomic.Pointer[StandaloneRelocator]
 	relocating sync.Map // hostID -> time.Time (nächster Versuch) | struct{}{} (läuft)
 	// hang (hang.go): Beobachtung nicht mehr gesund gemeldeter Rollen-Nodes.
 	hang hangState

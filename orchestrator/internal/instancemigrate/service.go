@@ -149,12 +149,12 @@ type edgeRef struct {
 // "angestoßen", nicht "fertig" zurück, beobachtbar per SSE/Poll auf
 // /api/v1/instances bzw. /api/v1/graph.
 func (s *Service) MigrateInstance(ctx context.Context, oldInstanceID, targetHostID string) error {
-	inst, edges, carry, err := s.prepareMigration(ctx, oldInstanceID, targetHostID)
+	inst, edges, carry, err := s.prepareMigration(ctx, oldInstanceID, targetHostID, false)
 	if err != nil {
 		return err
 	}
 	safego.Go("instancemigrate.migrate", func() {
-		_ = s.migrate(inst, targetHostID, edges, carry)
+		_ = s.migrate(inst, targetHostID, edges, carry, false)
 	})
 	return nil
 }
@@ -162,15 +162,29 @@ func (s *Service) MigrateInstance(ctx context.Context, oldInstanceID, targetHost
 // MigrateInstanceSync ist MigrateInstance, wartet aber auf das Ergebnis (Host-Wartung: der Fortschritt je Instanz
 // wird gemeldet). Ein Fehler heißt: die alte Instanz läuft unverändert weiter.
 func (s *Service) MigrateInstanceSync(ctx context.Context, oldInstanceID, targetHostID string) error {
-	inst, edges, carry, err := s.prepareMigration(ctx, oldInstanceID, targetHostID)
+	inst, edges, carry, err := s.prepareMigration(ctx, oldInstanceID, targetHostID, false)
 	if err != nil {
 		return err
 	}
-	return s.migrate(inst, targetHostID, edges, carry)
+	return s.migrate(inst, targetHostID, edges, carry, false)
+}
+
+// RelocateLost zieht eine Instanz um, deren Host ausgefallen ist (Kapitel 100, Host-Ausfall eigenständiger Instanzen;
+// Aufruf aus workflows.checkLostHosts). Wie MigrateInstanceSync, aber ohne Zugriff auf die alte Instanz: ihr eigener
+// Zustand und ihre Parameter sind nicht mehr lesbar (die Instanz startet mit Standardwerten, Instanz-Optionen und
+// Kanten wandern mit), und ihr Stop bleibt beim Launcher vorgemerkt, bis der Host wieder Telemetrie sendet
+// (launcher.RetryPendingStops) — die Abgrenzung gegen eine Doppelsendung. Ist der alte Node schon aus der Registry,
+// entfallen die Kanten (nichts zu erfassen).
+func (s *Service) RelocateLost(ctx context.Context, oldInstanceID, targetHostID string) error {
+	inst, edges, carry, err := s.prepareMigration(ctx, oldInstanceID, targetHostID, true)
+	if err != nil {
+		return err
+	}
+	return s.migrate(inst, targetHostID, edges, carry, true)
 }
 
 // prepareMigration prüft alles, was sich vor dem ersten Seiteneffekt prüfen lässt, und erfasst Kanten und Zustand.
-func (s *Service) prepareMigration(ctx context.Context, oldInstanceID, targetHostID string) (launcher.Instance, []edgeRef, carried, error) {
+func (s *Service) prepareMigration(ctx context.Context, oldInstanceID, targetHostID string, lost bool) (launcher.Instance, []edgeRef, carried, error) {
 	inst, ok := s.launcher.Get(oldInstanceID)
 	if !ok {
 		return inst, nil, carried{}, fmt.Errorf("%w: %q", ErrUnknownInstance, oldInstanceID)
@@ -185,6 +199,9 @@ func (s *Service) prepareMigration(ctx context.Context, oldInstanceID, targetHos
 	}
 	oldNode, ok := s.findNodeByInstance(oldInstanceID)
 	if !ok {
+		if lost {
+			return inst, nil, carried{}, nil
+		}
 		return inst, nil, carried{}, fmt.Errorf("%w: %q", ErrNotRegistered, oldInstanceID)
 	}
 	g := s.graph.Graph(ctx)
@@ -197,7 +214,7 @@ func (s *Service) prepareMigration(ctx context.Context, oldInstanceID, targetHos
 			return inst, nil, carried{}, fmt.Errorf("%w: %s", ErrMXLPeer, peer)
 		}
 	}
-	return inst, s.captureEdges(ctx, oldNode), s.captureCarried(oldNode), nil
+	return inst, s.captureEdges(ctx, oldNode), s.captureCarried(oldNode, !lost), nil
 }
 
 // migrate zieht eine eigenständige Instanz make-before-break auf den Zielhost um (Nutzerforderung
@@ -206,7 +223,7 @@ func (s *Service) prepareMigration(ctx context.Context, oldInstanceID, targetHos
 // (Viewer, Bild-/Tonmischer) übernehmen die neue Quelle, und ERST ZULETZT wird die alte gestoppt. Scheitert
 // der Start oder die Registrierung auf dem Zielhost, bleibt die alte Instanz unberührt (kein Rücksprung
 // nötig, kein Signalausfall).
-func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []edgeRef, carry carried) error {
+func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []edgeRef, carry carried, lost bool) error {
 	oldInstanceID, nodeType := inst.ID, inst.Type
 
 	newInst, err := s.launcher.StartPinned(nodeType, inst.Version, targetHostID, inst.Label, inst.ExtraEnv, oldInstanceID, "")
@@ -225,15 +242,15 @@ func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []e
 
 	// Zustand der alten Instanz JETZT noch einmal abnehmen: sie lief während des Starts weiter.
 	oldNode, haveOld := s.findNodeByInstance(oldInstanceID)
-	if haveOld {
-		carry = s.captureCarried(oldNode)
+	if haveOld && !lost {
+		carry = s.captureCarried(oldNode, true)
 	}
 	newNode = s.restoreOwnState(carry, newNode)
 	newNode = s.awaitEdgePorts(newNode, edges)
 	s.reconnect(context.Background(), newNode, edges)
 	s.moveOptions(oldInstanceID, newInst.ID)
 	s.restoreCarried(carry, newNode)
-	if haveOld {
+	if haveOld && !lost { // eine verlorene Quelle sendet nicht mehr: das Warten auf die Verbraucher entfällt
 		s.handover(oldNode, newNode)
 	}
 
@@ -452,7 +469,7 @@ func (s *Service) RestartInPlace(ctx context.Context, oldInstanceID string) (Res
 	var carry carried
 	if oldNode, ok := s.findNodeByInstance(oldInstanceID); ok {
 		edges = s.captureEdges(ctx, oldNode)
-		carry = s.captureCarried(oldNode)
+		carry = s.captureCarried(oldNode, true)
 	}
 	oldPin := inst.NodeVersion
 	if oldPin == "" {

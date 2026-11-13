@@ -382,6 +382,12 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	if rf, ok := workflowSvc.(instancemigrate.RoleFinder); ok {
 		instanceMigrateSvc.SetRoleFinder(rf)
 	}
+	// Kap. 100: eigenständige Instanzen eines ausgefallenen Hosts ziehen automatisch um (workflows.hostloss_standalone).
+	if sw, ok := workflowSvc.(interface {
+		SetStandaloneRelocator(workflows.StandaloneRelocator)
+	}); ok {
+		sw.SetStandaloneRelocator(instanceMigrateSvc)
+	}
 	if nodeClient != nil {
 		instanceMigrateSvc.SetHTTPClient(nodeClient)
 	}

@@ -61,8 +61,9 @@ func (s *Service) client() *http.Client {
 	return http.DefaultClient
 }
 
-// captureCarried liest (VOR dem Stop) die Referenzen anderer Nodes und die eigenen Parameter.
-func (s *Service) captureCarried(oldNode registry.NodeView) carried {
+// captureCarried liest (VOR dem Stop) die Referenzen anderer Nodes und — mit own — die eigenen Parameter und den
+// eigenen Zustand (own=false bei einer verlorenen Instanz: ihre Node-API antwortet nicht mehr).
+func (s *Service) captureCarried(oldNode registry.NodeView, own bool) carried {
 	var c carried
 	toAlias := map[string]string{oldNode.ID: aliasNodePrefix}
 	for i, sn := range oldNode.Senders {
@@ -92,7 +93,7 @@ func (s *Service) captureCarried(oldNode registry.NodeView) carried {
 		}
 		c.consumers = append(c.consumers, consumerState{apiBaseURL: n.APIBaseURL, aliased: aliased})
 	}
-	if oldNode.APIBaseURL != "" {
+	if own && oldNode.APIBaseURL != "" {
 		c.ownParams = s.captureParams(oldNode.APIBaseURL)
 		if raw, err := getJSON(s.client(), oldNode.APIBaseURL+"/state"); err == nil {
 			// Eigene IDs aliasieren (z. B. ein Mixer, der seine eigenen Ebenen referenziert).
