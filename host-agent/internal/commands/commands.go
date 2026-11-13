@@ -235,6 +235,10 @@ type Executor struct {
 	// tatsächlichen Prozessende gebraucht wird (Stop-Polling-Schleife
 	// unten prüft "noch drin?").
 	stopping map[string]bool
+	// starting: Instanz-IDs, deren Start gerade läuft. Die Prüfung "läuft schon?" und das Eintragen in instances
+	// liegen einen Prozessstart auseinander — zwei gleichzeitige Start-Kommandos für dieselbe ID (Wiederherstellung
+	// und Abgleich des Orchestrators) starteten sonst zwei Prozesse.
+	starting map[string]bool
 }
 
 // NewExecutor erstellt einen Executor. registryURL/natsURL werden an
@@ -402,7 +406,20 @@ func (e *Executor) start(req Request) Response {
 		e.mu.Unlock()
 		return Response{OK: true, PID: pid}
 	}
+	if e.starting[req.InstanceID] {
+		e.mu.Unlock()
+		return Response{OK: false, Error: "start of this instance is already in progress"}
+	}
+	if e.starting == nil {
+		e.starting = map[string]bool{}
+	}
+	e.starting[req.InstanceID] = true
 	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		delete(e.starting, req.InstanceID)
+		e.mu.Unlock()
+	}()
 	// Läuft die Instanz noch als verwaister Prozess eines früheren Agents (den dieser nicht mehr führt und dessen
 	// Ende er nie melden könnte), wird sie beendet, statt eine zweite daneben zu starten.
 	reapOrphans(req.InstanceID, stopGracePeriod)
@@ -653,4 +670,21 @@ func (b *tailBuffer) String() string {
 		lines = append(append([]string{}, lines...), b.partial.String())
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// StopAll beendet alle laufenden Instanzen dieses Agents (Selbst-Abgrenzung, s. main.go: der Agent hat den
+// Orchestrator länger als die eingestellte Frist nicht erreicht). Die Enden gelten als erwartet — es gibt keine
+// Exit-Ereignisse, der Orchestrator hat die Rollen inzwischen ohnehin anderswo untergebracht oder gleicht nach der
+// Rückkehr des Hosts ab. Liefert die Zahl der beendeten Instanzen.
+func (e *Executor) StopAll() int {
+	e.mu.Lock()
+	ids := make([]string, 0, len(e.instances))
+	for id := range e.instances {
+		ids = append(ids, id)
+	}
+	e.mu.Unlock()
+	for _, id := range ids {
+		e.stop(Request{Action: "stop", InstanceID: id})
+	}
+	return len(ids)
 }

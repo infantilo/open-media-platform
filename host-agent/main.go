@@ -412,6 +412,13 @@ func main() {
 
 	ticker := time.NewTicker(telemetryInterval)
 	defer ticker.Stop()
+	// Selbst-Abgrenzung (Kapitel 100 Punkt 3, Standard aus): erreicht der Agent den Bus länger als
+	// OMP_HOST_AGENT_FENCE_AFTER nicht, beendet er seine Instanzen selbst. Der Orchestrator hat die Rollen dann
+	// längst auf einen anderen Host geholt (Failover/Wiederanlauf) — ohne dies sendeten bei einer reinen Trennung
+	// vom Steuernetz zwei Instanzen derselben Rolle weiter. Die Frist muss deutlich über der Ausfallerkennung des
+	// Orchestrators liegen und kürzer sein als alles, was man an Doppelsendung hinnehmen will.
+	fenceAfter := fenceAfterFromEnv(os.Getenv("OMP_HOST_AGENT_FENCE_AFTER"))
+	var busLostSince time.Time
 	// Absichtliches Beenden (SIGTERM/SIGINT) meldet sich per Goodbye-
 	// Nachricht ab, damit der Orchestrator es von einem Absturz/
 	// Netzausfall unterscheiden kann (telemetry.Sample.Goodbye).
@@ -432,6 +439,18 @@ func main() {
 				slog.Warn("goodbye flush failed", "error", err)
 			}
 			return
+		}
+		if fenceAfter > 0 {
+			switch {
+			case nc.IsConnected():
+				busLostSince = time.Time{}
+			case busLostSince.IsZero():
+				busLostSince = time.Now()
+			case time.Since(busLostSince) >= fenceAfter:
+				if n := executor.StopAll(); n > 0 {
+					slog.Error("orchestrator bus unreachable, instances stopped (self-fencing)", "since", busLostSince, "instances", n)
+				}
+			}
 		}
 		// Take() blockiert kurz zur CPU%-Messung (s. telemetry.Take) —
 		// bewusst deutlich kürzer als telemetryInterval, damit der
@@ -592,4 +611,17 @@ func register(orchestratorURL, token, label, hostname string, ioPorts []ioPort) 
 		return "", "", fmt.Errorf("register: orchestrator did not return a hostId")
 	}
 	return parsed.HostID, parsed.CommandKey, nil
+}
+
+// fenceAfterFromEnv liest OMP_HOST_AGENT_FENCE_AFTER (Go-Dauer, z. B. "90s"). Leer, "0", ungültig oder unter 30 s =
+// aus: eine zu kurze Frist beendete die Sendung schon bei einem kurzen Aussetzer des Busses.
+func fenceAfterFromEnv(v string) time.Duration {
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 30*time.Second {
+		if v != "" && v != "0" {
+			slog.Warn("OMP_HOST_AGENT_FENCE_AFTER ignored (need a duration of at least 30s)", "value", v)
+		}
+		return 0
+	}
+	return d
 }
