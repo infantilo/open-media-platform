@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
@@ -151,6 +152,15 @@ func (s *Service) standbyRoleFor(wf Workflow, primaryRole string) string {
 // Workflow bereits gestoppt oder die Übernahme bereits durch den jeweils
 // anderen Trigger erfolgt sein, s. Idempotenz-Check unten).
 func (s *Service) promoteStandby(wf Workflow, primaryRole, standbyRole, trigger string) {
+	// Eine Übernahme je Rolle zur selben Zeit: der Host-Offline-Wächter feuert alle failoverCheckInterval erneut,
+	// bis der frühe Commit unten sichtbar ist, und Crash-Loop- und Host-Offline-Auslöser können zusammenfallen.
+	// Ohne diese Sperre konnten zwei Läufe gleichzeitig Zustand einspielen und Verbindungen anwenden.
+	key := wf.ID + "|" + primaryRole
+	if _, busy := s.promoting.LoadOrStore(key, struct{}{}); busy {
+		return
+	}
+	defer s.promoting.Delete(key)
+
 	fresh, err := s.store.Get(wf.ID)
 	if err != nil {
 		slog.Warn("workflows: promoteStandby: reload failed", "workflow", wf.ID, "error", err)
@@ -176,6 +186,23 @@ func (s *Service) promoteStandby(wf Workflow, primaryRole, standbyRole, trigger 
 	if _, ok := s.nodeForRole(wf, standbyRole); !ok {
 		slog.Warn("workflows: promoteStandby: standby node not resolved in registry", "workflow", wf.ID, "role", standbyRole)
 		return
+	}
+	// Keine Übernahme auf einen Standby, der selbst nicht läuft (gleicher ausgefallener Host, oder vom Launcher als
+	// abgestürzt geführt): die Rolle zeigte danach auf eine tote Instanz und die Oberfläche meldete eine
+	// erfolgreiche Übernahme. Der Zustand bleibt stattdessen sichtbar "Primär ausgefallen".
+	if s.hostOffline(standbyRuntime.HostID) {
+		slog.Warn("workflows: promoteStandby: standby host is offline too, not promoting",
+			"workflow", wf.ID, "role", primaryRole, "standbyRole", standbyRole, "host", standbyRuntime.HostID)
+		return
+	}
+	if ll, ok := s.launcher.(interface{ List() []launcher.Instance }); ok {
+		for _, in := range ll.List() {
+			if in.ID == standbyRuntime.InstanceID && in.Crashed {
+				slog.Warn("workflows: promoteStandby: standby instance has crashed, not promoting",
+					"workflow", wf.ID, "role", primaryRole, "standbyRole", standbyRole, "instance", in.ID)
+				return
+			}
+		}
 	}
 
 	fromInstanceID := primaryRuntime.InstanceID
@@ -343,11 +370,36 @@ func (s *Service) checkHostOffline(wf Workflow, primaryRole, standbyRole string)
 	if !ok || rt.HostID == "" || rt.StandbyActive {
 		return
 	}
-	m, ok := s.hostMetrics.Get(rt.HostID)
-	if !ok || time.Since(m.ReceivedAt) < hostOfflineTimeout {
+	if !s.hostOffline(rt.HostID) {
 		return
 	}
 	slog.Warn("workflows: host offline, triggering failover",
-		"workflow", wf.ID, "role", primaryRole, "host", rt.HostID, "lastSeen", m.ReceivedAt)
+		"workflow", wf.ID, "role", primaryRole, "host", rt.HostID)
 	safego.Go("workflows.promoteStandby", func() { s.promoteStandby(wf, primaryRole, standbyRole, "host-offline") })
+}
+
+// hostOffline meldet, ob hostID seit hostOfflineTimeout keine Telemetrie mehr geliefert hat. Ein Host, von dem
+// dieser Prozess noch NIE Telemetrie gesehen hat (Orchestrator-Neustart oder Führungswechsel, während der Host
+// bereits ausgefallen war), gilt nach derselben Frist ab der ersten Beobachtung als ausgefallen — vorher blieb
+// dieser Fall für immer unerkannt, weil es keinen "zuletzt gesehen"-Zeitpunkt gab. hostID "" (lokal) ist nie offline.
+func (s *Service) hostOffline(hostID string) bool {
+	if s.hostMetrics == nil || hostID == "" {
+		return false
+	}
+	m, ok := s.hostMetrics.Get(hostID)
+	s.hostUnseenMu.Lock()
+	defer s.hostUnseenMu.Unlock()
+	if ok {
+		delete(s.hostUnseen, hostID)
+		return time.Since(m.ReceivedAt) >= hostOfflineTimeout
+	}
+	if s.hostUnseen == nil {
+		s.hostUnseen = map[string]time.Time{}
+	}
+	first, seen := s.hostUnseen[hostID]
+	if !seen {
+		s.hostUnseen[hostID] = time.Now()
+		return false
+	}
+	return time.Since(first) >= hostOfflineTimeout
 }

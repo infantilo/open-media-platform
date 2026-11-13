@@ -312,6 +312,11 @@ type Service struct {
 	// (kein Crash, nur ein fehlendes Feature ohne Verdrahtung, gleiches
 	// Nil-Safety-Muster wie resources ResourcePrecheck).
 	hostMetrics HostMetricsReader
+	// hostUnseen (failover.go): Hosts, von denen dieser Prozess noch nie Telemetrie gesehen hat -> Zeitpunkt der
+	// ersten Beobachtung. promoting: laufende Standby-Übernahmen je "<Workflow>|<Rolle>".
+	hostUnseenMu sync.Mutex
+	hostUnseen   map[string]time.Time
+	promoting    sync.Map
 	// migrations (D6 Teil 4, migration.go) — Buchführung für
 	// auto-confirm-window-Timer und laufende Migrationsversuche. Immer
 	// initialisiert (nie nil, s. NewService), damit migration.go ohne
