@@ -3,7 +3,7 @@ OUT=os.path.dirname(os.path.abspath(__file__))
 W,H=1920,1080
 C=dict(bg="#ffffff",ink="#14213d",mute="#5c677d",line="#9aa5b8",
  blue="#2563eb",blueL="#e0eaff",teal="#0d9488",tealL="#d5f5f0",amber="#d97706",amberL="#fdecc8",
- red="#dc2626",redL="#fde2e2",violet="#7c3aed",violetL="#ece4ff",grey="#eef1f6")
+ red="#dc2626",redL="#fde2e2",violet="#7c3aed",violetL="#ece4ff",pink="#db2777",pinkL="#fce7f3",grey="#eef1f6")
 def wrap(t,w,fs,k=0.56):
     n=max(8,int(w/(fs*k))); out=[]; cur=""
     for wd in t.split():
@@ -52,7 +52,7 @@ class S:
             s.e.append(f'<text x="{lx if lx is not None else (x1+x2)/2}" y="{ly if ly is not None else (y1+y2)/2-10}" text-anchor="middle" font-size="20" fill="{C[color]}" font-weight="600">{esc(label)}</text>')
     def save(s,name):
         defs="<defs>"
-        for k in ("ink","blue","teal","amber","red","violet","mute"):
+        for k in ("ink","blue","teal","amber","red","violet","mute","pink"):
             defs+=f'<marker id="a_{k}" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="{C[k]}"/></marker>'
             defs+=f'<marker id="as_{k}" viewBox="0 0 10 10" refX="1.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="{C[k]}"/></marker>'
         defs+="</defs>"
@@ -78,13 +78,15 @@ x=110
 for n,sb in names:
     s.box(x,680,265,115,n,"amberL" if n!="3rd-party nodes" else "violetL",stroke=None if n!="3rd-party nodes" else C["violet"],sub=sb,fs=23,dash=(n=="3rd-party nodes"))
     x+=282
-s.band(70,850,1780,170,"Media exchange (the only place pictures and sound travel)","violet")
-s.box(110,895,520,95,"MXL  ·  same host","violetL",sub="zero-copy shared memory, no NIC, no encoding",fs=26)
-s.box(700,895,520,95,"SMPTE ST 2110 / 2022-7  ·  LAN","violetL",sub="uncompressed over IP, PTP time (ST 2059)",fs=26)
-s.box(1290,895,520,95,"SRT / RIST  ·  WAN & cloud","violetL",sub="gateway node bridges 2110 inside the facility",fs=26)
+s.band(70,850,1780,170,"Media exchange","violet")
+bx=[(110,"MXL  ·  same host","zero-copy shared memory, no NIC, no encoding","violetL",C["violet"]),
+    (545,"MXL Fabrics  ·  RDMA","host-to-host one-sided RDMA write (libfabric), lowest CPU load","pinkL",C["pink"]),
+    (980,"SMPTE ST 2110  ·  LAN","uncompressed over IP, PTP (ST 2059)","violetL",C["violet"]),
+    (1415,"SRT / RIST  ·  WAN & cloud","gateway node bridges 2110 inside the facility","violetL",C["violet"])]
+for x0,t,sb,f,st in bx: s.box(x0,895,400,105,t,f,stroke=st,sub=sb,fs=22)
 s.arrow(960,310,960,400,"blue",both=True); s.arrow(960,570,960,680,"teal",both=True,dash=True)
 s.text(985,368,"REST / SSE",20,"blue",True); s.text(985,640,"IS-04/05/12/14, commands",20,"teal",True)
-s.arrow(1550,795,1550,895,"violet",both=True)
+s.arrow(1000,795,1000,895,"violet",both=True)
 s.save("1-architecture-overview")
 
 # ---------- 2: control plane vs media plane across hosts ----------
@@ -115,9 +117,16 @@ for i in range(3):
     x=70+i*600+450
     s.arrow(x,490,x,hy+55,"teal",dash=True,w=3)
 s.text(820,530,"commands + telemetry (dashed)",20,"teal",True,"middle")
-s.arrow(615,950,1215,950,"violet",both=True,w=6,label="SMPTE ST 2110 / 2022-7 between hosts",ly=935)
-s.arrow(1215,985,1815,985,"violet",both=True,w=6,dash=True,label="SRT / RIST over WAN",ly=1010)
-s.text(70,1010,"Solid violet = media.  Dashed teal = control.  Nothing in the teal layer ever carries media.",22,"mute")
+for gx0,gx1 in ((610,700),(1210,1270)):
+    pass
+s.arrow(615,hy+291,695,hy+291,"pink",both=True,w=3); s.text(655,hy+270,"RDMA",15,"pink",True,"middle")
+s.arrow(615,hy+311,695,hy+311,"violet",both=True,w=3)
+s.arrow(1215,hy+302,1265,hy+302,"violet",both=True,w=3,dash=True)
+ly0=935
+s.arrow(70,ly0,190,ly0,"pink",both=True,w=3); s.text(215,ly0+7,"MXL Fabrics: one-sided RDMA write between hosts (RoCEv2 / libfabric), for uncompressed UHD at minimal CPU cost",21,"ink")
+s.arrow(70,ly0+42,190,ly0+42,"violet",both=True,w=3); s.text(215,ly0+49,"SMPTE ST 2110 / 2022-7 over the LAN (PTP time)",21,"ink")
+s.arrow(70,ly0+84,190,ly0+84,"violet",both=True,w=3,dash=True); s.text(215,ly0+91,"SRT / RIST over WAN and to cloud hosts",21,"ink")
+s.text(1850,1030,"Dashed teal = control. Nothing in the teal layer ever carries media.",19,"mute",False,"end")
 s.save("2-control-vs-media-plane")
 
 # ---------- 3: resilience ----------
@@ -166,7 +175,7 @@ s.band(70,180,1000,520,"Third-party product","violet")
 s.box(110,235,920,95,"Product core, e.g. a software audio mixer or a vision engine","violetL",stroke=C["violet"],fs=24,dash=True)
 s.box(110,355,290,150,"1 · Register","violetL",stroke=C["violet"],sub="NMOS IS-04",fs=24)
 s.box(425,355,290,150,"2 · Describe","violetL",stroke=C["violet"],sub="NMOS IS-12/14",fs=24)
-s.box(740,355,290,150,"3 · Media I/O","violetL",stroke=C["violet"],sub="MXL flows / ST 2110",fs=24)
+s.box(740,355,290,150,"3 · Media I/O","violetL",stroke=C["violet"],sub="MXL, ST 2110, optional RDMA",fs=24)
 s.box(110,540,920,125,"Optional: UI bundle + manifest","violetL",stroke=C["violet"],fs=24,sub="orchestrator loads it into the operator console")
 s.band(1130,180,720,520,"OpenMediaPlatform","teal")
 s.box(1170,235,640,95,"Orchestrator","tealL",fs=26,sub="discovers, connects, monitors, places")
@@ -193,7 +202,7 @@ s.box(70,190,540,230,"Today: appliance chain","redL",stroke=C["red"],fs=30,sub="
 
 s.arrow(620,305,780,305,"ink",w=6)
 s.box(790,190,1060,230,"Dynamic media facility","tealL",stroke=C["teal"],fs=30,sub="functions start where capacity exists; media is shared on the same host or over IP; one control model for all; redundancy by software where it matters")
-cols=[("Open exchange","MXL + ST 2110: any compliant function can connect to any other","violet"),
+cols=[("Open exchange","MXL, ST 2110 and RDMA fabrics: any compliant function can connect to any other","violet"),
       ("Self-describing nodes","IS-04 / IS-12/14: no per-vendor control code, no orchestrator release","teal"),
       ("Replaceable parts","swap or add a function without touching the rest; no lock-in","blue"),
       ("Elastic resources","place, move and scale across on-prem and cloud hosts","amber")]
@@ -208,3 +217,27 @@ s.box(970,710,880,290,"","grey",stroke=C["line"]); s.text(1000,760,"For vendors"
 for k,t in enumerate(["• One integration surface instead of one per customer","• Sell the function (software), not only the box","• Start at Level A, move up to Level C when ready","• Compete on quality of the function, not on lock-in"]):
     s.text(1000,815+k*46,t,23,"ink")
 s.save("6-why-open-contract")
+
+# ---------- 7: media path selection ----------
+s=S("7 · Choosing the media path between two functions","One rule set, applied automatically at placement time. The signal is never lost: acceleration is optional, a fallback always exists.")
+s.box(70,190,420,120,"Two functions\nneed to exchange media".split("\n")[0],"grey",stroke=C["ink"],sub="two functions need to exchange media",fs=28)
+q=[(560,"Same host?","yes","MXL shared memory","zero-copy, no NIC, no encoding","violet"),
+   (560,"Same RDMA-capable fabric segment?","yes","MXL Fabrics over RDMA","RoCEv2 / EFA, one-sided write, lowest CPU load; reserved like an I/O card","pink"),
+   (560,"Same LAN with multicast and PTP?","yes","SMPTE ST 2110 / 2022-7","uncompressed, PTP time, redundant paths","violet"),
+   (560,"Otherwise (WAN, cloud, no multicast)","","SRT / RIST via gateway node","unicast, FEC; 2110 stays inside the facility","amber")]
+y=200
+for i,(x0,qq,yn,res,sb,col) in enumerate(q):
+    yy=190+i*190
+    s.box(560,yy,520,120,qq,"grey",stroke=C["ink"],fs=26)
+    s.box(1280,yy,570,120,res,col+"L",stroke=C[col],sub=sb,fs=26)
+    s.arrow(1080,yy+60,1280,yy+60,col,w=5,label=(yn or "else"),ly=yy+48)
+    if i<3:
+        s.arrow(820,yy+120,820,yy+190,"ink",w=4); s.text(840,yy+162,"no",21,"mute",True)
+s.arrow(490,250,560,250,"ink",w=4)
+s.box(70,350,420,330,"","blueL",stroke=C["blue"])
+s.text(280,395,"Fallback is soft",26,"ink",True,"middle")
+s.para(280,435,380,"If an accelerated path cannot be provided at placement time, the connection falls back to the next option automatically, with an advisory. The programme is never stopped for lack of acceleration.",21)
+s.box(70,710,420,250,"","grey",stroke=C["line"])
+s.text(280,752,"Status",24,"ink",True,"middle")
+s.para(280,790,380,"RDMA path implemented on the libfabric software provider and verified end to end. Validation on RoCEv2 hardware is planned.",20,"mute")
+s.save("7-media-path-selection")
