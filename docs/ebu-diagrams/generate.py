@@ -407,3 +407,31 @@ for x,w,title,col,items in ((70,580,"Why several documents","blue",
     s.text(x+20,762,title,24,"ink",True)
     bullets(x+20,800,w-20,items)
 s.save("12-how-it-is-built")
+
+# ---------- 13: standards as building bricks ----------
+s=S("13 · Standards as building bricks","We do not invent what a standard already defines. We take the bricks as published and build only what no standard covers.")
+OR={"EBU":("blueL","blue"),"AMWA":("tealL","teal"),"MXL":("pinkL","pink"),"SMPTE":("violetL","violet"),"OSS":("grey","line"),"OMP":("amberL","amber")}
+s.box(70,178,1780,62,"EBU DMF: the reference architecture, the blueprint every brick below is measured against","blueL",stroke=C["blue"],fs=25)
+rows=[("Operate and content",[("OGraf","graphics format","EBU",1),("R 128","loudness","EBU",1),("R 37","lip-sync window","EBU",1),("R 103","signal gamut","EBU",1),("EBUCore","asset metadata","EBU",1),("Web UI shell + node UIs","operator consoles, role-scoped","OMP",2.2)]),
+      ("Control",[("IS-04","discovery","AMWA",1),("IS-05","connections","AMWA",1),("IS-08","audio mapping","AMWA",1),("IS-12 / 14","self-described control","AMWA",1.2),("IS-10, BCP-003","auth, secure transport","AMWA",1.2),("BCP-008","health status","AMWA",1),("Orchestrator","placement, workflows, make-before-break, state hand-over","OMP",2.6)]),
+      ("Media exchange",[("MXL","same host, zero-copy","MXL",1.1),("MXL Fabrics","RDMA between hosts","MXL",1.1),("BCP-007-03","MXL as NMOS transport","AMWA",1.1),("ST 2110, 2022-7","uncompressed IP","SMPTE",1.2),("PTP","IEEE 1588 time","SMPTE",0.9),("AES67","audio interop","SMPTE",0.9),("SRT, RIST","WAN and cloud","OSS",1),("Gateway nodes","bridge the worlds","OMP",1.3)]),
+      ("Foundations",[("GStreamer","media pipelines","OSS",1),("FFmpeg","file tools","OSS",1),("NATS","event bus","OSS",1),("PostgreSQL + Patroni","database, failover","OSS",1.3),("Raft","consensus","OSS",1),("Podman","containers","OSS",1),("Host agent","starts nodes, reports load","OMP",1.8)])]
+y=258
+for name,bricks in rows:
+    s.e.append(f'<rect x="70" y="{y}" width="190" height="142" rx="14" fill="{C["grey"]}" stroke="{C["line"]}" stroke-width="2"/>')
+    ls=wrap(name,160,24,0.62)
+    for j,l in enumerate(ls): s.text(165,y+71-(len(ls)-1)*15+j*30+8,l,24,"ink",True,"middle")
+    tot=sum(b[3] for b in bricks); avail=1575-10*(len(bricks)-1); x=275
+    for lab,sub,o,wt in bricks:
+        w=avail*wt/tot; f,st=OR[o]
+        s.box(x,y,w,142,lab,f,stroke=C[st],sub=sub,fs=22 if w>170 else 20)
+        x+=w+10
+    y+=154
+lg=[("EBU","EBU",60),("AMWA","AMWA NMOS",170),("MXL","MXL project",140),("SMPTE","SMPTE / IEEE / AES",240),("OSS","other open specs and libraries",330),("OMP","our own bricks",0)]
+x=70
+for k,tx,adv in lg:
+    f,st=OR[k]
+    s.e.append(f'<rect x="{x}" y="885" width="34" height="26" rx="6" fill="{C[f]}" stroke="{C[st]}" stroke-width="2.5"/>')
+    s.text(x+46,906,tx,19,"ink"); x+=adv+46
+s.box(70,930,1780,90,"Rule: use the standard where one exists, name its number and version, and build our own brick only for the gap.","grey",stroke=C["line"],fs=24,bold=True,sub="Own bricks: operate, orchestrate, bridge, host. They make the standard parts work as one facility, and each one is checked as described in diagram 12.")
+s.save("13-standards-as-bricks")
