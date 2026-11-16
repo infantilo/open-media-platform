@@ -517,6 +517,9 @@ func grepLines(s string, keys ...string) []string {
 }
 
 func TestRealNamespaceHasNoNetwork(t *testing.T) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe nicht installiert")
+	}
 	r, _, _ := realNamespace(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
