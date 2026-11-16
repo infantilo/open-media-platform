@@ -163,7 +163,7 @@ s.box(1560,605,290,60,"receives new","blueL",stroke=C["blue"],fs=22,r=10)
 steps=[(560,"1 · choose target host"),(870,"2 · start new instance"),(1250,"3 · copy parameter state"),(1560,"4 · switch connection")]
 for x,t in steps:
     s.arrow(x,770,x,700,"violet",w=3)
-    s.text(x,812,t,20,"violet",True,"middle")
+    s.text(x,826,t,20,"violet",True,"middle")
 s.arrow(1560,345,1560,420,"red",dash=True,w=3); s.text(1590,385,"5 · stop old instance",20,"red",True)
 s.box(70,880,1780,140,"If any step fails: the new instance is torn down and the old one carries on. No half-state on air.","grey",stroke=C["line"],fs=26,bold=False)
 s.text(960,1000,"Gate: the switch happens only after the new node reports 'media ready' (it actually produces / consumes media).",22,"mute",False,"middle")
@@ -357,3 +357,53 @@ for i,(a,b,c,v,vt) in enumerate(rows):
     s.e.append(f'<rect x="{cx[3]}" y="{y}" width="{cw[3]}" height="62" rx="10" fill="{C[fl]}" stroke="{C[st]}" stroke-width="2.5"/>')
     s.text(cx[3]+cw[3]/2,y+39,vt,21,"ink",True,"middle")
 s.save("11-poc-scope-vs-commercial")
+
+# ---------- 12: how it is built ----------
+s=S("12 · How it is built: instructions, decisions, verification","AI-assisted development under written rules: the owner decides, the assistant implements, every step must be checkable.")
+s.band(70,175,890,525,"Where things are written","blue")
+docs=[("CLAUDE.md","project rules, loaded every session, points to the other documents","blueL","blue"),
+      ("ARCHITECTURE.md","what and why: standards, stack, node contract, phases  ·  4.6k lines","blueL","blue"),
+      ("UMSETZUNG.md","how: steps with their checks, working rules, status checklist  ·  6.6k lines","tealL","teal"),
+      ("docs/decisions.md","append-only log: each decision, options, reasons  ·  30.8k lines","amberL","amber"),
+      ("docs/ (44 files)","feature designs, node contracts, manuals, norm assessments","greyL" if False else "grey","line"),
+      ("Session memory (outside the repo)","pitfalls and the owner's standing rules, carried between sessions","violetL","violet")]
+for i,(a,b,f,st) in enumerate(docs):
+    s.box(95,222+i*79,840,71,a,f,stroke=C[st],sub=b,fs=22)
+s.band(985,175,865,525,"One step per session","teal")
+steps=[("1  Read","rules, the plan section for this step, the status checklist"),
+       ("2  Do exactly one step","sized for one session; no features taken early"),
+       ("3  Build","norm first (read the text, name the version), fewest dependencies"),
+       ("4  Verify","the step's listed checks must pass; if not, fix, do not move on"),
+       ("5  Record","tick the checklist, log decisions, update the manual"),
+       ("6  Commit","message starts with the step ID; push only when the owner asks")]
+for i,(a,b) in enumerate(steps):
+    s.box(1010,222+i*65,815,58,a,"tealL",stroke=C["teal"],sub=b,fs=21)
+s.box(1010,622,815,62,"Blocked or unclear?","amberL",stroke=C["amber"],sub="write 2 to 3 options with a recommendation; the owner decides",fs=21)
+def bullets(x,y,w,items,fs=18):
+    yy=y
+    for t in items:
+        ls=wrap(t,w-30,fs,0.55)
+        for j,l in enumerate(ls):
+            s.text(x,yy,("• " if j==0 else "   ")+l,fs,"ink"); yy+=fs*1.3
+        yy+=6
+for x,w,title,col,items in ((70,580,"Why several documents","blue",
+   ["A model reads a limited window: small fixed rules, then only the section needed",
+    "What/why, status and history change at different speeds",
+    "The plan defines 'done' before work starts",
+    "Append-only decisions keep provenance",
+    "Cost: the documents grow large and need discipline"]),
+  (670,580,"Every step must be verifiable","teal",
+   ["Each step lists its checks before it starts",
+    "About 3.9k automated tests (Go, Rust, Deno)",
+    "Official AMWA NMOS test tool in CI",
+    "Live run in the real stack; browser click-through for UI",
+    "Untested paths are labelled 'not verified on hardware'"]),
+  (1270,580,"Scale (measured 16 Nov 2026)","amber",
+   ["About 430k lines incl. tests: Go 171k, Rust 138k, TypeScript/JS 113k",
+    "1,385 commits since 3 July 2026",
+    "Core documents: about 47k lines",
+    "AI usage in the retained logs, 19 Oct to 16 Nov: 13.7k requests, 13.3M output tokens (earlier sessions not kept)"])):
+    s.e.append(f'<rect x="{x}" y="725" width="{w}" height="295" rx="14" fill="{C[col+"L"]}" fill-opacity="0.5" stroke="{C[col]}" stroke-width="2"/>')
+    s.text(x+20,762,title,24,"ink",True)
+    bullets(x+20,800,w-20,items)
+s.save("12-how-it-is-built")
