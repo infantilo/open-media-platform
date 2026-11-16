@@ -1,9 +1,15 @@
 import os
 OUT=os.path.dirname(os.path.abspath(__file__))
+THEME=os.environ.get("THEME","light")   # THEME=dark -> dark corporate colours, written to ./dark/
 W,H=1920,1080
 C=dict(bg="#ffffff",ink="#14213d",mute="#5c677d",line="#9aa5b8",
  blue="#2563eb",blueL="#e0eaff",teal="#0d9488",tealL="#d5f5f0",amber="#d97706",amberL="#fdecc8",
  red="#dc2626",redL="#fde2e2",violet="#7c3aed",violetL="#ece4ff",pink="#db2777",pinkL="#fce7f3",grey="#eef1f6")
+if THEME=="dark":
+    C.update(bg="#080c16",ink="#eaf0fa",mute="#93a1ba",line="#3b4d6e",
+     blue="#4d9bff",blueL="#10244a",teal="#19c3b0",tealL="#0b3436",amber="#fb8c00",amberL="#3a2a0e",
+     red="#ef5350",redL="#3b1719",violet="#a45cff",violetL="#271a47",pink="#f06292",pinkL="#3b1730",grey="#172033")
+    OUT=os.path.join(OUT,"dark"); os.makedirs(OUT,exist_ok=True)
 def wrap(t,w,fs,k=0.56):
     n=max(8,int(w/(fs*k))); out=[]; cur=""
     for wd in t.split():
