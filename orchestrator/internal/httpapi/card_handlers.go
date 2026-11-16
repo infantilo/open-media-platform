@@ -48,7 +48,7 @@ func detectedPorts(hostID string, found []launcher.CardConnector) []ioports.Port
 }
 
 // mergeInventory ersetzt im bisherigen Inventar die Ports der erkannten Hersteller durch die erkannten; Ports anderer
-// Hersteller (z. B. Matrox aus der Inventardatei) bleiben. Ohne Erkennung bleibt alles unverändert.
+// Hersteller (z. B. SDK-Karten aus der Inventardatei) bleiben. Ohne Erkennung bleibt alles unverändert.
 func mergeInventory(existing, detected []ioports.Port) []ioports.Port {
 	if len(detected) == 0 {
 		return existing
@@ -173,7 +173,7 @@ func handleHostCards(svc LauncherService, ioPortStore IOPortInventoryStore) http
 	}
 }
 
-// manualCardRequest legt Anschlüsse einer Karte an, die kein Plugin melden kann (Matrox xMIO/DSX: das SDK-Plugin
+// manualCardRequest legt Anschlüsse einer Karte an, die kein Plugin melden kann (SDK-Karte mit Betreiber-Plugin: das SDK-Plugin
 // stammt vom Betreiber und bringt keine Geräteabfrage mit). Jeder Eintrag in `connectors` ist ein Gerät:
 // "duplex" (Eingang und Ausgang), "in" oder "out".
 type manualCardRequest struct {
@@ -277,7 +277,7 @@ func handleAddManualCard(ioPortStore IOPortInventoryStore) http.HandlerFunc {
 	}
 }
 
-// handleRemoveManualCard: DELETE /api/v1/hosts/{id}/cards/manual/{device} — nur Matrox-Geräte, nur wenn kein Anschluss belegt ist.
+// handleRemoveManualCard: DELETE /api/v1/hosts/{id}/cards/manual/{device} — nur SDK-Karten-Geräte, nur wenn kein Anschluss belegt ist.
 func handleRemoveManualCard(ioPortStore IOPortInventoryStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ioPortStore == nil {

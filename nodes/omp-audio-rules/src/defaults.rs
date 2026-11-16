@@ -1,5 +1,5 @@
-//! Mitgelieferte Standardwerte: die fünf ORF-Programmgruppen, das 8-Spur-MXF-
-//! Schema, die 13 ORF-„Shuffle“-Presets als Zuordnungsvorlagen und ein
+//! Mitgelieferte Standardwerte: die fünf Rundfunk-Programmgruppen, das 8-Spur-MXF-
+//! Schema, die 13 „Shuffle“-Standard-Presets als Zuordnungsvorlagen und ein
 //! Standard-Regelsatz. Alles nur Daten — im Editor sichtbar und änderbar.
 
 use std::collections::BTreeMap;
@@ -68,7 +68,7 @@ pub fn default_schemas() -> Vec<TrackSchema> {
     }]
 }
 
-/// Die 13 ORF-Presets als Zuordnungen: je Gruppe die Quellspur pro Zielkanal.
+/// Die 13 Standard-Presets als Zuordnungen: je Gruppe die Quellspur pro Zielkanal.
 pub fn default_mappings() -> Vec<Mapping> {
     let old: OldSettings = serde_json::from_str(include_str!("../defaults/orf-mxf-player.json")).expect("eingebettetes Preset-JSON ist gültig");
     old.presets

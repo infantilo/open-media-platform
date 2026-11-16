@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Demo: kompletter Playout-Workflow für den Kanal „ORF1“.
+"""Demo: kompletter Playout-Workflow für den Kanal „Demo-Kanal“.
 
 Legt an (gegen einen LAUFENDEN Stack, nur Standardbibliothek):
-  Workflow „ORF1 Playout“  Live-Quelle · Kanal-Player A/B · Bildmischer · Tonmischer · Grafik ·
+  Workflow „Demo Playout“  Live-Quelle · Kanal-Player A/B · Bildmischer · Tonmischer · Grafik ·
                            Audio-Monitor · Viewer · Playout-Automation   (720p25, Bildmischer → Viewer)
-  Channel „ORF1“           an die Automation-Rolle gebunden (Playlist bleibt über Neustarts erhalten)
+  Channel „Demo-Kanal“           an die Automation-Rolle gebunden (Playlist bleibt über Neustarts erhalten)
   Playlist                 Sendungskennung → MXF-Clip → Live-Schalte (Lower Third) → Werbeblock → Trailer
 Mit --start wird der Workflow gestartet und die Playlist befüllt; ohne --start nur angelegt.
 Gesendet wird erst mit TAKE (Operator-Konsole / Panel der Automation).
@@ -18,10 +18,10 @@ ap.add_argument("--base", default="http://localhost:8000")
 ap.add_argument("--user", default="admin")
 ap.add_argument("--password", default="adminpass123")
 ap.add_argument("--start", action="store_true")
-ap.add_argument("--recreate", action="store_true", help="vorhandenen Workflow/Channel „ORF1“ vorher löschen")
+ap.add_argument("--recreate", action="store_true", help="vorhandenen Workflow/Channel „Demo-Kanal“ vorher löschen")
 a = ap.parse_args()
 BASE, TOKEN = a.base.rstrip("/"), ""
-WF_NAME, CH_NAME, AUTO = "ORF1 Playout", "ORF1", "Playout-Automation"
+WF_NAME, CH_NAME, AUTO = "Demo Playout", "ORF1", "Playout-Automation"
 
 
 def call(method, path, body=None):
@@ -86,7 +86,7 @@ m = lambda name, body: call("POST", f"/api/v1/nodes/{nid}/methods/{name}", body)
 wait_for(lambda: call("GET", f"/api/v1/nodes/{nid}/params/channelId")["value"] == ch["id"], 60, "Channel-Bindung")
 time.sleep(3)
 for lbl, kw in [("Sendungskennung", {"pattern": "smpte", "durationMs": 6000}),
-                ("Magazin (MXF-Clip)", {"file": "ORF-Demo-12ch.mxf", "durationMs": 10000}),
+                ("Magazin (MXF-Clip)", {"file": "Demo-12ch.mxf", "durationMs": 10000}),
                 ("Live-Schalte", {"durationMs": 8000, "sourceSelectorJson": json.dumps({"mediaType": "video", "required": ["source.live"]})}),
                 ("Werbeblock 1", {"file": "test-smpte-5s.mp4", "durationMs": 5000}),
                 ("Werbeblock 2", {"pattern": "ball", "durationMs": 5000}),
@@ -98,11 +98,11 @@ m("setChildren", {"itemId": items["Sendungskennung"]["id"], "childrenJson": json
 m("setChildren", {"itemId": items["Live-Schalte"]["id"], "childrenJson": json.dumps([
     {"id": "lt", "type": "GRAPHIC", "timing": "RELATIVE_TO_START", "delayMs": 1000, "durationMs": 5000,
      "templateId": "lower-third-material-design", "data": {"name": "Studio Wien", "title": "Schalte ins Studio", "location": "ORF1 Live"}}])})
-# ORF-Audioprogrammgruppen: Stereo PT (1-2), 5.1 PT (3-8), Stereo OT (9-10), Stereo AD (11-12)
+# Audioprogrammgruppen: Stereo PT (1-2), 5.1 PT (3-8), Stereo OT (9-10), Stereo AD (11-12)
 m("updateItem", {"itemId": items["Magazin (MXF-Clip)"]["id"], "patchJson": json.dumps({"audioMapping": "orf-komplett"})})
 m("setTransition", {"itemId": items["Magazin (MXF-Clip)"]["id"], "transition": "mix", "transitionRateFrames": 12})
 m("setTransition", {"itemId": items["Werbeblock 1"]["id"], "transition": "vfade", "transitionRateFrames": 25})
-# Tonmischer: je ORF-Programmgruppe ein Ausgang (Gruppen-Bus = eigener MXL-Sender) + je Gruppe und
+# Tonmischer: je Programmgruppe ein Ausgang (Gruppen-Bus = eigener MXL-Sender) + je Gruppe und
 # Player ein Kanalzug (Quelle = Gruppen-Sender des Players, folgt dem Bild: nur der Player im Programm
 # ist hörbar). Kanäle gehen NICHT auf den Master, sondern nur auf ihren Ausgang.
 GROUPS = [("pt", "stereo", 2, "role.pt"), ("surround51", "5.1", 6, "role.pt51"), ("ot", "stereo", 2, "role.ot"), ("ad", "stereo", 2, "role.ad")]

@@ -6,7 +6,7 @@
 //! Die Auswahl trifft der Start-Assistent anhand der erkannten, freien Anschlüsse.
 //!
 //! Hersteller (`OMP_CARD_VENDOR=decklink|aja|custom`, s. `card.rs`): dieselbe Pipeline-Logik für Blackmagic
-//! DeckLink, AJA und SDK-Karten mit eigenem GStreamer-Plugin (Matrox). `--list-cards` gibt die erkannten
+//! DeckLink, AJA und SDK-Karten mit eigenem GStreamer-Plugin (Betreiber-Plugin). `--list-cards` gibt die erkannten
 //! Anschlüsse als JSON aus (Host-Agent, `detect.rs`).
 //!
 //! Zustand (BCP-008): ein gemeinsamer Monitor je Instanz — mit Eingängen als Empfänger (Link = alle Eingänge

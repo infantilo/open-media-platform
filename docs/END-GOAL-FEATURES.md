@@ -3697,7 +3697,7 @@ Kapiteln, nicht hier wiederholt.
    Architektonisch am größten (Podman-Runner, Katalog-Schreib-API,
    Vertrauensmodell), am wenigsten dringend für den aktuellen
    Ein-Entwickler-/Demo-Stand des Projekts — bewusst ans Ende gestellt.
-8. **Kapitel 19 — ST-2110-/NDI-/Dante-Source/Sink-Nodes +
+8. **Kapitel 19 — ST-2110-/NDI-/AoIP-Source/Sink-Nodes +
    Kernel-Bypass-Ausblick** (nachgereicht 2026-07-19, nicht Teil der
    ursprünglichen `frage an fabel.txt`). ✅ **Teil 0 (2110-30/AES67-
    Audio) erledigt, gleicher Tag** (`docs/decisions.md` Nachtrag 45) —
@@ -3706,7 +3706,7 @@ Kapiteln, nicht hier wiederholt.
    (`docs/decisions.md` Nachtrag 46) — live per echter Drei-Prozess-
    Kette (Quelle → Ingest → MXL → Output → Senke) verifiziert.
    Zweigeteilt einzuordnen: die **restlichen Software-Teile**
-   (AES67-Gateway als Dante-Interop, NDI-Gateway nach §6.5) sind auf der
+   (AES67-Gateway als AoIP-Interop, NDI-Gateway nach §6.5) sind auf der
    Dev-Maschine vollständig testbar und der erste Punkt der Liste, der
    OMP an **echtes Fremd-Equipment** anschließt (Kameras, Mischpulte,
    OBS/vMix) — Nutzwert vergleichbar mit Kapitel 15, Aufwand pro Teil
@@ -3725,7 +3725,7 @@ umsetzen — klein, unabhängig, sofort sichtbar.
 
 ---
 
-## 19. Broadcast-Interop an der Facility-Grenze: ST-2110-, NDI- und Dante-Source/Sink-Nodes + Kernel-Bypass für 2110
+## 19. Broadcast-Interop an der Facility-Grenze: ST-2110-, NDI- und AoIP-Source/Sink-Nodes + Kernel-Bypass für 2110
 
 > Nutzer-Feedback (2026-07-19): „wir brauchen SMPTE 2110, NDI und
 > dante source und sinks. geht 2110 mit kernel bypass? (natürlich
@@ -3762,7 +3762,7 @@ De-facto-Standard für professionelle 2110-Software-Endpunkte ist
   also schon abgedeckt, der Plan ist aktuell und wird hier nur
   konkretisiert, nicht ersetzt (s. 19.3b, inkl. einer kleinen
   Korrektur zur CI-Testbarkeit).
-- **Dante ist nirgends dokumentiert** — kein Treffer in
+- **Das proprietäre AoIP-System ist nirgends dokumentiert** — kein Treffer in
   `ARCHITECTURE.md`, `docs/END-GOAL-FEATURES.md`, `docs/decisions.md`.
   19.3c ist echte Neurecherche.
 - **Abgrenzung zu Kapitel 16 (MXL-native Fabrics) — bewusst getrennte
@@ -3783,7 +3783,7 @@ De-facto-Standard für professionelle 2110-Software-Endpunkte ist
 
 ### 19.2 Referenz PIPELINE CONTROLLER
 
-Überwiegend nicht einschlägig: kein NDI, kein Dante, keine
+Überwiegend nicht einschlägig: kein NDI, kein proprietäres AoIP, keine
 2110-Essenz-Streams (I/O dort ist DeckLink-SDI/HDMI plus
 RTMP/SRT/UDP-TS, `lib/OutputEngine.js`). **Ein Punkt ist aber direkt
 relevant — PTP:** `lib/ClockStrategy.js` hat echte
@@ -3856,26 +3856,26 @@ Gateway-Nodes beschränkt. Offen bleibt einzig NDI HX
 (H.264/HEVC-Varianten, brauchen die Advanced-SDK-Runtime) — 19.5
 Frage 4.
 
-**c) Dante Source/Sink: Empfehlung AES67-Interop-Gateway, kein
-natives Dante.** Rechercheergebnis (Audinate-Primärquellen):
+**c) AoIP Source/Sink: Empfehlung AES67-Interop-Gateway, kein
+natives proprietäres AoIP.** Rechercheergebnis (Herstellerquellen):
 
-- **Natives Dante ist ohne Audinate-Vertrag nicht implementierbar.**
+- **Natives proprietäres AoIP ist ohne Herstellervertrag nicht implementierbar.**
   Das Protokoll ist proprietär, es existiert keine
-  Open-Source-Implementierung. Audinates Software-SDK „Dante
-  Application Library" (DAL) gibt es nur für **Windows und macOS**
+  Open-Source-Implementierung. Das Software-SDK des Herstellers
+  (Application Library) gibt es nur für **Windows und macOS**
   (Stand der Recherche 2026-07, bis 64×64 Kanäle, kommerzielle
   Lizenz) — für OMPs Linux-Nodes unbrauchbar. Die Linux-fähigen
-  Angebote (Dante Embedded Platform, Dante IP Core) sind
+  Angebote (Embedded-Plattform, IP-Core des Herstellers) sind
   OEM-Produkt-Lizenzierungen pro Gerät, d. h. eine Geschäfts-, keine
   Entwicklungsentscheidung. Damit ist die Lizenzlage **härter als
   bei NDI**: dort genügt eine frei ladbare Runtime, hier ein
   kommerzieller OEM-Vertrag.
-- **AES67 ist der offizielle, von Audinate selbst vorgesehene
-  Interop-Pfad.** Dante-Geräte mit Brooklyn-/Broadway-/HC-Chipsatz
+- **AES67 ist der offizielle, vom Hersteller selbst vorgesehene
+  Interop-Pfad.** Geräte des proprietären Systems mit bestimmten Chipsätzen
   und Firmware ≥ 4.2 können pro Gerät einen AES67-Modus aktivieren.
-  Randbedingungen (Audinate-Doku): nur 48 kHz, nur Multicast-Flows,
+  Randbedingungen (Herstellerdoku): nur 48 kHz, nur Multicast-Flows,
   fester PTPv2-Domain 0, **SAP-Announcements erforderlich**, damit
-  Dante Controller den Fremd-Stream findet; keine Redundanz, nur
+  Controller den Fremd-Stream findet; keine Redundanz, nur
   das Primärnetz. Ältere Ultimo-/UltimoX-Geräte können kein AES67.
 - **AES67 ist technisch fast deckungsgleich mit ST 2110-30** — beide
   sind L16/L24-RTP mit PTP-Medienclock; ein Sender mit L24/48 kHz/
@@ -3888,12 +3888,12 @@ natives Dante.** Rechercheergebnis (Audinate-Primärquellen):
   SAP-Komponente (RFC 2974: periodische SDP-Announcements auf
   `239.255.255.255:9875`; Senden für die Sink-Rolle, Mithören für
   Source-Discovery — wenige hundert Zeilen, kein GStreamer-Element
-  nötig). Damit spricht OMP nicht nur Dante-im-AES67-Modus, sondern
-  auch Ravenna, Lawo, Merging u. a. AES67-Geräte — ein Gateway für
-  das gesamte AoIP-Ökosystem statt eines Audinate-gebundenen.
-  Als Linux-Gegenstelle für Tests ohne Dante-Hardware existiert
+  nötig). Damit spricht OMP nicht nur Geräte-im-AES67-Modus, sondern
+  auch Ravenna u. a. AES67-Geräte — ein Gateway für
+  das gesamte AoIP-Ökosystem statt eines herstellergebundenen.
+  Als Linux-Gegenstelle für Tests ohne Fremd-Hardware existiert
   `bondagit/aes67-linux-daemon` (GPL, SAP + mDNS/Ravenna,
-  Merging-ALSA-Treiber) — Verifikationswerkzeug, keine Dependency.
+  herstellereigener ALSA-Treiber) — Verifikationswerkzeug, keine Dependency.
 
 **d) Kernel-Bypass für 2110: Software heute, Intel MTL als
 Planungs-Default für „den großen Rechner", Rivermax als dokumentierte
@@ -3999,7 +3999,7 @@ Recherchierte Faktenlage (Stand 2026-07):
   Pakete trotz nachweislich sendendem Master) — erst zwei echte,
   per `veth` verbundene `ip netns` (näher an einem echten
   Mehr-Host-Aufbau) brachten `is_synced()==true` innerhalb von 9s.
-- **Teil 3 — `omp-aes67-gateway` (Dante-Interop).** ✅ **Erledigt
+- **Teil 3 — `omp-aes67-gateway` (AoIP-Interop).** ✅ **Erledigt
   2026-07-19** (`docs/decisions.md` Nachtrag 48): Teil-0-Audio +
   vollständige, von Hand gebaute SAP-Announce/-Listen-Implementierung
   (RFC 2974, kein GStreamer-Element/keine neue Dependency), Rollen
@@ -4024,7 +4024,7 @@ Recherchierte Faktenlage (Stand 2026-07):
   bewusst nicht Teil dieser Scheibe (im Text unten als
   Verifikationswerkzeug genannt, ausdrücklich keine Dependency) — der
   interne Pfad ist bereits doppelt real verifiziert; Test gegen echte
-  Dante-Hardware bleibt zurückgestellt (19.5 Frage 3).
+  Fremd-Hardware bleibt zurückgestellt (19.5 Frage 3).
 - **Teil 4 — `omp-ndi-gateway` nach §6.5:** `omp-mediaio`-Modul
   `ndi` (Feature, baut ohne SDK — s. 19.3b-Korrektur), Gateway-Node
   in beiden Richtungen. Verifikation: NDI-Runtime auf der
@@ -4054,12 +4054,12 @@ Recherchierte Faktenlage (Stand 2026-07):
 2. **Rivermax-Lizenzbereitschaft**, falls Frage 1 auf ConnectX
    fällt (kostenpflichtig, über NVIDIA-Reseller; Höhe im Rahmen
    dieser Recherche nicht öffentlich bezifferbar).
-3. **Dante: genügt AES67-Interop?** Die Empfehlung 19.3c deckt
-   Dante-Geräte mit Brooklyn/Broadway/HC-Chipsatz + Firmware ≥ 4.2
+3. **Proprietäres AoIP: genügt AES67-Interop?** Die Empfehlung 19.3c deckt
+   Geräte des proprietären Systems mit bestimmten Chipsätzen + Firmware ≥ 4.2
    im AES67-Modus ab (48 kHz, Multicast, kein Redundanznetz).
-   Welche konkreten Dante-Geräte sind/werden vorhanden — und ist
+   Welche konkreten Geräte des proprietären Systems sind/werden vorhanden — und ist
    darunter Ultimo-basiertes Gerät ohne AES67-Fähigkeit, das
-   natives Dante (= Audinate-OEM-Vertrag, kein Linux-DAL) erzwingen
+   natives proprietäres AoIP (= Hersteller-OEM-Vertrag, kein Linux-DAL) erzwingen
    würde?
 4. **NDI-Umfang:** §6.5/19.3b planen Source **und** Sink — bestätigt?
    Und: wird NDI HX (H.264/HEVC, braucht die Advanced-SDK-Runtime

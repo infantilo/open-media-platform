@@ -11,7 +11,7 @@
 //!
 //! **Warum kein `uridecodebin`:** `omp-player`s Datei-Zweig nutzt
 //! `uridecodebin(expose-all-streams=false)` — liefert genau EINEN
-//! Audio-Pad. Reale MXF-Dateien aus dem ORF-Umfeld tragen die 8
+//! Audio-Pad. Reale MXF-Dateien aus dem Rundfunk-Umfeld tragen die 8
 //! Tonspuren aber als 8 SEPARATE MONO-Essenzspuren (`ffprobe` gegen
 //! `/home/infantilo/PIPELINE CONTROLLER/media/ET270438.mxf` live
 //! verifiziert: 8× `pcm_s24le, channels=1`), die alle gleichzeitig

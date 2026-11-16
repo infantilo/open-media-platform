@@ -1,9 +1,9 @@
 //! `omp-aes67-gateway` (Kapitel 19 Teil 3, `docs/END-GOAL-FEATURES.md`
 //! §19.3c/§19.4): bidirektionale Brücke zwischen AES67/RTP-Multicast
-//! (LAN, Dante-Geräte im AES67-Modus, Ravenna/Lawo/Merging u. a.) und
+//! (LAN, Geräte im AES67-Modus, Ravenna u. a.) und
 //! dem OMP-internen MXL-Fabric — Audio-Pendant zu `omp-2110-gateway`,
 //! zusätzlich mit einer SAP-Komponente (RFC 2974, `sap.rs`), weil AES67-
-//! /Dante-Geräte Fremdströme ausschließlich darüber finden, nicht durch
+//!  Geräte Fremdströme ausschließlich darüber finden, nicht durch
 //! Adress-Scanning.
 //!
 //! - **Sink**-Rolle (AES67 → MXL): drei Konfigurationswege, in dieser
@@ -17,7 +17,7 @@
 //!   MXL-Quelle dynamisch per IS-05-Receiver-PATCH — plus ein
 //!   dauerhaft laufender SAP-`Announcer`, der das eigene SDP periodisch
 //!   ankündigt, solange der Prozess läuft (unabhängig davon, ob gerade
-//!   eine MXL-Quelle verbunden ist — ein Dante-Controller soll den
+//!   eine MXL-Quelle verbunden ist — ein Controller soll den
 //!   Stream schon vor dem ersten Connect als "vorhanden" listen können,
 //!   exakt wie ein Hardware-Gateway das täte).
 
@@ -303,7 +303,7 @@ struct SinkParams {
 /// Sucht in `listener`s aktuell bekannten SAP-Sessions eine
 /// `m=audio`-Session, deren `s=`-Name `name_filter` als Teilstring
 /// enthält (leerer Filter = erste gefundene Audio-Session), und wartet
-/// dafür bis zu `timeout` — reale AES67-/Dante-Geräte announcen nicht
+/// dafür bis zu `timeout` — reale AES67-Geräte announcen nicht
 /// sofort beim Prozessstart, sondern erst beim nächsten periodischen
 /// Intervall (typischerweise Sekunden bis niedrige Zehntelminuten).
 fn discover_audio_sdp(listener: &sap::Listener, name_filter: &str, timeout: Duration) -> Result<String, String> {

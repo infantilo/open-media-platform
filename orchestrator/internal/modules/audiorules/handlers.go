@@ -24,7 +24,7 @@ import (
 // Ausführung passieren in den Nodes (Rust-Crate omp-audio-rules), der
 // Orchestrator speichert und prüft nur die Struktur.
 //
-// Die Standardwerte (fünf ORF-Programmgruppen, 8-Spur-MXF-Schema, 13 ORF-
+// Die Standardwerte (fünf Rundfunk-Programmgruppen, 8-Spur-MXF-Schema, 13 Standard-
 // Presets als Vorlagen, Ersatzregeln) erzeugt das Rust-Crate; die Datei hier
 // ist deren Abzug (ein Rust-Test hält beide synchron, s.
 // omp-audio-rules/src/defaults.rs).

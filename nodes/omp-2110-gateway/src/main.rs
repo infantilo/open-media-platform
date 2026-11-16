@@ -25,7 +25,7 @@
 //!   Richtung). Konfiguration exakt nach demselben Zwei-Wege-Muster wie
 //!   Video (`OMP_2110_GATEWAY_AUDIO_SDP`/`_AUDIO_SDP_FILE` vor den
 //!   einzelnen `OMP_2110_GATEWAY_AUDIO_*`-Vars), bewusst OHNE SAP
-//!   (anders als `omp-aes67-gateway` — reines ST2110, keine Dante-/
+//!   (anders als `omp-aes67-gateway` — reines ST2110, keine 
 //!   AES67-Discovery-Erwartung).
 
 mod pipeline;

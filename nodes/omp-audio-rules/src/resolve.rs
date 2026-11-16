@@ -420,7 +420,7 @@ mod tests {
         SourceTrack { n, layout, channels: vec![], tags: tags.iter().map(|t| t.to_string()).collect() }
     }
 
-    /// Jedes der 13 importierten ORF-Presets liefert exakt die Matrix der alten Routen.
+    /// Jedes der 13 importierten Standard-Presets liefert exakt die Matrix der alten Routen.
     #[test]
     fn imported_orf_presets_match_the_old_routes() {
         #[derive(serde::Deserialize)]
@@ -552,9 +552,9 @@ mod tests {
     #[test]
     fn schema_selection_prefers_the_most_specific_match() {
         let general = TrackSchema { id: "mxf".into(), matcher: SchemaMatch { format: Some("mxf".into()), ..Default::default() }, tracks: vec![] };
-        let specific = TrackSchema { id: "mxf8".into(), matcher: SchemaMatch { format: Some("MXF".into()), tracks: Some(8), path_glob: Some("/media/orf/*.mxf".into()) }, tracks: vec![] };
+        let specific = TrackSchema { id: "mxf8".into(), matcher: SchemaMatch { format: Some("MXF".into()), tracks: Some(8), path_glob: Some("/media/archiv/*.mxf".into()) }, tracks: vec![] };
         let schemas = vec![general, specific];
-        let probe = ProbeInfo { format: "mxf".into(), track_count: 8, path: "/media/ORF/news.mxf".into() };
+        let probe = ProbeInfo { format: "mxf".into(), track_count: 8, path: "/media/ARCHIV/news.mxf".into() };
         assert_eq!(select_schema(&schemas, &probe).unwrap().id, "mxf8");
         let other = ProbeInfo { format: "mxf".into(), track_count: 16, path: "/x/y.mxf".into() };
         assert_eq!(select_schema(&schemas, &other).unwrap().id, "mxf");

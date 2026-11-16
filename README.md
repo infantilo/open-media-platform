@@ -1,6 +1,6 @@
 # OpenMediaPlatform
 
-[![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--04%20v1.3-1f6feb)](https://specs.amwa.tv/is-04/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--05%20v1.1%20%2B%20v1.2.0-1f6feb)](https://specs.amwa.tv/is-05/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--12%20%2F%20IS--14-1f6feb)](https://specs.amwa.tv/ms-05-02/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--08-1f6feb)](https://specs.amwa.tv/is-08/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--003--01-1f6feb)](https://specs.amwa.tv/bcp-003-01/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--008-1f6feb)](https://specs.amwa.tv/bcp-008-01/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--007--03%20(MXL)-1f6feb)](https://specs.amwa.tv/bcp-007-03/) [![CI](https://img.shields.io/badge/AMWA%20conformance-verified%20in%20CI-2ea043)](.github/workflows/ci.yml) [![SMPTE](https://img.shields.io/badge/SMPTE-ST%202110--20%2F30-6e40c9)](https://www.smpte.org/standards) [![AES67](https://img.shields.io/badge/AES67-Dante%20compatible-6e40c9)](https://en.wikipedia.org/wiki/AES67) [![EBU](https://img.shields.io/badge/EBU-R37%20%2B%20R128%2FBS.1770-6e40c9)](https://tech.ebu.ch/loudness)
+[![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--04%20v1.3-1f6feb)](https://specs.amwa.tv/is-04/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--05%20v1.1%20%2B%20v1.2.0-1f6feb)](https://specs.amwa.tv/is-05/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--12%20%2F%20IS--14-1f6feb)](https://specs.amwa.tv/ms-05-02/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--08-1f6feb)](https://specs.amwa.tv/is-08/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--003--01-1f6feb)](https://specs.amwa.tv/bcp-003-01/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--008-1f6feb)](https://specs.amwa.tv/bcp-008-01/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--007--03%20(MXL)-1f6feb)](https://specs.amwa.tv/bcp-007-03/) [![CI](https://img.shields.io/badge/AMWA%20conformance-verified%20in%20CI-2ea043)](.github/workflows/ci.yml) [![SMPTE](https://img.shields.io/badge/SMPTE-ST%202110--20%2F30-6e40c9)](https://www.smpte.org/standards) [![AES67](https://img.shields.io/badge/AES67-interoperable-6e40c9)](https://en.wikipedia.org/wiki/AES67) [![EBU](https://img.shields.io/badge/EBU-R37%20%2B%20R128%2FBS.1770-6e40c9)](https://tech.ebu.ch/loudness)
 
 > **Standards-first:** built directly on AMWA NMOS — IS-04 v1.3 for
 > discovery/registration, **IS-05 v1.1 and the current v1.2.0 release
@@ -18,7 +18,7 @@
 > yet) is checked by our own schema-conformance tool instead, against
 > the real published JSON schemas.
 
-### Standards conformance — verified, not just claimed
+### Standards implemented — and how each one was checked
 
 | Standard | What it covers here | Verified by |
 |---|---|---|
@@ -30,8 +30,8 @@
 | AMWA BCP-007-03 | MXL as a standardized NMOS transport, not a proprietary one | Own schema-conformance tool against the real published JSON schemas (spec too new for an official AMWA suite yet) |
 | AMWA BCP-008-01/02 | Receiver/sender health status | Real signals (GStreamer jitterbuffer stats, PTP lock, DeckLink cable lock, SRT stats), live-verified |
 | MXL v1.1.0 (Media eXchange Layer) | Zero-copy local media exchange | Read/write path run against MXL's own independent reference tools, both directions, down to actual pixels |
-| SMPTE ST 2110-20/30 | Video/audio over IP | Conformant SDP, live-verified against real RTP traffic |
-| AES67 (Dante-compatible) | Audio interop over IP | SAP discovery, live-verified |
+| SMPTE ST 2110-20/30 | Video/audio over IP | SDP written to the spec, live-verified against real RTP traffic; no third-party conformance test has been run |
+| AES67 | Audio interop over IP, incl. devices that offer an AES67 mode | SAP discovery, live-verified |
 | PTP (IEEE 1588) | Network timebase for the 2110 paths | Opt-in domain, verified live-synchronized across two network namespaces |
 | SMPTE ST 377-4 / ST 377-41 (MXF MCA) | Multichannel audio labeling in MXF (channel / soundfield-group / group labels, controlled vocabulary) | Own parser and injector (`omp-mxf-mca`); `omp-mxf-player` reads labels into the audio rules, `omp-recorder` writes them into `.mxf` recordings; round-trip checked against ffmpeg/GStreamer demuxers (no MCA reference file available yet) |
 | EBU R 37 | A/V lip-sync tolerance window | `omp-scope` measures real signals and scores them against it live |
@@ -39,6 +39,12 @@
 | EBU R 103 v3.0 | Video signal tolerance (RGB/Y gamut, 1 % area rule, prescribed pre-filter) | `omp-scope` live alarm and a file-QC check; one set of test vectors in Rust and Go; file QC run on real generated files (approximation: measured on a downscaled image) |
 | EBU Tech 3293 v1.10 (EBUCore) | Metadata exchange for assets, including your own dynamic fields | Export validated against the official `ebucore.xsd` 1.10.1; round trip keeps dynamic fields; import preview |
 | EBU R 143 v3.0 | Cybersecurity requirements for media vendors' products | Honest control-by-control assessment in `docs/R143-KONFORMITAET.md` (8 met, 17 partly, 2 open of 28) — an assessment, not a certification |
+
+> **Reading this table:** "verified" means the check named in the right-hand column was run. Except where the official
+> AMWA test tool is named, no row is a certification or a third-party conformance statement, and OpenMediaPlatform is
+> not affiliated with or endorsed by AMWA, SMPTE, EBU, the MXL project or any vendor. Names are trademarks of their
+> owners and are used only to describe interoperability. See [`NOTICE`](NOTICE) and
+> [`docs/LIZENZ-INVENTAR.md`](docs/LIZENZ-INVENTAR.md).
 
 ![OpenMediaPlatform Hero](docs/hero.png)
 
@@ -277,7 +283,7 @@ Full walkthroughs and context for every screen above are in
 - MXL zero-copy shared memory for same-host media exchange, on
   **MXL v1.1.0** (GA, incl. the native Fabrics API); SMPTE ST 2110 (+ SRT gateway for lossy
   WANs) or MXL-native Fabrics (RDMA) for cross-host exchange,
-  including AES67 audio (Dante-compatible). Because MXL is an open
+  including AES67 audio (devices with an AES67 mode). Because MXL is an open
   format shared by the whole software-defined-production ecosystem
   (not an OMP-specific transport), interoperability was verified
   directly: OMP's own read/write path was run against the MXL
@@ -475,7 +481,7 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 
 - **omp-source** — test sources (color bars etc. plus test tone)
 - **omp-capture-card** — SDI/IP capture card bridge for Blackmagic DeckLink,
-  AJA and (via an operator-built GStreamer plugin) Matrox SDK cards; one
+  AJA and (via an operator-built GStreamer plugin) other vendors' SDK cards; one
   instance per card. The start wizard lists the detected cards of the
   chosen host with every input and output as free or in use; each chosen
   connector becomes an input (video + audio sender) and/or an output
@@ -785,9 +791,9 @@ Being upfront about the current edges, not just the highlights:
   live-tested, but only over the software `tcp` libfabric provider;
   `verbs`/`efa` for real RoCEv2 NICs is a drop-in config change that
   hasn't been run against real hardware yet (procurement pending).
-- **No NDI gateway, no proprietary Dante.** AES67 (which most Dante
-  devices also speak) is supported via `omp-aes67-gateway`; native NDI
-  and Dante's proprietary control protocol are not implemented.
+- **No NDI gateway, no proprietary audio-over-IP product.** AES67 (which many
+  proprietary audio-over-IP devices also speak) is supported via `omp-aes67-gateway`; native NDI
+  and proprietary control protocols are not implemented.
 - **NMOS grouphint only meaningful for `omp-source` video/audio pairs.**
   `omp-source` tags its video and audio senders with one shared group
   name (`<group>:high` / `<group>:audio`), so foreign controllers can
@@ -912,8 +918,8 @@ fixed" actually looked in practice.
 
 **Open** (see "What OpenMediaPlatform does not do" above for the full,
 qualified list): RDMA hardware integration (`verbs`/EFA providers,
-pending hardware procurement), an NDI gateway, proprietary Dante
-(Dante in AES67 mode already runs via `omp-aes67-gateway`), the NMOS grouphint gap for video/audio pairs, and — within the ffmpeg
+pending hardware procurement), an NDI gateway, proprietary audio-over-IP
+(devices in AES67 mode already run via `omp-aes67-gateway`), the NMOS grouphint gap for video/audio pairs, and — within the ffmpeg
 assistant — keyframe-exact lossless concatenation with per-clip
 trimming (today's lossless mode covers whole, untrimmed clips; trimming
 still means re-encoding).

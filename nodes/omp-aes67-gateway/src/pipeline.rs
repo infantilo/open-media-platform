@@ -14,7 +14,7 @@
 //!   (gleiches Rebuild-bei-Connect-Muster wie `omp-2110-gateway`s
 //!   Output-Rolle). Zusätzlich zum reinen 2110-Gateway sendet die
 //!   Source-Rolle periodische SAP-Announcements (`sap.rs`) — AES67-/
-//!   Dante-Geräte im AES67-Modus finden Fremdströme ausschließlich über
+//!   Geräte im AES67-Modus finden Fremdströme ausschließlich über
 //!   SAP, nicht durch aktives Scannen von Adressbereichen.
 
 use std::collections::BTreeMap;

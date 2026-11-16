@@ -2,8 +2,8 @@
 //! die Parameter und das UI dieses Nodes: Programmgruppen und „Shuffle-Presets“ (jetzt Zuordnungs-
 //! vorlagen). Die Matrizen berechnet die Engine (`omp_audio_rules::resolve`); hier stehen nur die
 //! Datentypen der bisherigen Parameter `programGroups`/`shufflePresets` und die Umrechnung aus dem
-//! Dokument. Die frühere feste Preset-Tabelle (13 ORF-Status) und `matrix_for` entfallen — die
-//! ORF-Presets sind als mitgelieferte Vorlagen im Dokument enthalten (`omp_audio_rules::defaults`).
+//! Dokument. Die frühere feste Preset-Tabelle (13 Standard-Status) und `matrix_for` entfallen — die
+//! Standard-Presets sind als mitgelieferte Vorlagen im Dokument enthalten (`omp_audio_rules::defaults`).
 
 use omp_audio_rules::AudioSettings;
 use serde::{Deserialize, Serialize};

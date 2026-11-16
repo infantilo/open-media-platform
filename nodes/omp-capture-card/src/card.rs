@@ -4,8 +4,8 @@
 //!
 //! - `decklink` (Standard): `decklink{video,audio}{src,sink}`.
 //! - `aja`: `aja{video,audio}{src,sink}` (AJA NTV2, u. a. KONA IP im SDI-/Mischbetrieb über das AJA-Plugin).
-//! - `custom`: Elementnamen aus `OMP_CARD_ELEMENTS="videosrc,audiosrc,videosink,audiosink"` — für Matrox
-//!   (DSX LE5 / xMIO) und andere SDK-Karten. Matrox liefert kein öffentliches GStreamer-Plugin; ein vom
+//! - `custom`: Elementnamen aus `OMP_CARD_ELEMENTS="videosrc,audiosrc,videosink,audiosink"` — für SDK-Karten
+//!   (DSX LE5 / xMIO) und andere SDK-Karten. Der Hersteller liefert kein öffentliches GStreamer-Plugin; ein vom
 //!   Kunden auf dem Hersteller-SDK gebautes Plugin lässt sich so einhängen, ohne Node-Änderung.
 //!
 //! Hersteller-Eigenschaften werden nie geraten: Modus-Enum, Geräteauswahl und Zusatzwerte
@@ -90,7 +90,7 @@ pub fn build_backend(vendor: &str, elements: &str, props: &str) -> Result<Backen
             if names.len() != 4 || names.iter().any(|n| n.is_empty()) {
                 return Err(format!(
                     "OMP_CARD_ELEMENTS muss vier Elementnamen liefern (videosrc,audiosrc,videosink,audiosink), bekam {elements:?}. \
-                     Für Matrox braucht der Host ein auf dem Hersteller-SDK gebautes GStreamer-Plugin."
+                     Für SDK-Karten braucht der Host ein auf dem Hersteller-SDK gebautes GStreamer-Plugin."
                 ));
             }
             Backend {

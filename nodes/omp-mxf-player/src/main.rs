@@ -1,5 +1,5 @@
 //! omp-mxf-player: MXF-Player mit Programmgruppen-Audio-Shuffle nach
-//! `Audio Tonspurerweiterung Q3 2026 PD.pdf` (ORF-intern,
+//! `Audio Tonspurerweiterung Q3 2026 PD.pdf` (senderintern,
 //! `/home/infantilo/`) — liest die 8 MXF-Audiotonspuren einer Datei und
 //! ordnet sie je nach gewähltem Preset (`presets.rs`, 13 offizielle
 //! Status ab 15.9.2026) fünf gleichzeitig aktiven, klar beschrifteten
@@ -476,7 +476,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Basis-URL des Orchestrators + eigenes Launch-Secret, um sich vor
     // dem Pipeline-Aufbau die Programmgruppen/Shuffle-Presets zu holen
     // (orchestrator_settings.rs) statt presets.rs' eingebaute
-    // ORF-Standardwerte fest zu verdrahten (Nutzerwunsch 2026-08-06).
+    // Standardwerte fest zu verdrahten (Nutzerwunsch 2026-08-06).
     let orchestrator_url = env_or("OMP_ORCHESTRATOR_URL", "http://localhost:8000");
     let launch_secret = std::env::var("OMP_LAUNCH_SECRET").unwrap_or_default();
 

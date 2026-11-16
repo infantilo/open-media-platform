@@ -22,7 +22,7 @@ use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_net::PtpClock;
 
-/// Baut eine `PtpClock` für `domain` (AES67/Dante-Pflichtprofil:
+/// Baut eine `PtpClock` für `domain` (AES67-Pflichtprofil:
 /// Domain 0, s. `st2110.rs`-Moduldoku zu AES67) und setzt sie sofort
 /// als Pipeline-Clock — unabhängig davon, ob `wait_for_sync` innerhalb
 /// von `sync_timeout` erfolgreich war (s. Moduldoku oben). Gibt die

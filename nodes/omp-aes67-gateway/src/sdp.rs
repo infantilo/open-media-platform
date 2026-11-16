@@ -3,8 +3,8 @@
 //! Moduldoku: bewusst kein voller RFC-4566-Parser, nur die Felder, die
 //! `St2110AudioInput` tatsächlich braucht). Feldformat exakt nach dem,
 //! was `St2110AudioOutput::sdp` selbst erzeugt
-//! (`nodes/omp-mediaio/src/st2110.rs`) und was AES67-/Dante-Geräte im
-//! AES67-Modus laut Audinate-Doku senden (`a=rtpmap:96 L24/<rate>/
+//! (`nodes/omp-mediaio/src/st2110.rs`) und was AES67-Geräte im
+//! AES67-Modus laut Herstellerdoku senden (`a=rtpmap:96 L24/<rate>/
 //! <channels>`).
 
 #[derive(Debug, Clone, PartialEq)]

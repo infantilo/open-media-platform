@@ -1,0 +1,14 @@
+OpenMediaPlatform
+Copyright 2026 The OpenMediaPlatform contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes or loads at run time third-party software under its own
+licenses. The inventory is in THIRD-PARTY-NOTICES.md (attribution and
+obligations) and docs/LIZENZ-INVENTAR.md (dependency scan, containers,
+system packages, models).
+
+Names such as AMWA, NMOS, SMPTE, EBU, AES67, NDI and the names of hardware and
+software vendors are trademarks of their respective owners. They are used only
+to describe interoperability. OpenMediaPlatform is not affiliated with,
+endorsed by or certified by any of them.

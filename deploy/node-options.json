@@ -132,12 +132,12 @@
       "i18n": {
         "en": {
           "label": "Vendor",
-          "description": "Card family. The start wizard sets it from the detected card; 'custom' needs the GStreamer elements below (Matrox SDK cards)."
+          "description": "Card family. The start wizard sets it from the detected card; 'custom' needs the GStreamer elements below (other vendors' SDK cards)."
         }
       },
       "label": "Hersteller",
       "type": "enum",
-      "description": "Kartenfamilie. Der Start-Assistent setzt sie aus der erkannten Karte; „custom“ braucht die GStreamer-Elemente unten (Matrox-SDK-Karten).",
+      "description": "Kartenfamilie. Der Start-Assistent setzt sie aus der erkannten Karte; „custom“ braucht die GStreamer-Elemente unten (SDK-Karten anderer Hersteller).",
       "default": "decklink",
       "group": "Hardware",
       "choices": [

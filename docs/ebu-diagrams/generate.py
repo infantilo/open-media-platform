@@ -202,7 +202,7 @@ s.box(70,190,540,230,"Today: appliance chain","redL",stroke=C["red"],fs=30,sub="
 
 s.arrow(620,305,780,305,"ink",w=6)
 s.box(790,190,1060,230,"Dynamic media facility","tealL",stroke=C["teal"],fs=30,sub="functions start where capacity exists; media is shared on the same host or over IP; one control model for all; redundancy by software where it matters")
-cols=[("Open exchange","MXL, ST 2110 and RDMA fabrics: any compliant function can connect to any other","violet"),
+cols=[("Open exchange","MXL, ST 2110 and RDMA fabrics: any function that implements them can connect to any other","violet"),
       ("Self-describing nodes","IS-04 / IS-12/14: no per-vendor control code, no orchestrator release","teal"),
       ("Replaceable parts","swap or add a function without touching the rest; no lock-in","blue"),
       ("Elastic resources","place, move and scale across on-prem and cloud hosts","amber")]

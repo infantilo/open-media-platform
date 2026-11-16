@@ -1558,7 +1558,7 @@ Sichtkontrolle). Bekannte Einschränkung: Chromium stürzt in der
 Claude-Code-Sandbox ab (docs/decisions.md, B2) — betrifft nur die
 automatisierte Verifikation dort, nicht das Zielsystem.
 
-### Entschieden: NMOS-Registry = nmos-cpp (Sony)
+### Entschieden: NMOS-Registry = nmos-cpp
 
 Containerisiert (`rhastie/nmos-cpp` o.ä. Image) als eigener Podman-Quadlet-
 Service, getrennt vom Go-Orchestrator. Orchestrator + alle Nodes sprechen nur

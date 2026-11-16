@@ -52,7 +52,7 @@ fn build_packet(msg_id_hash: u16, origin: Ipv4Addr, sdp: &str, delete: bool) -> 
 /// `application/sdp`-Payload ist (RFC 2974 erlaubt weitere Varianten —
 /// IPv6-Origin, Verschlüsselung, Komprimierung, Authentifizierung —,
 /// die hier bewusst nicht unterstützt werden: kein am Markt verbreitetes
-/// AES67-/Dante-Gerät nutzt sie für einfache Audio-Announcements).
+/// AES67-Gerät nutzt sie für einfache Audio-Announcements).
 fn parse_packet(data: &[u8]) -> Option<(u16, Ipv4Addr, bool, String)> {
     if data.len() < 8 {
         return None;

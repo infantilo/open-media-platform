@@ -295,7 +295,7 @@ class AudioRulesView extends HTMLElement {
       field("ID", textInput(s.id, (v) => { s.id = v; this.#touch(); }, { width: "150px", mono: true })),
       field(tt("arv.7ea53d"), textInput(s.match.format ?? "", (v) => { s.match.format = v; this.#touch(); }, { width: "90px", placeholder: "mxf" })),
       field(tt("arv.f8e47d"), textInput(s.match.tracks ? String(s.match.tracks) : "", (v) => { s.match.tracks = Number(v) || undefined; this.#touch(); }, { width: "70px", placeholder: "8" })),
-      field(tt("arv.1c2839"), textInput(s.match.path ?? "", (v) => { s.match.path = v; this.#touch(); }, { width: "190px", placeholder: "/media/orf/*.mxf" })),
+      field(tt("arv.1c2839"), textInput(s.match.path ?? "", (v) => { s.match.path = v; this.#touch(); }, { width: "190px", placeholder: "/media/archiv/*.mxf" })),
     );
     const gen = el("div", "display:flex;gap:6px;align-items:end;");
     const nIn = textInput("8", () => {}, { width: "50px" });

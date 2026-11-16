@@ -247,7 +247,7 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
     actions.append(cancel, ok);
     // Capture-Karte: ohne gewählten Anschluss gibt es nichts zu starten.
     function refreshOk() {
-      // Matrox-SDK-Karten laufen über ein Plugin des Betreibers: ohne dessen Elementnamen kann die Instanz nicht starten.
+      // SDK-Karten anderer Hersteller laufen über ein Plugin des Betreibers: ohne dessen Elementnamen kann die Instanz nicht starten.
       const needsElements = form.ioCardType === "matrox" && (form.options.OMP_CARD_ELEMENTS ?? "").split(",").filter((x) => x.trim()).length !== 4;
       ok.disabled = busy || (opts.captureCard && (form.ioPorts.length === 0 || needsElements));
     }

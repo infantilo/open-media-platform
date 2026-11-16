@@ -13,7 +13,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, css = "", text = ""):
 }
 
 const DIM = "color:var(--omp-text-dim);";
-const VENDOR_NAMES: Record<string, string> = { decklink: "Blackmagic DeckLink", aja: "AJA", matrox: "Matrox" };
+const VENDOR_NAMES: Record<string, string> = { decklink: "Blackmagic DeckLink", aja: "AJA", matrox: "SDK-Karte" };
 
 export interface Wizard {
   element: HTMLElement;
@@ -49,7 +49,7 @@ export function createCardWizard(
     else void load(hostId);
   };
 
-  // Karten ohne Geräteabfrage (Matrox xMIO / DSX LE5): das SDK-Plugin bringt keine mit, die Anschlüsse legt der Betreiber hier an.
+  // Karten ohne Geräteabfrage (SDK-Karte mit Betreiber-Plugin): das SDK-Plugin bringt keine mit, die Anschlüsse legt der Betreiber hier an.
   const manualForm = (): HTMLElement => {
     const box = el("details", "margin:8px 0;");
     box.append(el("summary", "cursor:pointer;", t("cc.manual")));
@@ -72,7 +72,7 @@ export function createCardWizard(
       const err = await api(`/api/v1/hosts/${encodeURIComponent(hostId)}/cards/manual`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.value.trim() || "Matrox", connectors: Array(n).fill(kind.value) }),
+        body: JSON.stringify({ name: name.value.trim() || "SDK-Karte", connectors: Array(n).fill(kind.value) }),
       });
       if (err) render(t("cc.error", { p0: err }));
       else void load(hostId);

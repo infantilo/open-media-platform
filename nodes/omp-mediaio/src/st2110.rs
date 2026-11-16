@@ -34,7 +34,7 @@
 //!   tolerieren"). Dieses Modul läuft im GStreamer-Systemtakt
 //!   (Free-Run) — derselbe Default wie `rtp.rs` heute schon. Kapitel 19
 //!   Teil 2 (Opt-in-PTP-Clock) bleibt eigener Schritt.
-//! - **SAP-Announcements (RFC 2974):** nötig, damit Dante-Controller/
+//! - **SAP-Announcements (RFC 2974):** nötig, damit Controller/
 //!   AES67-Gegenstellen einen Fremd-Stream automatisch finden — Teil
 //!   von Kapitel 19 Teil 3 (`omp-aes67-gateway`), nicht dieses Moduls.
 //! - **ST 2022-7 Pfad-Redundanz:** P2-Scope (`ARCHITECTURE.md` §2).
