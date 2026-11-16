@@ -189,12 +189,41 @@ shotSlide("Live control: the video mixer", "Proof points",
   "Video mixer console with live thumbnails on every source button, programme and preview buses, cut and auto, transition types and PIP scenes", "Screenshot video mixer",
   "Video mixer with live thumbnails",
   ["Programme and preview buses; each source shows a live picture", "Cut and auto with 6, 12, 25 or 50 frames", "Mix, wipe, slide, push and paternoster transitions", "PIP scenes, keyer (DSK) and saved presets", "Lab system with three test-pattern sources"]);
+shotSlide("Planning: workflows against host capacity", "Proof points",
+  "The scheduler plans workflows on a day, week or month view against the measured capacity of each host. Planned demand comes from measured profiles per node type; bottlenecks are marked before they happen, and workflows without a fixed host are placed automatically on the host with the most headroom, excluding hosts in maintenance. This is the planning side of the same control plane.",
+  "scheduler-woche.png", 1400 / 837, 8.0, C.accent1,
+  "Weekly scheduler with workflows and planned resource use per host", "Screenshot scheduler",
+  "Scheduler",
+  ["Day, week and month view; drag to plan or move a workflow", "Planned CPU, RAM and network per host from measured profiles", "Bottlenecks shown in red before they happen", "Workflows without a fixed host are placed automatically", "Hosts in maintenance are left out"]);
+shotSlide("File intake: check before air", "Proof points",
+  "File intake control is the front door for material. A file is imported, checked automatically against a QC profile, and then reviewed by a person who accepts, assigns or rejects it. The report lists every finding with its severity; here a loudness error and a duration mismatch are flagged against the broadcast profile, while 17 other checks pass. The same module offers review and conform, and a separate stream ingest schedules live recordings against recorder capacity. The screenshot is from a lab system with a test file.",
+  "file-intake-qc.png", 1500 / 1050, 6.9, C.accent4,
+  "File intake control: QC report with loudness error, duration mismatch and passed checks", "Screenshot file intake",
+  "Automatic QC, human decision",
+  ["Import, then automatic QC against a selectable profile", "21 checks: container, video, audio, sync, loudness, black, freeze, silence", "Findings filterable by category and severity; export as JSON or CSV", "Take over or assign, then review and conform", "Stream ingest: scheduled live recordings against recorder capacity"]);
+// monitoring
 {
-  const s = content("Planning: workflows against host capacity", "Proof points", "The scheduler plans a week of workflows against the measured capacity of each host. Bottlenecks are marked in red before they happen, and workflows without a fixed host are placed automatically. This is the planning side of the same control plane.");
-  const w = 7.8, h = w * 837 / 1400, x = (13.333 - w) / 2;
-  s.addShape(pres.ShapeType.roundRect, { x: x - 0.05, y: 1.45, w: w + 0.1, h: h + 0.1, rectRadius: 0.06, fill: { color: SURF }, line: { color: C.accent1, width: 1, transparency: 50 } });
-  s.addImage({ path: path.join(IMG, "scheduler-woche.png"), x, y: 1.5, w, h, altText: "Weekly scheduler with workflows and planned resource use per host", objectName: "Screenshot scheduler" });
-  s.addText("Scheduler: a week of workflows against host capacity, with bottlenecks visible in advance", { isTextBox: true, x: 0.6, y: 1.5 + h + 0.2, w: 12.1, h: 0.4, fontSize: 14, color: DIM, margin: 0, align: "center" });
+  const s = content("Monitoring, support and diagnosis", "Proof points", "Operating tools are part of the platform, not an add-on. The self-test lights up amber or red and lists each problem with a code and a plain what-to-do. The health page shows media availability per node over 24 hours, with outages and measured rates, and reports AMWA BCP-008 status where nodes support it. The signal path page follows a chain backwards from any destination and names the first fault. A support bundle collects logs, versions and measurements into one file, with trend curves and snapshots for later analysis. Screens show a lab system; the red and amber entries come from offline demo hosts.");
+  const iw = 5.95;
+  const items = [["support-selftest.png", 920, 415, 0.6, C.accent6, "Self-test with error codes and what to do"], ["health-availability.png", 1010, 310, 6.78, C.accent4, "Media availability per node over 24 hours"]];
+  items.forEach(([f, w, h, x, acc, cap]) => {
+    const ih = iw * h / w;
+    s.addShape(pres.ShapeType.roundRect, { x: x - 0.05, y: 1.45, w: iw + 0.1, h: ih + 0.1, rectRadius: 0.05, fill: { color: SURF }, line: { color: acc, width: 1, transparency: 50 } });
+    s.addImage({ path: path.join(IMG, f), x, y: 1.5, w: iw, h: ih, altText: cap, objectName: "Screenshot " + cap });
+    s.addText(cap, { isTextBox: true, x, y: 1.5 + ih + 0.12, w: iw, h: 0.3, fontSize: 12, color: DIM, margin: 0 });
+  });
+  const cards = [
+    ["Self-test", "Traffic light with codes and plain what-to-do steps", C.accent6],
+    ["Signal path", "Follows the chain backwards and names the first fault", C.accent1],
+    ["Health", "Availability, outages and measured rates; AMWA BCP-008", C.accent4],
+    ["Support bundle", "Logs, versions, trends and snapshots in one file", C.accent2],
+  ];
+  cards.forEach(([h, t, acc], i) => {
+    const x = 0.6 + i * 3.07;
+    card(s, x, 5.5, 2.95, 1.3, acc);
+    s.addText(h, { isTextBox: true, x: x + 0.2, y: 5.6, w: 2.6, h: 0.35, fontSize: 16, bold: true, color: acc, margin: 0 });
+    s.addText(t, { isTextBox: true, x: x + 0.2, y: 5.98, w: 2.6, h: 0.75, fontSize: 13, color: FG, margin: 0, valign: "top" });
+  });
 }
 
 // ---------------------------------------------------------------- standards table
@@ -221,6 +250,30 @@ diagram("8-kubernetes-question-gap.png", "Kubernetes and a media facility ask di
 diagram("9-kubernetes-comparison.png", "Honest comparison of Kubernetes and the OpenMediaPlatform approach", "An honest comparison. Kubernetes is clearly ahead in general scheduling, ecosystem and maturity, and in scale and elasticity. We are ahead in media awareness, in moving a running function without a gap, in same-host media exchange and, modestly, in operating effort for a small facility. For networks with multicast, PTP and RDMA the answer is: Kubernetes can do it, with effort.", "Honest scope");
 diagram("10-kubernetes-outlook.png", "What our choice costs, the triggers to revisit it, and how the design keeps the door open", "What our choice costs: we maintain scheduler, updater and hardening ourselves, and large-scale behaviour is unproven. Triggers that would make us revisit: dozens of cloud hosts with autoscaling, a customer standardising on Kubernetes, or pods sharing memory and media devices as a routine feature. The node contract stays identical, only the runner below it changes.", "Honest scope");
 diagram("12-how-it-is-built.png", "How the project is built: documents, one step per session, verification, and scale", "How it is built. The development is AI-assisted under written rules: the owner decides, the assistant implements, and every step must be checkable. The rules, the architecture, the step plan with its checks and the decision log live in separate documents, because a model reads a limited window and because they change at different speeds. One step per session, and nothing counts as done until the listed checks pass.", "Honest scope");
+
+// ---------------------------------------------------------------- ORF POC
+{
+  const s = content("Next: the ORF proof of concept, Q1 2027", "Open points and asks", "The next step is a proof of concept with ORF, planned for the first quarter of 2027. The set-up is two clusters of three machines each: three control servers, three virtualised media hosts and bare-metal gateways, connected by two 100G switches and a GNSS-locked PTP grandmaster. It runs on Rocky Linux and without internet access. The aim is to show ST 2110 without SDI cards, one time chain from the grandmaster down to virtual hosts, RDMA between hosts with an ST 2110 fallback, and ST 2022-7 redundancy. Be honest about the status: Rocky, real RoCEv2 hardware, ST 2110 on the real network cards and the time accuracy inside virtual machines have not been verified yet; switch PTP support and card drivers are still to be confirmed in writing. The ten phases are planned so that each ends with a measurable check. Confirm the year and the scope with the ORF contact before presenting.");
+  const cols = [
+    ["Planned set-up", C.accent1, ["2 clusters of 3 machines: control, virtualised media hosts, bare-metal gateways", "Two 100G switches, GNSS-locked PTP grandmaster", "Rocky Linux, no internet: offline installation", "Sources and sinks: ST 2110, NDI, MADI"]],
+    ["What it should show", C.accent2, ["ST 2110 without SDI cards, in software on 100G network cards", "One time chain from the grandmaster to virtual hosts", "RDMA between hosts, with ST 2110 as fallback", "ST 2022-7 red/blue redundancy"]],
+    ["Not yet verified", C.accent5, ["Rocky Linux with the full stack", "RoCEv2 on real hardware, ST 2110 on real cards", "Time accuracy inside virtual machines", "Switch PTP support and drivers: to be confirmed in writing"]],
+  ];
+  cols.forEach(([h, acc, items], i) => {
+    const x = 0.6 + i * 4.15;
+    card(s, x, 1.5, 3.95, 3.55, acc);
+    s.addText(h, { isTextBox: true, x: x + 0.25, y: 1.62, w: 3.5, h: 0.45, fontSize: 20, bold: true, color: acc, margin: 0 });
+    s.addText(items.map((t, k) => ({ text: t, options: { bullet: true, breakLine: k < items.length - 1 } })),
+      { isTextBox: true, x: x + 0.25, y: 2.15, w: 3.5, h: 2.8, fontSize: 14, color: FG, margin: 0, valign: "top", paraSpaceAfter: 6 });
+  });
+  const ph = ["Rocky reference", "Offline hardening", "Time lab", "Sync monitoring", "ST 2110 spike", "2110 \u2194 MXL gateway", "ST 2022-7", "MADI and NDI audio", "Virtual media hosts", "On-site preparation"];
+  s.addText("TEN PHASES, EACH WITH A MEASURABLE CHECK", { isTextBox: true, x: 0.6, y: 5.25, w: 8, h: 0.3, fontSize: 12, bold: true, color: DIM, charSpacing: 3, margin: 0 });
+  ph.forEach((t, i) => {
+    const x = 0.6 + (i % 5) * 2.45, y = 5.65 + Math.floor(i / 5) * 0.65;
+    s.addShape(pres.ShapeType.roundRect, { x, y, w: 2.33, h: 0.52, rectRadius: 0.08, fill: { color: SURF }, line: { color: C.accent1, width: 1, transparency: 60 } });
+    s.addText([{ text: "P" + (i + 1) + "  ", options: { bold: true, color: C.accent1 } }, { text: t, options: { color: FG } }], { isTextBox: true, x, y, w: 2.33, h: 0.52, fontSize: 12, align: "center", valign: "middle", margin: 0 });
+  });
+}
 
 // ---------------------------------------------------------------- open points
 {
