@@ -241,3 +241,79 @@ s.box(70,710,420,250,"","grey",stroke=C["line"])
 s.text(280,752,"Status",24,"ink",True,"middle")
 s.para(280,790,380,"RDMA path implemented on the libfabric software provider and verified end to end. Validation on RoCEv2 hardware is planned.",20,"mute")
 s.save("7-media-path-selection")
+
+# ---------- 8: what each system asks ----------
+s=S("8 · Kubernetes and a media facility ask different questions","Kubernetes is excellent at the first column. A live facility lives in the second. The gap is why we do not simply adopt it.")
+s.band(70,180,840,360,"What Kubernetes' scheduler knows","blue")
+s.band(1010,180,840,360,"What a live media facility must know","teal")
+kq=["Which node has 2 CPU and 4 GB free?","Is the pod ready (probe passed)?","Are N replicas running?","Which pods belong to one service?"]
+mq=["Which functions exchange media: can they share one host?","What is on air right now, may it be touched?","Is there PTP + multicast, or an RDMA path, to the other host?","Can the replacement take over without a visible glitch?"]
+for i,t in enumerate(kq):
+    s.box(100+(i%2)*400,230+(i//2)*150,380,125,t,"blueL",stroke=C["blue"],fs=22,bold=False)
+for i,t in enumerate(mq):
+    s.box(1040+(i%2)*400,230+(i//2)*150,380,125,t,"tealL",stroke=C["teal"],fs=22,bold=False)
+s.arrow(915,360,1005,360,"red",w=6,dash=True)
+s.text(960,335,"gap",22,"red",True,"middle")
+s.text(960,580,"Three ways to close the gap",28,"ink",True,"middle")
+opts=[("A · Kubernetes as is","blue","Generic placement and restarts. Media locality, on-air state and glitch-free hand-over are not part of its model. Fine for non-live services (databases, web UI, batch jobs)."),
+      ("B · Kubernetes + our media layer","amber","We would still build the operator, NMOS glue, state hand-over and a scheduler extension. Result: two control planes to run and keep consistent."),
+      ("C · Media-aware orchestrator (today)","teal","One control plane that already speaks NMOS and knows flows, roles and on-air state. A thin host agent starts the processes. Kubernetes stays possible as a runner backend.")]
+for i,(a,col,b) in enumerate(opts):
+    x=70+i*600
+    s.box(x,620,580,300,"",col+"L",stroke=C[col]); s.text(x+290,670,a,26,"ink",True,"middle")
+    s.para(x+290,725,520,b,22)
+s.save("8-kubernetes-question-gap")
+
+# ---------- 9: honest comparison ----------
+s=S("9 · Kubernetes vs. our approach: an honest comparison","Kubernetes wins where it is general and mature. We win where live media needs specific knowledge. We pay for it in maturity.")
+cx=[70,390,970,1550]; cw=[300,560,560,300]
+hd=["Topic","Kubernetes","OpenMediaPlatform","Verdict"]
+for x,w,t,col in zip(cx,cw,hd,["ink","blue","teal","ink"]):
+    s.e.append(f'<rect x="{x}" y="180" width="{w}" height="46" rx="10" fill="{C["grey"] if col=="ink" else C[col+"L"]}" stroke="{C["line"] if col=="ink" else C[col]}" stroke-width="2"/>')
+    s.text(x+w/2,211,t,24,"ink",True,"middle")
+rows=[("General scheduling, bin-packing","Mature, rich policies, proven on thousands of nodes","Own placement scorer: CPU, RAM, GPU plus media locality; sized for tens of hosts","K","Kubernetes ahead"),
+ ("Media awareness","Knows containers and resources. No flows, no on-air state, no MXL domain","Placement knows who exchanges media with whom and what is on air","O","We are ahead"),
+ ("Self-healing","Restarts pods, reschedules on node loss; generic and very well tested","Restart, re-wire, re-apply state; lost host: standalone instances move automatically","E","Even: theirs better tested"),
+ ("Moving a running function","Rolling update: new pod up, old pod down. No state hand-over, no media-ready cue","Make-before-break: state export / import, media-ready signal, then switch","O","We are ahead for live media"),
+ ("Same-host media exchange","Pods are isolated; sharing memory across pods needs workarounds and co-location rules","MXL shared memory between nodes on one host, zero-copy; placement keeps pairs together","O","We are ahead"),
+ ("Multicast, PTP, RDMA networks","Possible with secondary CNI, SR-IOV, device plugins; real effort to set up and keep stable","Host NICs used directly; RDMA path reserved like an I/O card; fewer layers","D","Depends: Kubernetes can, with effort"),
+ ("Ecosystem, maturity","Huge: tooling, operators, managed services, audits, documentation, hiring pool","Small and ours alone: we maintain scheduler, updates and hardening","K","Kubernetes clearly ahead"),
+ ("Scale and elasticity","Autoscaling, cluster tooling, cloud-native at any size","Hosts can be added incl. cloud; far less proven; not meant for thousands of nodes","K","Kubernetes ahead"),
+ ("Operating effort, 2 to 5 hosts","etcd, CNI, ingress, certificates, upgrades: a skill set of its own","Orchestrator + host agent + message bus + database under systemd: still several parts, fewer layers","O","We are ahead, modestly")]
+vc={"K":("blue","blueL"),"O":("teal","tealL"),"E":("line","grey"),"D":("amber","amberL")}
+for i,(a,b,c,v,vt) in enumerate(rows):
+    y=236+i*86
+    for x,w,t,fillc,bold in ((cx[0],cw[0],a,"grey",True),(cx[1],cw[1],b,"grey",False),(cx[2],cw[2],c,"grey",False)):
+        s.e.append(f'<rect x="{x}" y="{y}" width="{w}" height="78" rx="10" fill="{C["grey"]}" stroke="{C["line"]}" stroke-width="1.5"/>')
+        fs=21 if bold else 19
+        ls=wrap(t,w-24,fs,0.58 if bold else 0.55)[:3]
+        yy=y+39-(len(ls)-1)*fs*0.65+fs*0.35
+        for j,l in enumerate(ls): s.text(x+14,yy+j*fs*1.3,l,fs,"ink",bold)
+    st,fl=vc[v]
+    s.e.append(f'<rect x="{cx[3]}" y="{y}" width="{cw[3]}" height="78" rx="10" fill="{C[fl]}" stroke="{C[st]}" stroke-width="2.5"/>')
+    ls=wrap(vt,cw[3]-24,20,0.6)[:3]
+    yy=y+39-(len(ls)-1)*13+7
+    for j,l in enumerate(ls): s.text(cx[3]+cw[3]/2,yy+j*26,l,20,"ink",True,"middle")
+s.save("9-kubernetes-comparison")
+
+# ---------- 10: costs, triggers, door stays open ----------
+s=S("10 · What our choice costs, and when we would revisit it","Not a religious decision: a trade-off for today's target (24/7 broadcast centres, tens of hosts) that the design keeps reversible.")
+s.box(70,190,880,330,"","redL",stroke=C["red"]); s.text(100,238,"What our choice costs us",29,"ink",True)
+for k,t in enumerate(["• We maintain scheduler, updater and hardening ourselves","• Fewer eyes and less field time than a widely used platform","• Smaller hiring pool; operators must learn a new tool","• Large-scale and autoscaling behaviour is unproven","• Integrations with generic cloud tooling are ours to build"]):
+    s.text(100,290+k*42,t,22,"ink")
+s.box(970,190,880,330,"","amberL",stroke=C["amber"]); s.text(1000,238,"Triggers to revisit the decision",29,"ink",True)
+for k,t in enumerate(["• Cloud deployments of dozens of hosts with autoscaling","• A customer standardises on Kubernetes for all workloads","• Pods can share memory and media devices as a routine feature","• Our own scheduler becomes the bottleneck in operations","• A shared, maintained media operator appears in the community"]):
+    s.text(1000,290+k*42,t,22,"ink")
+s.text(960,572,"How the design keeps the door open",28,"ink",True,"middle")
+s.band(70,590,1780,430,"The node contract stays identical, only the runner below it changes","teal")
+s.box(110,640,520,100,"Orchestrator","tealL",sub="placement, workflows, connections, state",fs=26)
+s.box(110,790,520,100,"Node contract","violetL",stroke=C["violet"],sub="IS-04/05, IS-12/14, state export / import",fs=26)
+s.arrow(370,740,370,790,"teal",both=True)
+s.box(700,640,540,100,"Runner: host agent","amberL",sub="starts processes and OCI images, reports load",fs=26)
+s.box(1310,640,500,100,"Runner: Kubernetes (optional)","blueL",stroke=C["blue"],dash=True,sub="planned for cloud (k3s / managed)",fs=24)
+s.arrow(630,690,700,690,"teal",w=4)
+s.arrow(1240,690,1310,690,"ink",w=3,dash=True)
+s.box(700,790,1110,100,"The same nodes, whichever runner starts them","amberL",stroke=C["amber"],sub="media-aware placement and make-before-break stay in the orchestrator",fs=24)
+s.arrow(970,740,970,790,"amber",w=3); s.arrow(1560,740,1560,790,"blue",w=3,dash=True)
+s.para(960,945,1600,"Rule of thumb we apply: generic services (databases, web, batch) may run on any platform, including Kubernetes. Live media functions are placed by something that knows the signal path.",22)
+s.save("10-kubernetes-outlook")
