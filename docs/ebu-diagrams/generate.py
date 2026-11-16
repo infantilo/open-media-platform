@@ -317,3 +317,43 @@ s.box(700,790,1110,100,"The same nodes, whichever runner starts them","amberL",s
 s.arrow(970,740,970,790,"amber",w=3); s.arrow(1560,740,1560,790,"blue",w=3,dash=True)
 s.para(960,945,1600,"Rule of thumb we apply: generic services (databases, web, batch) may run on any platform, including Kubernetes. Live media functions are placed by something that knows the signal path.",22)
 s.save("10-kubernetes-outlook")
+
+# ---------- 11: what this PoC is and is not ----------
+s=S("11 · What this proof of concept is, and what it is not","A working open reference for the DMF idea: strong for learning, experiments and development, not a drop-in for a certified plant.")
+s.band(70,175,865,430,"What you can do with it","teal")
+s.band(985,175,865,430,"What you should not rely on it for","red")
+can=[("Experiment with MXL, NMOS and ST 2110 hands-on","flows, connections, timing on running software; no licence needed"),
+     ("Develop your own functions as nodes","self-describing contract, node SDK, tutorial; try integration Level A, B and C"),
+     ("Learn and teach the DMF idea end to end","control vs media plane, placement, failure handling: all visible"),
+     ("Run small productions and lab set-ups","playout, mixing, graphics, recording, radio; read the open points first"),
+     ("Audit and change everything","open source (Apache-2.0), standards first, no lock-in")]
+cant=[("Replace a certified 24/7 plant today","short field record; several paths not yet run on real hardware"),
+      ("Come with support, SLA or indemnity","no vendor behind it; no patent or codec licence coverage; no warranty"),
+      ("Cover every format and device","no NDI gateway; capture cards not verified on hardware"),
+      ("Claim certification","standards implemented and checked, but not formally certified"),
+      ("Scale to hundreds of hosts or full MAM / traffic / ad","sized for tens of hosts; asset management, traffic and billing are out of scope")]
+for i,(a,b) in enumerate(can):
+    s.box(95,222+i*76,815,68,a,"tealL",stroke=C["teal"],sub=b,fs=22)
+for i,(a,b) in enumerate(cant):
+    s.box(1010,222+i*76,815,68,a,"redL",stroke=C["red"],sub=b,fs=22)
+cx=[70,370,950,1530]; cw=[280,560,560,320]
+for x,w,t,col in zip(cx,cw,["Dimension","Large commercial products","This proof of concept","Who is ahead"],["ink","amber","teal","ink"]):
+    s.e.append(f'<rect x="{x}" y="630" width="{w}" height="40" rx="10" fill="{C["grey"] if col=="ink" else C[col+"L"]}" stroke="{C["line"] if col=="ink" else C[col]}" stroke-width="2"/>')
+    s.text(x+w/2,658,t,22,"ink",True,"middle")
+rows=[("Openness and standards","Mix of proprietary and standards-based parts; control often vendor-specific","Standards first (DMF, MXL, NMOS, ST 2110), open source, any node can join","P","PoC ahead"),
+      ("Breadth of functions","Complete families: MAM, traffic, ad, QC, many codecs and devices","Core live functions plus some file tools; deliberately narrow","C","Commercial ahead"),
+      ("Maturity and certification","Years in the field, certified, hardened, audited","Young; verified in lab and CI; open points documented","C","Commercial ahead"),
+      ("Support and liability","Contracts, SLAs, indemnity, training, roadmap commitments","Community and own effort; you carry integration and responsibility","C","Commercial ahead"),
+      ("Experimentation and development","Licensed, closed; sandbox on request, limited insight","Install on a normal Linux machine or VM, read and change the source","P","PoC ahead")]
+for i,(a,b,c,v,vt) in enumerate(rows):
+    y=678+i*68
+    for x,w,t,bold in ((cx[0],cw[0],a,True),(cx[1],cw[1],b,False),(cx[2],cw[2],c,False)):
+        s.e.append(f'<rect x="{x}" y="{y}" width="{w}" height="62" rx="10" fill="{C["grey"]}" stroke="{C["line"]}" stroke-width="1.5"/>')
+        fs=21 if bold else 19
+        ls=wrap(t,w-24,fs,0.58 if bold else 0.55)[:2]
+        yy=y+31-(len(ls)-1)*fs*0.65+fs*0.35
+        for j,l in enumerate(ls): s.text(x+14,yy+j*fs*1.3,l,fs,"ink",bold)
+    st,fl=(("teal","tealL") if v=="P" else ("amber","amberL"))
+    s.e.append(f'<rect x="{cx[3]}" y="{y}" width="{cw[3]}" height="62" rx="10" fill="{C[fl]}" stroke="{C[st]}" stroke-width="2.5"/>')
+    s.text(cx[3]+cw[3]/2,y+39,vt,21,"ink",True,"middle")
+s.save("11-poc-scope-vs-commercial")
