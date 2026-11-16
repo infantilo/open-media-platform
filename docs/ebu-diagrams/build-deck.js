@@ -60,6 +60,19 @@ function card(s, x, y, w, h, accent, name) {
   s.addShape(pres.ShapeType.roundRect, { x, y, w, h, rectRadius: 0.12, fill: { color: SURF }, line: { color: accent, width: 1.25, transparency: 40 }, objectName: name || "Card" });
 }
 
+// screenshot slide: framed picture on the left (width w, aspect ar), explanation on the right
+function shotSlide(title, sec, notes, file, ar, w, acc, alt, name, head, points) {
+  const s = content(title, sec, notes);
+  const h = w / ar, x0 = 0.6, y0 = 1.5;
+  s.addShape(pres.ShapeType.roundRect, { x: x0, y: y0, w: w + 0.1, h: h + 0.1, rectRadius: 0.06, fill: { color: SURF }, line: { color: acc, width: 1, transparency: 50 } });
+  s.addImage({ path: path.join(IMG, file), x: x0 + 0.05, y: y0 + 0.05, w, h, altText: alt, objectName: name });
+  const tx = x0 + w + 0.4, tw = 13.333 - 0.6 - tx;
+  s.addText(head, { isTextBox: true, x: tx, y: y0, w: tw, h: 0.9, fontSize: 22, bold: true, color: acc, margin: 0, valign: "top" });
+  s.addText(points.map((t, k) => ({ text: t, options: { bullet: true, breakLine: k < points.length - 1 } })),
+    { isTextBox: true, x: tx, y: y0 + 1.0, w: tw, h: 4.3, fontSize: 15, color: FG, margin: 0, valign: "top", paraSpaceAfter: 8 });
+  return s;
+}
+
 // ---------------------------------------------------------------- 1 title
 {
   const s = pres.addSlide({ masterName: "FULL", sectionTitle: section("Opening") });
@@ -152,19 +165,30 @@ diagram("4-make-before-break.png", "Timeline of a make-before-break migration of
 }
 
 // ---------------------------------------------------------------- screenshots
+shotSlide("Flow editor: the facility as a graph", "Proof points",
+  "The flow editor is the engineering view: a catalogue of node types on the left, the running nodes on the canvas, with their live picture. Workflows group nodes into one startable object. This view is for engineers; operators work in the console instead. Shown for a small workflow with three test-pattern sources and a video mixer.",
+  "flow-editor-live.png", 1600 / 1000, 7.9, C.accent3,
+  "Flow editor with a node catalogue and the nodes of a running workflow with live pictures", "Screenshot flow editor",
+  "Engineering view",
+  ["Catalogue of node types, searchable, with resource hints", "Running nodes with live picture and their ports", "Workflows group nodes and start or stop them as one", "Engineers wire and configure; operators only operate"]);
+shotSlide("One console, several nodes", "Proof points",
+  "The operator console for one workflow: video mixer, audio mixer, playout automation with its playlist, recorder and two players, each as a movable and resizable tile. The operator sees only the nodes the role bindings allow, and has no graph or wiring. Each node brings its own console fragment, so a new function adds its own control surface without changing the shell. The red row in the playlist is a test item whose file is missing; the system flags it as a warning instead of hiding it.",
+  "operator-console-multi.png", 1920 / 1080, 8.6, C.accent1,
+  "Operator console with video mixer, players, playout automation, recorder and audio mixer as tiles", "Screenshot operator console",
+  "Operator console: workflow as tiles",
+  ["Video mixer, audio mixer, playout automation, recorder and players side by side", "Rights per role: the operator sees only what is assigned", "Each node ships its own console, loaded at runtime", "Playlist with live status; a missing file is flagged in red"]);
 {
-  const s = content("Operator consoles run in the browser", "Proof points", "The operator consoles are web pages. Each node ships its own console fragment and the shell loads them at runtime, so a new function brings its own control surface. This is the studio audio mixer console with dynamics, equaliser, aux and routing. These are working screens from the proof of concept, shown on a lab system.");
+  const s = content("Audio: the studio mixer in the browser", "Proof points", "The operator consoles are web pages. Each node ships its own console fragment and the shell loads them at runtime, so a new function brings its own control surface. This is the studio audio mixer console with dynamics, equaliser, aux and routing. These are working screens from the proof of concept, shown on a lab system.");
   s.addShape(pres.ShapeType.roundRect, { x: 0.6, y: 1.5, w: 12.13, h: 4.95, rectRadius: 0.08, fill: { color: SURF }, line: { color: C.accent1, width: 1, transparency: 50 } });
   s.addImage({ path: path.join(IMG, "audiomischer-konsole2.png"), x: 0.915, y: 1.62, w: 11.5, h: 11.5 * 792 / 1920, altText: "Studio audio mixer console in the browser with channel strips, gate, compressor, equaliser and routing", objectName: "Screenshot audio mixer" });
   s.addText("Studio audio mixer: dynamic channels, gate, compressor, four-band equaliser, aux and routing", { isTextBox: true, x: 0.6, y: 6.55, w: 12.1, h: 0.35, fontSize: 14, color: DIM, margin: 0 });
 }
-{
-  const s = content("Live control: the video mixer", "Proof points", "The video mixer bank with programme and preview buses, cut and auto transitions with selectable durations, transition types, PIP scenes and presets. It is a node like any other: it describes its own parameters through the control framework, and its console is loaded into the shell at runtime.");
-  const w = 12.13, h = w * 500 / 1500;
-  s.addShape(pres.ShapeType.roundRect, { x: 0.6, y: 1.5, w: w, h: h + 0.1, rectRadius: 0.06, fill: { color: SURF }, line: { color: C.accent2, width: 1, transparency: 50 } });
-  s.addImage({ path: path.join(IMG, "videomixer-konsole2.png"), x: 0.65, y: 1.55, w: w - 0.1, h: (w - 0.1) * 500 / 1500, altText: "Video mixer console with programme and preview buses, cut and auto transitions, PIP scenes and presets", objectName: "Screenshot video mixer" });
-  s.addText("Programme and preview buses, cut and auto with durations, transition types, PIP scenes and presets", { isTextBox: true, x: 0.6, y: 1.5 + h + 0.35, w: 12.1, h: 0.4, fontSize: 16, color: DIM, margin: 0 });
-}
+shotSlide("Live control: the video mixer", "Proof points",
+  "The video mixer bank with programme and preview buses. With thumbnails switched on, every source button shows a live preview picture, here from three test-pattern sources. Cut and auto transitions with selectable durations, transition types, paternoster, PIP scenes and presets. It is a node like any other: it describes its own parameters through the control framework, and its console is loaded into the shell at runtime. Shown on a lab system with test-pattern sources.",
+  "videomixer-thumbnails.png", 940 / 472, 8.4, C.accent2,
+  "Video mixer console with live thumbnails on every source button, programme and preview buses, cut and auto, transition types and PIP scenes", "Screenshot video mixer",
+  "Video mixer with live thumbnails",
+  ["Programme and preview buses; each source shows a live picture", "Cut and auto with 6, 12, 25 or 50 frames", "Mix, wipe, slide, push and paternoster transitions", "PIP scenes, keyer (DSK) and saved presets", "Lab system with three test-pattern sources"]);
 {
   const s = content("Planning: workflows against host capacity", "Proof points", "The scheduler plans a week of workflows against the measured capacity of each host. Bottlenecks are marked in red before they happen, and workflows without a fixed host are placed automatically. This is the planning side of the same control plane.");
   const w = 7.8, h = w * 837 / 1400, x = (13.333 - w) / 2;
@@ -200,10 +224,10 @@ diagram("12-how-it-is-built.png", "How the project is built: documents, one step
 
 // ---------------------------------------------------------------- open points
 {
-  const s = content("Open points and next steps", "Open points and asks", "We would rather name the gaps ourselves. Hardware: several paths, including RDMA over real RoCEv2 and the capture cards, have been verified only in software. Certification: no formal conformance or security certification yet. Legal review of patents, trademarks and licence obligations is pending. The right-hand column is a proposal, to be adapted to what the community wants to prioritise.");
+  const s = content("Open points and next steps", "Open points and asks", "We would rather name the gaps ourselves. Hardware: several paths, including RDMA over real RoCEv2 and the capture cards, have been verified only in software. Certification: no formal conformance or security certification yet. Legal review of patents, trademarks and licence obligations is pending. The right-hand column is the intention: it stays a proof of concept and an open test bed. There is no plan for a product release, and it is not meant to replace professional products.");
   const L = ["Real hardware: RDMA over RoCEv2 and capture cards verified in software only", "No formal conformance or security certification yet", "Legal review pending: patents, trademarks, licence obligations", "Scale: sized for tens of hosts, no long soak test", "Gaps: no NDI gateway, no proprietary audio-over-IP"];
-  const R = ["Validate RDMA and capture paths on real hardware with partners", "Interop session with other MXL and NMOS implementations", "Third-party conformance, close the open security points", "Counsel review, then decide on the release model", "Review the node contract (levels A to C) with the DMF community"];
-  [["Open today", C.accent5, L], ["Next steps we propose", C.accent1, R]].forEach(([head, acc, items], i) => {
+  const R = ["Stay a proof of concept: no product release is planned, and it is not meant to replace professional products", "Serve as an open test bed for MXL, NMOS and ST 2110 experiments", "Validate RDMA and capture paths on real hardware with partners", "Interop session with other MXL and NMOS implementations", "Feed findings and gaps back to the DMF community"];
+  [["Open today", C.accent5, L], ["Where we go from here", C.accent1, R]].forEach(([head, acc, items], i) => {
     const x = 0.6 + i * 6.15;
     card(s, x, 1.55, 5.98, 5.1, acc);
     s.addText(head, { isTextBox: true, x: x + 0.35, y: 1.8, w: 5.3, h: 0.5, fontSize: 24, bold: true, color: acc, margin: 0 });
