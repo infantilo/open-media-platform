@@ -17,10 +17,26 @@ Auf dem Zielrechner sind **kein Go, Rust, Deno, Compiler und kein Git** nötig.
 |---|---|
 | `omp/` | Repository-Stand (inkl. Handbücher) + **fertige Binaries**: Orchestrator, Supervisor, Host-Agent und alle Nodes aus `deploy/catalog.json` (Debug-Symbole entfernt), UI-Bundle, libmxl + MXL-Werkzeuge |
 | `images.tar` | Container-Images: NATS, NMOS-Registry, etcd, Patroni/Postgres (Pflicht); Caddy, step-ca, SeaweedFS-S3 (optional/Funktionen wie HTTPS, mTLS, Storage) |
-| `debs/` | Systempakete (nur **apt**-Systeme): Podman, GStreamer-Laufzeit samt Plugins, ffmpeg, make, curl … **mit allen Abhängigkeiten** (kein `-dev`, keine Compiler) |
+| `node-images.tar`, `omp/deploy/offline/node-packages.json` | **Node-Pakete samt Modellen**: Auto-Untertitel als ein Image mit Node + whisper.cpp-Engine + Modellen (`small`, `base`) + Sprechererkennung (sherpa-onnx + Modelle). Nach dem Start einmal `deploy/offline/import-node-packages.sh` (der Installer mit `--start` macht das selbst) |
+| `debs/` bzw. `rpms/` | Systempakete: **apt** → `debs/` (lokales apt-Verzeichnis), **dnf (Rocky/RHEL 9)** → `rpms/` (lokales Repository): Podman, GStreamer-Laufzeit samt Plugins, ffmpeg, chrony/linuxptp, make, curl … **mit allen Abhängigkeiten** (kein `-dev`, keine Compiler) |
 | `plugins/` | GStreamer-Plugin `avvideofilter` (Blend-Bildratenwandlung, optional — `docs/INSTALLATION.md` §9) |
 | `SHA256SUMS`, `MANIFEST.json` | Prüfsummen aller Dateien; Distribution, Release, Architektur, glibc des Build-Rechners |
 | `install-offline.sh`, `ANLEITUNG.md` | Installer für den Zielrechner, diese Anleitung |
+
+### Modelle und Daten, die ohne Netz mitkommen müssen (Prüfliste)
+
+| Node / Funktion | Braucht | Wo es im Paket liegt | Prüfung beim Bau |
+|---|---|---|---|
+| Auto-Untertitel (`omp-subtitle-asr`) | whisper.cpp-Engine, Modelle `ggml-small`/`ggml-base`, Sprechererkennung (Segmentierungs- und Einbettungsmodell) | im Image `localhost/omp-subtitle-asr:<Version>` (`node-images.tar`), läuft im Container | `save-images.sh` startet das Image und bricht ab, wenn eine dieser Dateien fehlt oder leer ist |
+| OGraf-Grafik (`omp-ograf`) | Grafikvorlagen (liegen nicht in git) | `omp/data/ograf-templates` | wird mitkopiert, wenn vorhanden |
+| Gebärdensprach-Avatar (`omp-sign-avatar`) | Lexikon/Regeln (eigene Daten, `deploy/sign/*.example.json` als Muster) | nicht mitgeliefert — **fachliche Inhalte des Betreibers**, kein Download | — |
+| Video folgt Audio (`omp-vfa-vision`) | Kaskaden-Dateien | im Repo (`nodes/omp-vfa-vision/cascade`) | im Repo-Stand enthalten |
+| Oberfläche | Schriften, Skripte | im UI-Bundle, **keine** CDN-Zugriffe (geprüft: keine externen Adressen in `ui/` und den Node-Oberflächen) | — |
+| Plugin `avvideofilter` | Binärpaket | `plugins/` (Debian); unter Rocky nicht mitgeliefert (gebaut für glibc 2.35, Rocky 9 hat 2.34) — die Nodes nutzen dann `videorate` | — |
+
+Weitere Modelle (z. B. `medium`, `large-v3` für Whisper) müssen **vor** dem Bau in `data/asr-engine/models` liegen
+(`sh tools/asr-engine/install.sh medium`) und das Image neu gebaut werden (`sh deploy/subtitle-asr/build.sh`); danach
+`save-images.sh`/`make-offline-bundle.sh --build-node-images`.
 
 **Nicht** im Paket: der Pipeline-Controller-Node (2 GB-Image; `--with-pipeline-controller` nimmt es mit),
 Cloud-Zugangsdaten, eure Daten (Nutzer, Layouts, Workflows liegen in Postgres und werden nicht mitgeliefert).
@@ -51,12 +67,42 @@ Ergebnis in `~/offline/`: `omp-offline-<Datum>-<Commit>-<Arch>-<Distribution><Re
 `zstd` fehlt) und eine `.sha256`-Datei. Größenordnung (gemessen, Debian 12): **ca. 0,8 GB** komprimiert (Binaries ≈ 200 MB, 7 Images ≈ 0,95 GB
 unkomprimiert, ≈ 460 Systempakete ≈ 250 MB). Der Bau dauert je nach Netz 5–15 Minuten.
 
-Optionen: `--skip-build` (vorhandene Go-Binaries/UI nehmen statt neu zu bauen), `--no-images`, `--no-system-packages`,
+Optionen: `--skip-build` (vorhandene Go-Binaries/UI nehmen statt neu zu bauen), `--no-images`, `--no-node-images` (nicht empfohlen: ohne Untertitel-Engine und Modelle), `--build-node-images`, `--node-package TYP`, `--with-rpmfusion`, `--only-system-packages`, `--no-system-packages`,
 `--no-plugin`, `--with-pipeline-controller`, `--dry-run` (nur anzeigen), `--keep-stage` (Arbeitsverzeichnis behalten).
 Fehlen Binaries (`make nodes` nicht gelaufen), nennt das Skript genau, was fehlt, und baut **kein** halbes Paket.
 
 Ein Hinweis zum Stand: das Paket enthält den **Arbeitsstand** des Repositorys (auch nicht eingecheckte Dateien).
 Für Auslieferungen vorher committen — der Name enthält `-dirty`, solange Änderungen offen sind.
+
+### 3a. Paket für Rocky Linux 9 bauen (Wegwerf-Container)
+
+Die Binaries sind gegen die Bibliotheken des Build-Rechners gelinkt (Debian 12: glibc 2.36, Rocky 9: glibc 2.34). Ein
+Debian-Paket läuft deshalb **nicht** unter Rocky. Das Rocky-Paket baut `make-rocky-bundle.sh` in einem **Wegwerf-Rocky-9-Container**
+(rootless Podman) auf jedem Linux-Rechner mit Internet:
+
+```sh
+make ui                                           # einmalig, das UI ist distributionsunabhängig
+sh deploy/subtitle-asr/build.sh                   # Untertitel-Image MIT Modellen (falls noch nicht gebaut)
+./deploy/offline/make-rocky-bundle.sh --out ~/offline [--jobs 2] [--no-rpmfusion]
+```
+
+Das Skript sichert zuerst Plattform-Images und Node-Pakete auf dem Host (`save-images.sh`), baut dann im Container libmxl, die
+Go-Binaries und alle Nodes, erzeugt das lokale RPM-Repository (`rpms/`, Signaturen geprüft, Gegenprobe gegen einen leeren
+Installationsstand) und das Paket. **Danach wird alles aufgeräumt**: Container, Arbeits-Volume (Cargo, Go, vcpkg, Quellen,
+Build-Ausgaben), Zwischenverzeichnisse und das selbst gezogene Rocky-Image; übrig bleiben nur `…rocky9….tar.zst` und `.sha256`.
+Vor und nach dem Lauf steht der freie Plattenplatz in der Ausgabe; es werden nur selbst angelegte, nummerierte Objekte
+(`omp-rocky-build-<pid>`) gelöscht. `--keep` lässt alles zur Fehlersuche stehen.
+
+Platz: ca. **14 GB frei** auf dem Podman-Speicher (das Skript prüft das vorher). Dauer: Stunden bei 2 Jobs (Rust-Workspace und
+libmxl samt vcpkg-Abhängigkeiten, alles `nice 19`).
+
+**Codecs und RPM Fusion.** Rocky enthält aus Lizenzgründen kein x264, kein libav und kein HEVC/AAC. Die Nodes nutzen
+`x264enc`, `avdec_h264`, `x265enc`, `avenc_aac`. Standard ist deshalb **mit RPM Fusion Free** (`--no-rpmfusion` lässt es weg; dann
+nur H.264 über openh264 und mit Funktionsverlust). Die Entscheidung berührt Patent-/Lizenzfragen (`docs/LIZENZ-INVENTAR.md`) und liegt
+beim Betreiber. **Nicht verfügbar unter Rocky:** das WPE-Plugin (HTML-Grafik per `wpesrc`).
+
+Installation auf dem Rocky-Zielrechner wie in §5; der Installer nutzt `rpms/` als **einziges** Repository (`--disablerepo='*'`).
+SELinux kann `enforcing` bleiben; `firewalld` nach `docs/INSTALLATION.md` §4 einstellen.
 
 ## 4. Übertragen und prüfen
 
@@ -90,7 +136,11 @@ Wichtige Optionen: `--no-system-packages` (Podman/GStreamer/make sind schon da),
 (Dienst `omp` für den Start beim Boot), `--start`, `--yes` (keine Rückfragen), `--dry-run`, `--force`.
 Er läuft nicht als root, öffnet **keine** Firewall-Ports und greift nie auf das Netz zu.
 
-Ohne apt (Fedora, Arch, openSUSE …): `debs/` fehlt, der Installer meldet, welche Programme fehlen
+Unter **Rocky/RHEL 9 (dnf)** installiert der Installer die Programme aus `packages.txt` aus dem lokalen Repository `rpms/` und
+sonst aus **keiner** anderen Quelle. Mit `--start` registriert er danach die Node-Pakete (Auto-Untertitel samt Modellen) im Katalog;
+ohne `--start` einmal nach `make start`: `deploy/offline/import-node-packages.sh` (Admin-Zugang über `OMP_USER`/`OMP_PASSWORD`).
+
+Ohne apt und dnf (Arch, openSUSE …): `debs/` fehlt, der Installer meldet, welche Programme fehlen
 (`packages.txt` im Paket nennt die Debian-Namen). Podman, make, curl, openssl, tar und GStreamer
 (base/good/bad/ugly/libav) müssen dann **vorab** aus einem lokalen Spiegel/Datenträger installiert sein.
 
@@ -140,8 +190,9 @@ mit Container-Runner laufen sollen.
   die Distribution sie führt; sonst fehlt OGraf-Rendering.
 - **Images mit `:latest`** (NATS, NMOS-Registry, Caddy …): das Paket friert den Stand des Bautags ein. Ein späteres Paket
   kann neuere Versionen enthalten; vor dem Einspielen auf einem Produktionsrechner gegenprüfen.
-- Gebaut/getestet auf **Debian 12 (x86_64)**; andere Distributionen: Paketbau und Installer sind distributionsneutral,
-  die Systempaket-Behandlung aber nur für apt automatisiert.
+- Gebaut/getestet auf **Debian 12 (x86_64)**. **Rocky 9:** Paketbau, lokales RPM-Repository und Installer sind umgesetzt; der
+  vollständige Lauf (Build im Container, Installation auf einer frischen Rocky-VM ohne Netz) ist noch nicht durchgespielt — Stand
+  siehe `docs/decisions.md`. Andere Distributionen: nur Paketliste (`packages.txt`).
 
 ## 10. Fehlersuche
 

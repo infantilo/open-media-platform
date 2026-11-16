@@ -8,7 +8,7 @@
 #
 #   --target DIR           installation directory (default: ~/OpenMediaPlatform; an existing installation = update,
 #                          data/settings/secrets are kept)
-#   --no-system-packages   do not install .deb packages (Podman/GStreamer/make are already present)
+#   --no-system-packages   do not install .deb/.rpm packages (Podman/GStreamer/make are already present)
 #   --no-images            do not load container images
 #   --host-agent-service --orchestrator IP [--label NAME] [--token TOKEN]
 #                          connect this machine as an additional host (service "omp-host-agent", like install.sh)
@@ -18,8 +18,8 @@
 #   --yes                  no confirmation prompts
 #   --dry-run              only show what would be done
 #
-# What the script does (and only that): verify checksums → check the target machine → (apt) install system packages
-# from debs/ (sudo) → copy files to --target → generate mxl.env → load images → install the avvideofilter plugin.
+# What the script does (and only that): verify checksums → check the target machine → install system packages from
+# debs/ (apt) or rpms/ (dnf, Rocky/RHEL; local repository, sudo) → copy files to --target → generate mxl.env → load images → install the avvideofilter plugin.
 # It NEVER accesses the network, opens no firewall ports and does not run as root.
 set -euo pipefail
 
@@ -39,7 +39,7 @@ while [ $# -gt 0 ]; do
     --force) FORCE=1; shift ;;
     --yes|-y) YES=1; shift ;;
     --dry-run) DRY=1; shift ;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -98,8 +98,15 @@ if [ "$SYSPKG" = 1 ] && [ -d "$BUNDLE/debs" ] && have apt-get; then
   run "sudo apt-get $AOPTS update"
   run "sudo apt-get $AOPTS install -y --no-install-recommends --no-download $(tr '\n' ' ' < "$BUNDLE/packages.txt")"
   rm -rf "$APTDIR"
-elif [ "$SYSPKG" = 1 ] && [ -d "$BUNDLE/debs" ]; then
-  warn "no apt — the packages from packages.txt must be installed beforehand (Podman, make, curl, openssl, GStreamer base/good/bad/ugly/libav)"
+elif [ "$SYSPKG" = 1 ] && [ -d "$BUNDLE/rpms" ] && have dnf; then
+  n="$(ls "$BUNDLE/rpms"/*.rpm 2>/dev/null | wc -l)"
+  echo "    $n packages from rpms/ (local repository, no other repository is used, nothing is fetched from the network)"
+  confirm "    Install the packages from packages.txt including dependencies now with sudo?" || die "aborted"
+  # --disablerepo='*': ONLY the package directory of this bundle. The signatures were checked when the bundle was built and
+  # the files are covered by SHA256SUMS, hence --nogpgcheck for this local repository.
+  run "sudo dnf install -y --disablerepo='*' --repofrompath=omp-offline,file://$BUNDLE/rpms --enablerepo=omp-offline --nogpgcheck --setopt=install_weak_deps=False $(tr '\n' ' ' < "$BUNDLE/packages.txt")"
+elif [ "$SYSPKG" = 1 ] && { [ -d "$BUNDLE/debs" ] || [ -d "$BUNDLE/rpms" ]; }; then
+  warn "no matching package manager — the packages from packages.txt must be installed beforehand (Podman, make, curl, openssl, GStreamer base/good/bad/ugly/libav)"
 else
   echo "    skipped"
 fi
@@ -155,6 +162,14 @@ if [ "$IMAGES" = 1 ] && [ -f "$BUNDLE/images.tar" ]; then
 else
   echo "    skipped$([ -f "$BUNDLE/images.tar" ] || echo ' (package contains no images — provide them beforehand: podman load -i …)')"
 fi
+# Node packages (e.g. Auto-Untertitel: node + speech engine + models in ONE image) — registered in the catalog after the start
+if [ "$IMAGES" = 1 ] && [ -f "$BUNDLE/node-images.tar" ]; then
+  echo "    node packages (images that carry their models):"
+  run "podman load -i \"$BUNDLE/node-images.tar\""
+  echo "    → after the start they are registered with: $TARGET/deploy/offline/import-node-packages.sh (install-offline.sh --start does it)"
+elif [ ! -f "$BUNDLE/node-images.tar" ]; then
+  warn "the package contains NO node packages — Auto-Untertitel (speech recognition) and its models are missing on this machine"
+fi
 
 # ---- 7. Plugin avvideofilter -----------------------------------------------------------------------------------------
 say "7/7 Plugin avvideofilter (blend frame-rate conversion, optional)"
@@ -197,12 +212,14 @@ run "make -C \"$TARGET\" preflight || true"
 if [ "$START" = 1 ]; then
   say "Starting (make start)"
   run "make -C \"$TARGET\" start"
+  [ ! -f "$BUNDLE/node-images.tar" ] || run "\"$TARGET/deploy/offline/import-node-packages.sh\" --wait 180 || echo 'Node packages not registered yet — run $TARGET/deploy/offline/import-node-packages.sh (set OMP_USER/OMP_PASSWORD if the admin password was changed)'"
   echo; echo "Done: http://localhost:8000"
 else
   cat <<EOM
 
 Installation complete. Next steps:
   cd $TARGET && make start        # then in the browser: http://localhost:8000
+  $TARGET/deploy/offline/import-node-packages.sh    # once after the first start: registers Auto-Untertitel etc. (models included)
   First start: create an admin right away (Administration → Users) — docs/INSTALLATION.md §2.
   Guide/troubleshooting: docs/OFFLINE-INSTALLATION.md
 EOM
