@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Baut das OFFLINE-PAKET für Rocky Linux 9 — auf JEDEM Linux-Rechner mit Internet und rootless Podman (z. B. dieser Entwicklungsrechner).
-# Gebaut wird in einem WEGWERF-Rocky-9-Container (glibc/GStreamer wie auf dem Zielrechner); danach wird ALLES wieder aufgeräumt:
+# Baut das OFFLINE-PAKET für Rocky Linux 9 oder 10 (Standard 10, per ROCKY=9) — auf JEDEM Linux-Rechner mit Internet und rootless Podman (z. B. dieser Entwicklungsrechner).
+# Gebaut wird in einem WEGWERF-Rocky-Container (glibc/GStreamer wie auf dem Zielrechner); danach wird ALLES wieder aufgeräumt:
 # Container, Arbeits-Volume (Cargo/Go/vcpkg/Quellen/Build-Ausgaben), Zwischenverzeichnisse, das selbst gezogene Rocky-Image.
 # Übrig bleiben nur  <out>/omp-offline-…-rocky9.tar.zst  und die .sha256-Datei. Vorher/nachher wird der freie Plattenplatz gezeigt.
 #
 #   deploy/offline/make-rocky-bundle.sh [Optionen]
 #     --out VERZ              Ausgabe (Standard: ./offline-bundle)
 #     --jobs N                parallele Compiler-Jobs (Standard 2; die Maschine bleibt bedienbar, alles läuft mit nice 19)
-#     --rocky-image REF       Basis-Image (Standard quay.io/rockylinux/rockylinux:9)
+#     --rocky-image REF       Basis-Image (Standard quay.io/rockylinux/rockylinux:10; ROCKY=9 für Rocky 9)
 #     --no-rpmfusion          OHNE RPM Fusion Free: dann fehlen x264/libav (H.264/HEVC/AAC über GStreamer), H.264 nur über openh264.
 #                             Standard: MIT RPM Fusion (die Knoten nutzen x264enc/avdec_h264 …). Codec-Lizenzen: docs/LIZENZ-INVENTAR.md
 #     --min-free-gb N         Mindestplatz auf dem Podman-Speicher (Standard 14)
@@ -20,7 +20,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-OUT="$PWD/offline-bundle"; JOBS=2; IMG="quay.io/rockylinux/rockylinux:9"; RPMFUSION=1; MINFREE=14; KEEP=0; SKIPIMG=0
+OUT="$PWD/offline-bundle"; JOBS=2; IMG="quay.io/rockylinux/rockylinux:${ROCKY:-10}"; RPMFUSION=1; MINFREE=14; KEEP=0; SKIPIMG=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="${2:?}"; shift 2 ;;
@@ -46,6 +46,8 @@ free_gb() { df -Pk "$1" | awk 'NR==2 {printf "%d", $4/1048576}'; }
 say "Platz vorher: Podman-Speicher $(free_gb "$GRAPH") GB frei, Ausgabe $(free_gb "$OUT") GB frei"
 [ "$(free_gb "$GRAPH")" -ge "$MINFREE" ] || die "Podman-Speicher ($GRAPH) hat nur $(free_gb "$GRAPH") GB frei, nötig sind $MINFREE GB (--min-free-gb zum Ändern). Platz schaffen, z. B. 'podman image prune' (eigene, nicht benötigte Images) oder den Cargo-Cache nodes/target löschen."
 
+# Go-Modulcache des Hosts (optional, nur lesend) als erster Proxy: hilft bei Netzen, die große Downloads zurücksetzen. go.sum prüft weiter.
+GOMODCACHE_HOST="$(command -v go >/dev/null && go env GOMODCACHE 2>/dev/null || true)"; [ -d "$GOMODCACHE_HOST/cache/download" ] || GOMODCACHE_HOST=""
 TAG="$$"; CT="omp-rocky-build-$TAG"; VOL="omp-rocky-build-$TAG"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/omp-rocky-work.XXXXXX")"
 PULLED=0; podman image exists "$IMG" || PULLED=1
@@ -76,6 +78,7 @@ say "2/3 Wegwerf-Container ($IMG) bauen — das dauert (Rust-Workspace + libmxl)
 podman volume create "$VOL" >/dev/null
 podman run --name "$CT" --security-opt label=disable \
   -e OMP_BUILD_JOBS="$JOBS" -e OMP_RPMFUSION="$RPMFUSION" \
+  ${GOMODCACHE_HOST:+-v "$GOMODCACHE_HOST/cache/download:/in/gomod:ro"} \
   -v "$VOL:/work" -v "$ROOT:/in/repo:ro" -v "$ROOT/ui/dist:/in/ui-dist:ro" -v "$WORK/images:/in/images:ro" -v "$OUT:/out" \
   "$IMG" bash /in/repo/deploy/offline/rocky-inside.sh
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# LÄUFT IM WEGWERF-CONTAINER (Rocky Linux 9), gestartet von make-rocky-bundle.sh — nicht von Hand ausführen.
-# Baut OMP gegen die Rocky-Bibliotheken (glibc 2.34, GStreamer 1.22) und erzeugt das Offline-Paket.
+# LÄUFT IM WEGWERF-CONTAINER (Rocky Linux 9 oder 10), gestartet von make-rocky-bundle.sh — nicht von Hand ausführen.
+# Baut OMP gegen die Rocky-Bibliotheken (Rocky-glibc und -GStreamer) und erzeugt das Offline-Paket.
 # Eingänge (read-only): /in/repo (Quellen, git), /in/ui-dist (gebautes UI), /in/images (save-images.sh-Ausgabe)
 # Ausgang: /out  Arbeitsplatz: /work (benanntes Volume, vom Host danach gelöscht)
 set -euo pipefail
@@ -12,7 +12,7 @@ say "Rocky: Entwicklungspakete (BaseOS/AppStream + CRB + EPEL)"
 dnf -y -q install epel-release dnf-plugins-core
 dnf config-manager --set-enabled crb
 if [ "$RPMFUSION" = 1 ]; then
-  dnf -y -q install "https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-9.noarch.rpm"
+  dnf -y -q install "https://mirrors.rpmfusion.org/free/el/rpmfusion-free-release-$(rpm -E %rhel).noarch.rpm"
 fi
 dnf -y -q install --setopt=install_weak_deps=False \
   gcc gcc-c++ make pkgconf-pkg-config cmake ninja-build bison flex clang clang-devel git curl zip unzip tar xz findutils which \
@@ -48,7 +48,12 @@ export VCPKG_ROOT=/work/vcpkg MXL_TARGET_ARCH=x86-64-v2 MXL_BUILD_JOBS="$J"
 nice -n 19 bash deploy/dev/install-mxl.sh
 
 say "Go-Binaren"
+[ ! -d /in/gomod ] || export GOPROXY="file:///in/gomod,https://proxy.golang.org,direct"
 mkdir -p bin
+# Modul-Downloads mit Wiederholung (kurze Netzabbrüche kippen sonst den stundenlangen Lauf)
+for d in orchestrator supervisor host-agent; do
+  for t in 1 2 3 4 5; do (cd "$d" && go mod download) && break || { echo "go mod download ($d) Versuch $t fehlgeschlagen"; sleep 10; }; done
+done
 (cd orchestrator && nice -n 19 go build -o ../bin/omp-orchestrator .)
 (cd supervisor && nice -n 19 go build -o ../bin/omp-supervisor .)
 (cd host-agent && nice -n 19 go build -o ../bin/omp-host-agent .)
@@ -58,7 +63,11 @@ export CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS="$J"
 # deploy/dev/mxl.env liefert LD_LIBRARY_PATH für die Build-Schritte, die libmxl brauchen
 # shellcheck disable=SC1091
 . deploy/dev/mxl.env
-nice -n 19 make nodes
+# Das Paket braucht ALLE Binaries als Release (make nodes baut die Nicht-Medien-Nodes nur als Debug): ganzer Workspace in einem Lauf
+(cd nodes && nice -n 19 cargo build --release --workspace --bins)
+mkdir -p nodes/target/release
+(cd nodes/omp-vfa && nice -n 19 go build -o ../target/release/omp-vfa .)
+(cd nodes/omp-vfa-vision && nice -n 19 go build -o ../target/release/omp-vfa-vision .)
 
 say "Offline-Paket"
 OMP_COMMIT="$(git -C /in/repo rev-parse --short HEAD)"; export OMP_COMMIT

@@ -190,9 +190,12 @@ mit Container-Runner laufen sollen.
   die Distribution sie führt; sonst fehlt OGraf-Rendering.
 - **Images mit `:latest`** (NATS, NMOS-Registry, Caddy …): das Paket friert den Stand des Bautags ein. Ein späteres Paket
   kann neuere Versionen enthalten; vor dem Einspielen auf einem Produktionsrechner gegenprüfen.
-- Gebaut/getestet auf **Debian 12 (x86_64)**. **Rocky 9:** Paketbau, lokales RPM-Repository und Installer sind umgesetzt; der
-  vollständige Lauf (Build im Container, Installation auf einer frischen Rocky-VM ohne Netz) ist noch nicht durchgespielt — Stand
-  siehe `docs/decisions.md`. Andere Distributionen: nur Paketliste (`packages.txt`).
+- Gebaut/getestet auf **Debian 12 (x86_64)**. **Rocky 10** (Standard von `make-rocky-bundle.sh`, `ROCKY=9` für Rocky 9): Das Paket
+  ist am 2026-11-17 im Wegwerf-Container gebaut worden (472 RPMs, Signaturen und Gegenprobe ok, ca. 1,5 h Bauzeit, ~14 GB Platz).
+  Die Installation auf einer frischen Rocky-VM ohne Netz ist noch nicht durchgespielt. Unter Rocky 10 fehlen openh264 und das
+  WPE-Plugin; H.264/AAC kommen aus RPM Fusion + EPEL (`gstreamer1-plugin-libav`). Container-Images von OGraf/Intercom sind nur mit
+  `--node-package` im Paket (Standard: nur Auto-Untertitel); die nativen Nodes sind immer dabei. Andere Distributionen: nur
+  Paketliste (`packages.txt`).
 
 ## 10. Fehlersuche
 

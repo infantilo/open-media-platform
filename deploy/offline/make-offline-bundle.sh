@@ -81,8 +81,8 @@ RUNTIME_PKGS_apt="podman uidmap slirp4netns make curl openssl ca-certificates ta
 # H.264 geht dann nur über openh264. Das WPE-Plugin (HTML-Grafik per wpesrc) gibt es unter Rocky nicht.
 RUNTIME_PKGS_dnf="podman shadow-utils slirp4netns make openssl ca-certificates tar zip unzip zstd iproute nmap-ncat python3 chrony linuxptp
  gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free libnice-gstreamer1
- ffmpeg-free gstreamer1-plugin-openh264 libwpe wpebackend-fdo rdma-core libfabric"
-RUNTIME_PKGS_dnf_rpmfusion="gstreamer1-libav gstreamer1-plugins-ugly ffmpeg x264-libs"
+ gstreamer1-plugin-openh264 libwpe wpebackend-fdo rdma-core libfabric"
+RUNTIME_PKGS_dnf_rpmfusion="gstreamer1-libav gstreamer1-plugin-libav gstreamer1-plugins-ugly ffmpeg x264-libs"
 
 # Binaries aus dem Katalog (runner=process): "../nodes/target/release/omp-x" relativ zu deploy/
 mapfile -t CAT_BINS < <(sed -n 's/.*"command": \["\([^"]*\)".*/\1/p' "$ROOT_DIR/deploy/catalog.json" | sort -u)
@@ -223,7 +223,7 @@ if [ "$DEBS" = 1 ]; then
   elif have dnf && have rpm; then
     # Rocky/RHEL: lokales RPM-Repository (rpms/ + createrepo_c). Der Zielrechner installiert die Namen aus packages.txt
     # NUR aus diesem Verzeichnis (--disablerepo='*'). --alldeps lädt auch, was auf dem Build-Rechner schon installiert ist.
-    RP="$RUNTIME_PKGS_dnf"; [ "$RPMFUSION" = 0 ] || RP="$RP $RUNTIME_PKGS_dnf_rpmfusion"
+    RP="$RUNTIME_PKGS_dnf"; if [ "$RPMFUSION" = 0 ]; then RP="$RP ffmpeg-free"; else RP="$RP $RUNTIME_PKGS_dnf_rpmfusion"; fi  # ffmpeg-free und RPM-Fusion-ffmpeg schließen sich aus
     mkdir -p "$STAGE/rpms"; : > "$PKGLIST"
     for p in $RP; do
       if dnf -q list --available "$p" >/dev/null 2>&1 || dnf -q list --installed "$p" >/dev/null 2>&1; then echo "$p" >> "$PKGLIST"
