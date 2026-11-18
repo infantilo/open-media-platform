@@ -296,6 +296,14 @@ Full walkthroughs and context for every screen above are in
   real `mxl_domain_id`/`mxl_flow_id` parameters) instead of a proprietary
   transport string — a foreign, spec-compliant controller can address an
   OMP MXL sender/receiver as such, not just OMP's own orchestrator.
+- **Separate MXL domains (optional)**: several domains on one host (e.g.
+  test next to live, tenants), chosen per instance or workflow, visible in the
+  Flow Editor (domain view with host tabs). Crossing a domain boundary needs an
+  explicit **bridge** node that copies without converting; IS-05 carries the
+  real BCP-007-03 `mxl_domain_id`. A domain can be **isolated**: its nodes run
+  in an unprivileged mount namespace and see only their own domain (no root
+  needed; fails closed). MXL readers wait blocking instead of polling. See
+  `docs/HANDBUCH.md` §9.3a for best practice.
 - **AMWA BCP-008-01/02 health monitoring**: real receiver/sender status
   (link, external sync, connection/transmission, stream/essence, plus
   an aggregated overall status) on every node that touches a real
@@ -484,6 +492,9 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   stream by `http(s)` address, decodes it and writes video and audio as MXL
   flows. Scales to the flow format, reconnects by itself after network errors,
   end of stream or stall; a stream without audio yields a silent audio flow.
+- **omp-mxl-bridge** — copies a flow from one MXL domain into another
+  (video or audio, no conversion by default; the only place where domains are
+  joined on purpose).
 - **omp-capture-card** — SDI/IP capture card bridge for Blackmagic DeckLink,
   AJA and (via an operator-built GStreamer plugin) other vendors' SDK cards; one
   instance per card. The start wizard lists the detected cards of the

@@ -1,7 +1,7 @@
 # Entwurf: Getrennte MXL-Domains auf einem Host (Vorplanung)
 
-Stand 2026-11-18. **D1–D7 sind gebaut (UMSETZUNG Kapitel 103). D7 ist als Mount-Sandbox umgesetzt (kein Root nötig), nicht als UID/Gruppe.** Nutzerauftrag: als Option starten. Dieser Entwurf hält fest, was heute gilt, was eine Trennung bringt, was sie kostet und in welchen
-Schritten sie sich bauen ließe. Die Entscheidungen in §6 sind offen.
+Stand 2026-11-18 (ursprünglich Vorplanung, jetzt umgesetzt; der Text unten ist der Entwurf — maßgeblich ist UMSETZUNG Kapitel 103 und HANDBUCH §9.3a). **D1–D7 sind gebaut (UMSETZUNG Kapitel 103). D7 ist als Mount-Sandbox umgesetzt (kein Root nötig), nicht als UID/Gruppe.** Nutzerauftrag: als Option starten. Dieser Entwurf hält fest, was heute gilt, was eine Trennung bringt, was sie kostet und in welchen
+Schritten sie sich bauen ließe. Entschieden wurde: Zuordnung je Workflow/Rolle über den Namen, Brücke ohne Umwandlung, Abschottung per Mount-Sandbox, cluster-weit gleicher Name; eine Größengrenze je Domain ist nicht umgesetzt.
 
 ## 1. Ausgangslage (Ist)
 

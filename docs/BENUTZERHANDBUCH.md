@@ -1295,6 +1295,8 @@ untereinander):
   jeder Host hat seine eigenen Domains in seinem Arbeitsspeicher; die Tabelle zeigt dann
   die Flows dieses Hosts (der Agent liest sie selbst).
 
+  **Empfehlung (Best Practice):** Eine Domain genügt, bis es einen Grund gibt (Test neben Live, Mandanten, Fremd-Nodes); Zuordnung je Workflow, Brücken nur zwischen gleichen Formaten, Abschotten nur mit Grund. Einzelheiten im Betriebshandbuch (`HANDBUCH.md` §9.3a).
+
   **Domain abschotten:** Beim Anlegen („Neue Domain“) fragt die Plattform, ob die Domain
   abgeschottet werden soll (nachträglich nicht änderbar). Nodes einer abgeschotteten Domain
   laufen in einer Sandbox und sehen von allen MXL-Domains nur ihre eigene (bei einer Brücke

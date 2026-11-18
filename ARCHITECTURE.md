@@ -4637,3 +4637,12 @@ Komprimierter Pfad (AU-Ring, Schnitt an IDR/IRAP, Parameter-Sätze) und Testbild
 
 ### 31.3 Nicht-Ziele / Grenzen
 Kein LLM; keine automatische Verlagerung von Sendewegen; kein Ersatz für Gateways. Transport (ST 2110/SRT zwischen Hosts) ist in der Entwicklungsumgebung nicht verfügbar — der Netzanteil der Kostenfunktion ist dort nur per Test belegbar.
+
+
+## 32. Getrennte MXL-Domains (umgesetzt 2026-11-18, UMSETZUNG.md Kapitel 103)
+
+- **Modell:** Domain = Name + Pfad (`/dev/shm/omp-mxl[-name]`) + UUIDv5-Kennung (`mxl_domain_id`, BCP-007-03). Zuordnung per Namen (nie per Pfad): Instanz/Workflow (`Settings.Domain`), Rolle (`Role.Domain`, Brücke zusätzlich `TargetDomain`); der Pfad wird dort abgeleitet, wo die Instanz läuft (Launcher, Host-Agent, Container-Mount nur der eigenen Domain).
+- **Grenzen:** Kanten über Domains werden vom Graphen (409) und von der Workflow-Prüfung abgelehnt; einzige Verbindung ist die Brücke `omp-mxl-bridge` (kopiert Grains/Samples direkt, wandelt nicht, blockierendes Lesen + inotify für noch nicht vorhandene Flows).
+- **Abschottung (D7):** `unshare --user --map-root-user --mount` mit privatem tmpfs-`/dev/shm`, in das nur die Domain(en) des Nodes per Bind-Mount hineingereicht werden; fail closed. Entscheidung gegen UID/Gruppe je Domain: braucht Root und getrennte Benutzer.
+- **Lesemodus:** `omp-mediaio` liest MXL blockierend (`READ_WAIT` 100 ms), Rückfall `OMP_MXL_READ_MODE=poll`; `omp-lowlat-mixer` fragt bewusst ab.
+- **Betrieb/Best Practice:** `docs/HANDBUCH.md` §9.3a; Entwurf und Entscheidungen: `docs/ENTWURF-MXL-DOMAIN-TRENNUNG.md`.

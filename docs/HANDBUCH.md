@@ -789,6 +789,7 @@ startbar ist.
 |---|---|
 | **omp-source** | Erzeugt ein wählbares GStreamer-Testbild (Farbbalken u. a.) inkl. Testton als MXL-Flow. Reine Testquelle, keine echte Kamera-/Dateianbindung. |
 | **omp-hls-source** | HLS-Eingang: holt einen HTTP-Live-Streaming-Strom (`.m3u8`, http/https) und schreibt Video und Ton als MXL-Flows; verbindet bei Fehlern selbst neu. Siehe BENUTZERHANDBUCH 10c-2b. |
+| **omp-mxl-bridge** | MXL-Domain-Brücke: kopiert einen Flow (Video oder Audio) aus einer MXL-Domain in eine andere, **ohne Umwandlung** (gleiches Format; Umwandlung optional per `OMP_BRIDGE_CONVERT`). Blockierendes Lesen, wartet per inotify auf Quellen, die später erscheinen. Best Practice: Abschnitt 9.3a. |
 | **omp-switcher** | Einfacher Video-Umschalter zwischen automatisch entdeckten MXL-Quellen per Knopf. Die Quellen erscheinen als Menü: zuerst Workflows/Gruppen, darin Untergruppen und Quellen (Zurück-Knopf, Breadcrumb); „Nur eigene Gruppe“ beschränkt auf die Gruppe/den Workflow des Switchers samt Untergruppen. Nicht aktive Eingänge werden nur gedrosselt gelesen (geringe CPU-Last). Kein Programm-/Preset-Bus, kein Mischeffekt (funktionaler Vorläufer des Video Mixer M/E). |
 | **omp-video-mixer-me** | Vollwertiger M/E-Bildmischer mit einstellbarer Anzahl Mischerebenen (1–8, Node-Option `OMP_ME_LEVELS` bzw. Feld „Mischerebenen“ der Rolle im Workflow-Editor, Standard 1; jede Ebene mit eigenem Programm-/Preset-Bus und eigenem MXL-/NMOS-Ausgang, gemeinsamer Quellen-Pool, die PGM-Ausgänge der anderen Ebenen stehen als Quellen bereit): Programm-/Preset-Bus (Kreuzschiene), Cut/Auto-Transition, mehrere PIP-Slots je Ebene (Szenen, z-Ordnung, Drehung/Trapez in den 2D-Slots, Klick-Fokus im PGM-Monitor; Optionen `OMP_PIP_SLOTS`, `OMP_PIP_2D_SLOTS`, `OMP_ME_PGM_MONITOR`), Downstream-Keyer (DSK, Fill+Key), Tally-Signalisierung. Unterstützt seit D8 Teil 3 `setOutputDelay()` (Latenzbudget-Ausgleich, s. Abschnitt 9.7). |
 | **omp-audio-mixer** | Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ (LO/MID/HIGH) und Kompressor pro Kanal, Master-Limiter, automatischem Audio-Follow-Video (Auswahl der Bildmischer/Tally-Geber global und je Videoquelle, `setTallyFilter`; `setVideoContext` nimmt optional `giver`), globalem Dialog „Szenen & Automation“. Zwei Oberflächen (klassisch und dichte „Konsole 2“ mit EQ-Graph, Dynamik, Routing und Kompaktmodus), umschaltbar in der Kopfzeile. |
@@ -866,6 +867,35 @@ vendort in MXL selbst (`third_party/mxl/lib/fabrics/ofi/`).
   (`OMP_FABRICS_GATEWAY_ROLE`/`OMP_FABRICS_TARGET_URL` u. a., s.
   `nodes/omp-fabrics-gateway/src/main.rs`), nicht per Katalog-Kachel wie
   die übrigen Nodes.
+
+### 9.3a MXL-Domains: Betrieb und Best Practice
+
+**Grundsatz: eine Domain, bis es einen Grund für mehr gibt.** Die Standarddomain `default` (`/dev/shm/omp-mxl`) genügt für einen Betrieb mit einer Produktion. Jede zusätzliche Domain kostet Aufmerksamkeit: Verbindungen über Domaingrenzen gibt es nur über eine Brücke, und jede Brücke ist ein Prozess, der Bilder kopiert.
+
+**Wann eine eigene Domain sinnvoll ist**
+
+| Anlass | Empfehlung |
+|---|---|
+| Test neben Live auf derselben Maschine | Domain `test` (Pfad-Trennung genügt); ein Testlauf kann keinen Live-Flow berühren oder aufräumen |
+| Mandanten / getrennte Sichtbarkeit | je Mandant eine Domain, **abgeschottet** |
+| Fremd- oder wenig vertraute Nodes | eigene, abgeschottete Domain; nur die Brücke sieht beide Seiten |
+| Nur „es sieht ordentlicher aus“ | keine Domain — dafür gibt es Workflows und die Host-Ansicht |
+
+**Regeln**
+
+1. **Namen:** Kleinbuchstaben, Ziffern, Bindestrich; nach Zweck, nicht nach Person (`live`, `test`, `mandant-a`). Auf **allen Hosts denselben Namen** verwenden — die Zuordnung läuft über den Namen, jeder Host legt den Pfad selbst an. Pfade nie von Hand setzen.
+2. **Zuordnung je Workflow** (Workflow-Einstellung „MXL-Domain“), nicht je Rolle. Eine Rolle bekommt nur dann eine andere Domain, wenn sie eine **Brücke** ist (Ziel-Domain). So bleibt ein Workflow in sich geschlossen, und Umzug/Failover legen ihn in dieselbe Domain des Zielhosts.
+3. **Brücken sparsam:** Eine Brücke kopiert nur, sie wandelt nicht (gleiches Format auf beiden Seiten; sonst wird die Umwandlung **vor** der Brücke in der Quelldomain gemacht, z. B. mit `omp-scaler`). Pro Flow-Paar eine Brücke, auf dem Host, der beide Domains hat. Kopieren kostet Speicher und etwas CPU, die Brücke wartet blockierend (kein Polling) und ruht ohne Quelle.
+4. **Abschotten nur mit Grund:** Die Abschottung (Sandbox) wird beim Anlegen gewählt und lässt sich nicht nachträglich ändern. Sie verbirgt die Flows anderer Domains vor den Nodes; sie schützt nicht vor einem Node mit Root-Rechten auf dem Host. Voraussetzung: `unshare` (util-linux) und erlaubte User-Namespaces; fehlt das, startet der Node nicht (kein stilles Weiterlaufen ohne Schutz). Nach dem Anlegen einmal prüfen: `ls /proc/<PID>/root/dev/shm` darf nur die eigene Domain zeigen.
+5. **Domain einer laufenden Instanz** nur über „Domain wechseln“ (ohne Verbindungen, nicht für Workflow-Mitglieder) oder Neustart; Workflows stoppen, dann ändern.
+6. **Löschen:** nur leere Domains (keine Instanz). Reste (Flows ohne Schreiber) zeigt „MXL-Flows“ als *verwaist*; sie belegen `/dev/shm`.
+7. **Speicher:** Alle Domains liegen im selben tmpfs `/dev/shm` des Hosts und teilen sich dessen Größe (Abschnitt 10.6). Eine Größengrenze je Domain gibt es nicht; Reste und volle Bereiche zeigt der Selbsttest.
+8. **Über Hostgrenzen** hilft keine Domain: MXL ist host-lokal. Zwischen Hosts braucht es SMPTE ST 2110, SRT oder Fabrics. Die Domain-Ansicht im Flow Editor zeigt dazu je Domain die Hosts als Reiter.
+9. **Container-Nodes** bekommen automatisch nur ihre eigene Domain eingehängt.
+
+**Lesemodus (Fehlersuche):** Die MXL-Leseschleifen aller Nodes warten blockierend auf den nächsten Grain (kein 5-ms-Abfragen mehr). Zeigt ein Node bei 100 % CPU kein Bild oder bleibt „Last read time“ eingefroren, mit `OMP_MXL_READ_MODE=poll` in den Node-Umgebungsvariablen gegenprüfen und den Befund melden.
+
+**Nicht geprüft:** Browser-/WPE-Nodes (OGraf) in abgeschotteten Domains (laufen im Namespace als Benutzer 0), Betrieb mit Dritt-Schreibern, die Teil-Grains schreiben.
 
 ### 9.4 Referenz-/Tutorial-Node
 
