@@ -542,7 +542,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/nodes/{id}/https-info", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/https-info", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/graph", g.requireAuth(handleGraph(graphSvc)))
 	mux.HandleFunc("GET /api/v1/graph/network", g.requireAuth(handleGraphNetwork(hostRegistry, hostMetrics, launcherSvc, placementThresholds)))
-	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbOnReceiver(authz.VerbOperate, handlePostGraphEdge(graphSvc)))
+	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbOnReceiver(authz.VerbOperate, handlePostGraphEdge(graphSvc, launcherSvc, options.mxlDomains)))
 	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", g.requireVerbOnReceiver(authz.VerbOperate, handleDeleteGraphEdge(graphSvc)))
 	mux.HandleFunc("GET /api/v1/layouts/{name}", g.requireAuth(handleGetLayout(layoutStore)))
 	mux.HandleFunc("PUT /api/v1/layouts/{name}", g.requireVerbGlobal(authz.VerbConfigure, handlePutLayout(layoutStore)))
@@ -559,7 +559,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/catalog/{type}/hosts/retry", g.requireVerbGlobal(authz.VerbAdmin, handleRetryCatalogDistribution(options.catalogDist)))
 	mux.HandleFunc("GET /api/v1/host-catalog/{id}", handleHostCatalogDownload(options.catalogDist))
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
-	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, blockMaintenanceHost(options.maintenance, "hostId", handlePostInstance(launcherSvc, authzStore, ioPortStore, controlPlaneCheck(workflowSvc)))))
+	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, blockMaintenanceHost(options.maintenance, "hostId", handlePostInstance(launcherSvc, authzStore, ioPortStore, controlPlaneCheck(workflowSvc), options.mxlDomains))))
 	mux.HandleFunc("PATCH /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handlePatchInstance(launcherSvc, nodes, nodeClient)))
 	mux.HandleFunc("POST /api/v1/instances/{id}/restart", g.requireVerbGlobal(authz.VerbAdmin, handleRestartInstance(launcherSvc, workflowSvc, options.nodeValues, instanceMigrateSvc)))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc, ioPortStore)))
@@ -683,7 +683,12 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Selbsttest und Support-Paket (Kap. 72): sammeln über den eigenen Router mit den Rechten der aufrufenden Person.
 	mux.HandleFunc("GET /api/v1/admin/selftest", g.requireVerbGlobal(authz.VerbAdmin, handleSelftest(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache, options.trends)))
 	// MXL-Flows der lokalen Domain mit Schreiber-Zuordnung und Rest-Erkennung.
-	mux.HandleFunc("GET /api/v1/admin/mxl/flows", g.requireVerbGlobal(authz.VerbAdmin, handleMXLFlows(launcherSvc)))
+	if options.mxlDomains != nil {
+		mux.HandleFunc("GET /api/v1/admin/mxl/domains", g.requireVerbGlobal(authz.VerbAdmin, handleListMXLDomains(options.mxlDomains, launcherSvc)))
+		mux.HandleFunc("POST /api/v1/admin/mxl/domains", g.requireVerbGlobal(authz.VerbAdmin, handleCreateMXLDomain(options.mxlDomains, options.domainAudit)))
+		mux.HandleFunc("DELETE /api/v1/admin/mxl/domains/{name}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteMXLDomain(options.mxlDomains, launcherSvc, options.domainAudit)))
+	}
+	mux.HandleFunc("GET /api/v1/admin/mxl/flows", g.requireVerbGlobal(authz.VerbAdmin, handleMXLFlows(launcherSvc, options.mxlDomains)))
 	mux.HandleFunc("POST /api/v1/admin/support/analyze", g.requireVerbGlobal(authz.VerbAdmin, handleAnalyzeUpload()))
 	mux.HandleFunc("GET /api/v1/admin/support-bundle", g.requireVerbGlobal(authz.VerbAdmin, handleSupportBundle(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache, nodeBinaryPaths(launcherSvc), options.trends)))
 	// Orchestrator-Cluster (ARCHITECTURE.md §19.3, UMSETZUNG.md D12 Teil 1).

@@ -15,6 +15,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/instancemigrate"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/mxldomains"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
 
@@ -237,7 +238,7 @@ func InstancesWithMetrics(svc LauncherService, hostMetrics HostMetricsReader) []
 // `ioPortStore` darf nil sein (kein I/O-Port-Inventar konfiguriert) —
 // dann wird eine Anfrage MIT requiredIoPort ehrlich abgelehnt statt
 // still zu ignorieren (gleiche Regel wie am Workflow-Pfad).
-func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStore IOPortInventoryStore, isControlPlane func(string) bool) http.HandlerFunc {
+func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStore IOPortInventoryStore, isControlPlane func(string) bool, domains MXLDomainStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Type           string                       `json:"type"`
@@ -247,10 +248,35 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 			RequiredIOPort *workflows.IOPortRequirement `json:"requiredIoPort,omitempty"`
 			// Options: Instanz-Optionswerte aus dem Startdialog (Schlüssel wie im Optionsschema des Node-Typs).
 			Options map[string]string `json:"options,omitempty"`
+			// Domain: Name einer getrennten MXL-Domain (Kap. 103); leer/"default" = Standarddomain.
+			Domain string `json:"domain,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
+		}
+		domainEnv, derr := domainStartEnv(domains, body.Domain)
+		if derr != nil {
+			status := http.StatusBadRequest
+			if errors.Is(derr, mxldomains.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, derr.Error(), status)
+			return
+		}
+		if domainEnv != nil {
+			// Entfernte Hosts (eigene Domain, Host-Agent-Allowlist) und Container-Nodes (Mount der Standarddomain)
+			// kennen noch keine Instanz-Domain — ehrlich ablehnen statt still in der falschen Domain zu starten.
+			if body.HostID != "" {
+				http.Error(w, "domain is only supported for instances on the orchestrator host (hostId must be empty)", http.StatusBadRequest)
+				return
+			}
+			for _, e := range svc.Catalog() {
+				if e.Type == body.Type && e.Runner == "podman" {
+					http.Error(w, "domain is not supported for container nodes yet", http.StatusBadRequest)
+					return
+				}
+			}
 		}
 
 		// Direkter Katalog-Start hat keinen Workflow-Kontext, also
@@ -325,6 +351,15 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 				}
 				hostID = claimedHostID
 				extraEnv = workflows.IoPortExtraEnv(body.RequiredIOPort, claimedPortID)
+			}
+		}
+
+		if domainEnv != nil {
+			if extraEnv == nil {
+				extraEnv = map[string]string{}
+			}
+			for k, v := range domainEnv {
+				extraEnv[k] = v
 			}
 		}
 

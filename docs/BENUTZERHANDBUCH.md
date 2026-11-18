@@ -1280,6 +1280,17 @@ untereinander):
   entfernt wird nichts. Das Suchfeld filtert nach Name, Flow-ID, Node, Programm,
   PID und Container. Entfernte Hosts haben eine eigene Domain und erscheinen hier
   nicht.
+  **Getrennte MXL-Domains (Option):** Über der Tabelle wählen Sie die Domain. „Neue
+  Domain“ legt eine zusätzliche an (Name: Kleinbuchstaben, Ziffern, Bindestrich;
+  Verzeichnis `/dev/shm/omp-mxl-<Name>`), „Domain löschen“ entfernt sie — nur, wenn
+  keine Instanz sie nutzt und kein Schreiber aktiv ist; Reste werden mitentfernt.
+  Beim Starten einer Instanz (Flow Editor → Start …) wählen Sie die **MXL-Domain**;
+  ohne Auswahl bleibt alles in der Standarddomain. Flows sind nur innerhalb einer
+  Domain sichtbar: eine Verbindung zwischen verschiedenen Domains lehnt die Plattform
+  mit einer Meldung ab (dafür wäre eine Brücke nötig, die es noch nicht gibt). Gilt nur
+  für Instanzen auf dem Orchestrator-Rechner und nicht für Container-Nodes; die
+  Trennung erfolgt nach Pfad, nicht als Sicherheitsgrenze.
+
 - **Verbundene Clients** (in „Zugang & Rechte“) — zeigt, wer gerade mit einem
   Browser an der Oberfläche hängt: je offener Verbindung **Benutzer**,
   **Adresse** (hinter einem Reverse-Proxy auf demselben Rechner die Adresse des

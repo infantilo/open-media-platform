@@ -53,6 +53,18 @@ function labelled(label: string, control: HTMLElement, hint = ""): HTMLElement {
   return w;
 }
 
+/** Namen der getrennten MXL-Domains (ohne Standarddomain); leer bei Fehler oder wenn es keine gibt. */
+async function loadDomains(): Promise<string[]> {
+  try {
+    const res = await apiFetch("/api/v1/admin/mxl/domains");
+    if (!res.ok) return [];
+    const body = (await res.json()) as { domains?: { name: string; default?: boolean }[] };
+    return (body.domains ?? []).filter((d) => !d.default).map((d) => d.name);
+  } catch {
+    return [];
+  }
+}
+
 async function loadOptions(type: string): Promise<OptionDef[]> {
   try {
     const res = await apiFetch("/api/v1/admin/settings/nodes");
@@ -68,6 +80,7 @@ async function loadOptions(type: string): Promise<OptionDef[]> {
 export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
   return new Promise((resolve) => {
     const form: StartForm = { name: "", hostId: "", ioCardType: "", ioPorts: [], options: {} };
+    let hostSelectChanged: () => void = () => {};
     const wizard = opts.captureCard ? createCardWizard((card, ports) => {
       form.ioCardType = card;
       form.ioPorts = ports;
@@ -113,6 +126,7 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
       const profile = el("div", "font-size:11px;margin-top:2px;");
       sel.addEventListener("change", () => {
         form.hostId = sel.value;
+        hostSelectChanged();
         wizard?.setHost(form.hostId);
         profile.textContent = "";
         opts.fillProfile?.(profile, form.hostId);
@@ -124,6 +138,32 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
       body.append(profile);
       opts.fillProfile(profile, "");
     }
+
+    // Getrennte MXL-Domains (Kap. 103): nur anbieten, wenn es welche gibt und die Instanz lokal läuft.
+    const domainBox = el("div", "");
+    body.append(domainBox);
+    const renderDomain = (names: string[]) => {
+      domainBox.replaceChildren();
+      if (names.length === 0 || form.hostId) {
+        form.domain = "";
+        return;
+      }
+      const sel = el("select", INPUT);
+      for (const n of ["", ...names]) {
+        const o = el("option", "", n === "" ? t("flow.sd.domainDefault") : n);
+        o.value = n;
+        sel.append(o);
+      }
+      sel.value = form.domain ?? "";
+      sel.addEventListener("change", () => (form.domain = sel.value));
+      domainBox.append(labelled(t("flow.sd.domain"), sel, t("flow.sd.domainHint")));
+    };
+    let domainNames: string[] = [];
+    void loadDomains().then((n) => {
+      domainNames = n;
+      renderDomain(domainNames);
+    });
+    hostSelectChanged = () => renderDomain(domainNames);
 
     if (wizard) body.append(wizard.element);
 

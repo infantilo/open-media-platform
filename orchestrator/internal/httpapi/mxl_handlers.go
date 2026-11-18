@@ -1,9 +1,17 @@
 package httpapi
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/mxldomains"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mxlflows"
 )
 
@@ -21,11 +29,24 @@ type mxlFlowView struct {
 // handleMXLFlows liefert GET /api/v1/admin/mxl/flows: die Flows der lokalen MXL-Domain (OMP_MXL_DOMAIN, Standard
 // /dev/shm/omp-mxl) mit Schreiber (PID, Programm, Container) und Rest-Erkennung. Gilt nur für den Rechner des
 // Orchestrators: MXL ist host-lokal, entfernte Hosts hätten eine eigene Domain.
-func handleMXLFlows(ls LauncherService) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+func handleMXLFlows(ls LauncherService, ds MXLDomainStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		domain := os.Getenv("OMP_MXL_DOMAIN")
 		if domain == "" {
 			domain = "/dev/shm/omp-mxl"
+		}
+		// ?domain=<Name>: eine benannte Domain statt der Standarddomain (Kap. 103).
+		if name := r.URL.Query().Get("domain"); name != "" && name != mxldomains.DefaultName {
+			if ds == nil {
+				http.Error(w, "MXL domains are not enabled", http.StatusNotFound)
+				return
+			}
+			p, err := ds.Resolve(name)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			domain = p
 		}
 		flows, err := mxlflows.Scan(domain, mxlflows.Options{})
 		if err != nil {
@@ -53,4 +74,196 @@ func handleMXLFlows(ls LauncherService) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"domain": domain, "flows": out})
 	}
+}
+
+// ---- Getrennte MXL-Domains (Kap. 103, Entwurf docs/ENTWURF-MXL-DOMAIN-TRENNUNG.md, D1/D2) ----
+
+// MXLDomainStore ist die Domain-Verwaltung (implementiert von *mxldomains.Store).
+type MXLDomainStore interface {
+	List() ([]mxldomains.Domain, error)
+	Resolve(name string) (string, error)
+	NameForPath(path string) string
+	PathFor(name string) string
+	Create(name, description, by string) (mxldomains.Domain, error)
+	Delete(name string) error
+}
+
+// WithMXLDomains schaltet die Verwaltung getrennter MXL-Domains ein.
+func WithMXLDomains(s MXLDomainStore) HandlerOption {
+	return func(o *handlerOptions) { o.mxlDomains = s }
+}
+
+// instanceDomainPath: die Domain einer vom Launcher gestarteten Instanz (OMP_MXL_DOMAIN im Instanz-Env); leer =
+// Standarddomain.
+func instanceDomainPath(in launcher.Instance) string { return in.ExtraEnv["OMP_MXL_DOMAIN"] }
+
+type mxlDomainView struct {
+	mxldomains.Domain
+	Flows     int `json:"flows"`
+	Stale     int `json:"stale"`
+	Instances int `json:"instances"`
+}
+
+// handleListMXLDomains liefert GET /api/v1/admin/mxl/domains: alle Domains mit Flow- und Instanz-Zahl.
+func handleListMXLDomains(ds MXLDomainStore, ls LauncherService) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		list, err := ds.List()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		perDomain := map[string]int{}
+		if ls != nil {
+			for _, in := range ls.List() {
+				perDomain[ds.NameForPath(instanceDomainPath(in))]++
+			}
+		}
+		out := make([]mxlDomainView, 0, len(list))
+		for _, d := range list {
+			v := mxlDomainView{Domain: d, Instances: perDomain[d.Name]}
+			if flows, err := mxlflows.Scan(d.Path, mxlflows.Options{}); err == nil {
+				v.Flows = len(flows)
+				for _, f := range flows {
+					if f.Stale {
+						v.Stale++
+					}
+				}
+			}
+			out = append(out, v)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"domains": out})
+	}
+}
+
+func handleCreateMXLDomain(ds MXLDomainStore, audit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		d, err := ds.Create(strings.TrimSpace(body.Name), strings.TrimSpace(body.Description), actorFromRequest(r))
+		switch {
+		case errors.Is(err, mxldomains.ErrValidation):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, mxldomains.ErrExists):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		default:
+			logDomainAudit(audit, actorFromRequest(r), "mxl-domain", d.Name, "create", map[string]any{"description": d.Description})
+			writeJSON(w, http.StatusCreated, d)
+		}
+	}
+}
+
+// handleDeleteMXLDomain liefert DELETE /api/v1/admin/mxl/domains/{name}: nur ohne Instanzen und ohne Schreiber. Reste
+// (Flow-Verzeichnisse ohne Schreiber) werden mit entfernt, danach das Verzeichnis, falls leer.
+func handleDeleteMXLDomain(ds MXLDomainStore, ls LauncherService, audit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		path, err := ds.Resolve(name)
+		if errors.Is(err, mxldomains.ErrValidation) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, mxldomains.ErrNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if err != nil || name == "" || name == mxldomains.DefaultName {
+			http.Error(w, "domain cannot be deleted", http.StatusBadRequest)
+			return
+		}
+		if ls != nil {
+			for _, in := range ls.List() {
+				if ds.NameForPath(instanceDomainPath(in)) == name {
+					http.Error(w, fmt.Sprintf("domain %q is used by instance %q (%s)", name, in.Label, in.ID), http.StatusConflict)
+					return
+				}
+			}
+		}
+		flows, _ := mxlflows.Scan(path, mxlflows.Options{})
+		for _, f := range flows {
+			if f.Active {
+				http.Error(w, fmt.Sprintf("domain %q still has an active writer (flow %s)", name, f.ID), http.StatusConflict)
+				return
+			}
+		}
+		// Reste entfernen: nur die Flow-Verzeichnisse, die Scan gefunden hat (Namen `<id>.mxl-flow`, validiert).
+		for _, f := range flows {
+			_ = os.RemoveAll(filepath.Join(path, f.ID+".mxl-flow"))
+		}
+		if err := ds.Delete(name); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		logDomainAudit(audit, actorFromRequest(r), "mxl-domain", name, "delete", nil)
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+// domainStartEnv übersetzt den Domainnamen eines Instanzstarts in das Instanz-Env (D2). Standarddomain → kein Env.
+func domainStartEnv(ds MXLDomainStore, name string) (map[string]string, error) {
+	if name == "" || name == mxldomains.DefaultName {
+		return nil, nil
+	}
+	if ds == nil {
+		return nil, fmt.Errorf("MXL domains are not enabled on this orchestrator")
+	}
+	path, err := ds.Resolve(name)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return nil, err
+	}
+	return map[string]string{"OMP_MXL_DOMAIN": path}, nil
+}
+
+// sameMXLDomain prüft vor einer Verbindung, ob Sender und Empfänger in derselben MXL-Domain liegen. Nur vom Launcher
+// gestartete Nodes sind bekannt; alle anderen gelten als Standarddomain. Nicht verbindbar → Fehlertext.
+func sameMXLDomain(g graph.Graph, ls LauncherService, ds MXLDomainStore, fromSender, toReceiver string) error {
+	if ls == nil {
+		return nil
+	}
+	var fromInst, toInst string
+	for _, n := range g.Nodes {
+		for _, p := range n.Outputs {
+			if p.ID == fromSender {
+				fromInst = n.InstanceID
+			}
+		}
+		for _, p := range n.Inputs {
+			if p.ID == toReceiver {
+				toInst = n.InstanceID
+			}
+		}
+	}
+	domainOf := func(id string) string {
+		if id == "" {
+			return ""
+		}
+		if in, ok := ls.Get(id); ok {
+			return strings.TrimRight(instanceDomainPath(in), "/")
+		}
+		return ""
+	}
+	a, b := domainOf(fromInst), domainOf(toInst)
+	if a == b {
+		return nil
+	}
+	name := func(p string) string {
+		if ds != nil {
+			return ds.NameForPath(p)
+		}
+		if p == "" {
+			return mxldomains.DefaultName
+		}
+		return p
+	}
+	return fmt.Errorf("sender and receiver are in different MXL domains (%s / %s); a bridge between the domains is needed", name(a), name(b))
 }

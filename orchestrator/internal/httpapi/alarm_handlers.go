@@ -30,6 +30,7 @@ type AlarmAckStore interface {
 type HandlerOption func(*handlerOptions)
 
 type handlerOptions struct {
+	mxlDomains          MXLDomainStore
 	dirAdmin            DirectoryAdmin
 	dirMaps             DirectoryMapService
 	alarmAcks           AlarmAckStore

@@ -128,6 +128,27 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/admin/mxl/domains",
+    "auth": "verb:Admin",
+    "when": "options.mxlDomains != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/admin/mxl/domains",
+    "auth": "verb:Admin",
+    "when": "options.mxlDomains != nil",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/admin/mxl/domains/{name}",
+    "auth": "verb:Admin",
+    "when": "options.mxlDomains != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/admin/mxl/flows",
     "auth": "verb:Admin",
     "domain": "core"

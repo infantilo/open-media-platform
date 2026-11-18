@@ -5,6 +5,8 @@ export interface StartForm {
   name: string;
   /** Zielhost ("" = lokal). */
   hostId: string;
+  /** Getrennte MXL-Domain ("" = Standarddomain), Kap. 103. Nur für Instanzen auf dem Orchestrator-Rechner. */
+  domain?: string;
   /** Capture-Karte: Hersteller der gewählten Anschlüsse (`cardType`) und ihre Port-IDs (leer = nicht zutreffend). */
   ioCardType: string;
   ioPorts: string[];
@@ -16,6 +18,7 @@ export interface StartBody {
   type: string;
   version?: string;
   hostId?: string;
+  domain?: string;
   label?: string;
   requiredIoPort?: { cardType: string; ports: string[] };
   options?: Record<string, string>;
@@ -36,6 +39,8 @@ export function buildStartBody(type: string, version: string | undefined, f: Sta
   const body: StartBody = { type };
   if (version) body.version = version;
   if (f.hostId) body.hostId = f.hostId;
+  // Eine Domain gilt nur lokal (die API lehnt sie mit hostId ab) — bei gewähltem Host nie mitsenden.
+  if (f.domain && f.domain !== "default" && !f.hostId) body.domain = f.domain;
   const name = f.name.trim();
   if (name) body.label = name;
   if (f.ioPorts.length > 0) body.requiredIoPort = { cardType: f.ioCardType, ports: f.ioPorts };

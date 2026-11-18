@@ -52,3 +52,11 @@ Deno.test("Voreinstellungen: erkennen und anwenden", () => {
   assertEquals(valuesForPreset("rate", "custom"), null);
   assertEquals(valuesForPreset("rate", "99"), null);
 });
+
+Deno.test("Startkörper: MXL-Domain nur lokal und nur wenn nicht Standard", () => {
+  assertEquals(buildStartBody("omp-source", undefined, { ...empty, domain: "test" }), { type: "omp-source", domain: "test" });
+  assertEquals(buildStartBody("omp-source", undefined, { ...empty, domain: "" }), { type: "omp-source" });
+  assertEquals(buildStartBody("omp-source", undefined, { ...empty, domain: "default" }), { type: "omp-source" });
+  // mit Zielhost wird die Domain nie mitgesendet (die API lehnt die Kombination ab)
+  assertEquals(buildStartBody("omp-source", undefined, { ...empty, hostId: "h1", domain: "test" }), { type: "omp-source", hostId: "h1" });
+});
