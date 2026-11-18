@@ -12,6 +12,8 @@ export interface DraftRole {
   name: string;
   nodeType: string;
   hostId?: string;
+  // Kap. 103: MXL-Domain dieser Rolle (überschreibt die des Workflows); leer = die des Workflows.
+  domain?: string;
   format?: string;
   // standbyFor (K7 Teil 4, docs/END-GOAL-FEATURES.md §7.4): Name einer
   // anderen Rolle, für die diese Rolle als warmer Standby dient — s.

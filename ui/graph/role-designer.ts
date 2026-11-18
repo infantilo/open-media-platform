@@ -214,6 +214,8 @@ export class RoleDesigner extends HTMLElement {
   #viewport: Viewport = { ...IDENTITY_VIEWPORT };
   #catalog: CatalogEntry[] = [];
   #hosts: HostEntry[] = [];
+  // Kap. 103: Namen der angelegten MXL-Domains (ohne Standard) für die Domain-Auswahl je Rolle.
+  #domainNames: string[] = [];
   #drag: DesignerDragState | null = null;
   #saving = false;
   // Nutzerwunsch 2026-07-30 ("sprechender Name" je Service/Stream, s.
@@ -375,9 +377,17 @@ export class RoleDesigner extends HTMLElement {
 
   async #loadCatalogAndHosts() {
     try {
-      const [catalogRes, hostsRes] = await Promise.all([apiFetch("/api/v1/catalog"), apiFetch("/api/v1/hosts")]);
+      const [catalogRes, hostsRes, domainsRes] = await Promise.all([
+        apiFetch("/api/v1/catalog"),
+        apiFetch("/api/v1/hosts"),
+        apiFetch("/api/v1/admin/mxl/domains").catch(() => null),
+      ]);
       if (catalogRes.ok) this.#catalog = await catalogRes.json();
       if (hostsRes.ok) this.#hosts = await hostsRes.json();
+      if (domainsRes?.ok) {
+        const d = (await domainsRes.json()) as { domains?: { name: string; default?: boolean }[] };
+        this.#domainNames = (d.domains ?? []).filter((x) => !x.default).map((x) => x.name);
+      }
       this.#renderToolbar();
       this.#renderPalette();
       // Bug (gefunden bei Nutzerauftrag 2026-09-21, "role-designer.ts
@@ -1030,7 +1040,37 @@ export class RoleDesigner extends HTMLElement {
       role.hostId = hostSelect.value || undefined;
       applyHostSelectStatus(hostSelect, this.#hosts);
     });
-    hostObject.appendChild(hostSelect);
+    // Kap. 103: Domain-Auswahl neben dem Host (gleiche Zeile, damit die Kachelhöhe unverändert bleibt) — nur, wenn es
+    // angelegte Domains gibt oder die Rolle schon eine trägt.
+    if (this.#domainNames.length > 0 || role.domain) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:4px;width:100%;";
+      hostSelect.style.width = "58%";
+      const domainSelect = document.createElement("select");
+      domainSelect.title = t("rd.domain.hint");
+      domainSelect.style.cssText =
+        "width:42%;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
+      const wfDefault = document.createElement("option");
+      wfDefault.value = "";
+      wfDefault.textContent = t("rd.domain.inherit");
+      domainSelect.appendChild(wfDefault);
+      const names = [...new Set(["default", ...this.#domainNames, ...(role.domain ? [role.domain] : [])])];
+      for (const n of names) {
+        const opt = document.createElement("option");
+        opt.value = n;
+        opt.textContent = `⬡ ${n}`;
+        if (n === role.domain) opt.selected = true;
+        domainSelect.appendChild(opt);
+      }
+      domainSelect.addEventListener("change", () => {
+        this.#pushUndo();
+        role.domain = domainSelect.value || undefined;
+      });
+      row.append(hostSelect, domainSelect);
+      hostObject.appendChild(row);
+    } else {
+      hostObject.appendChild(hostSelect);
+    }
     g.appendChild(hostObject);
 
     const formatObject = document.createElementNS(SVG_NS, "foreignObject");

@@ -8,6 +8,7 @@
 import { TallyBoard, tallyLabel } from "./tally-logic.ts";
 import { t as tt, tLoose } from "../shell/i18n.ts";
 import { promptDialog } from "../kit/omp-prompt.ts";
+import { DEFAULT_DOMAIN, domainColor, type DomainInfo, domainZones, hasNamedDomains, instanceDomain, workflowDomainZone } from "./domain-view-logic.ts";
 import { ghostEntriesForZone, type GhostEntry, type PlanInput, type StartPlan, zoneForStoppedWorkflow } from "../shell/workflow-plan-logic.ts";
 import {
   type ArrangeEdge,
@@ -256,6 +257,10 @@ interface LayoutBlob {
   // Lane-Anordnung, separat vom freien Layout. Fehlt bei älteren
   // Layouts — dann berechnet #enableHostView() die Lanes einmalig neu.
   hostViewPositions?: Record<string, Point>;
+  // Kap. 103: Lane-Anordnung der Domain-Ansicht (getrennt von der Host-Ansicht, Lanes sind je Ansicht andere) und welche
+  // Ansicht zuletzt gewählt war.
+  domainViewPositions?: Record<string, Point>;
+  zoneMode?: "host" | "domain";
   // Nutzerfund 2026-08-14: manuell gesetzte Host-Zone-Breiten (s.
   // #hostZoneWidths-Doku) — fehlt bei älteren Layouts, dann gilt
   // HOST_ZONE_LANE_WIDTH für jede Zone.
@@ -314,7 +319,7 @@ interface WorkflowSummary {
 type WorkflowDefinition = {
   // standbyFor (K7 Teil 4, docs/END-GOAL-FEATURES.md §7.4) — s.
   // orchestrator/internal/workflows/types.go Role.StandbyFor.
-  roles: { name: string; nodeType: string; standbyFor?: string; hostId?: string }[];
+  roles: { name: string; nodeType: string; standbyFor?: string; hostId?: string; domain?: string }[];
   connections: { fromRole: string; toRole: string }[];
 } & Record<string, unknown>;
 
@@ -384,6 +389,8 @@ interface FailoverEvent {
 // Palette, sobald seine (evtl. nie erfolgte) NMOS-Registrierung ausläuft.
 interface LauncherInstance {
   id: string;
+  /** extraEnv der Instanz; für die MXL-Domain (Kap. 103) zählt OMP_MXL_DOMAIN_NAME. */
+  extraEnv?: Record<string, string>;
   type: string;
   label: string;
   pid: number;
@@ -699,6 +706,11 @@ export class FlowCanvas extends HTMLElement {
   #hostViewEnabled = false;
   #hostViewUserSet = false;
   #hostViewPositions: Record<string, Point> = {};
+  // Kap. 103: Zonen nach Host (Standard) oder nach MXL-Domain. #hostViewPositions gehört immer zur AKTIVEN Ansicht, die
+  // der anderen liegt in #inactiveLanePositions (Tausch in #setZoneMode).
+  #zoneMode: "host" | "domain" = "host";
+  #inactiveLanePositions: Record<string, Point> = {};
+  #domains: DomainInfo[] = [];
   #freeRootPositions: Record<string, Point> = {};
   // Nutzerfund 2026-08-14 ("brauchen Möglichkeit, die Host-Frames zu
   // resizen"): Breiten-Override je Zonen-ID, per Ziehgriff gesetzt
@@ -808,7 +820,9 @@ export class FlowCanvas extends HTMLElement {
         const blob = (await response.json()) as Partial<LayoutBlob>;
         this.#positions = blob.positions ?? {};
         this.#groupTree = blob.groups ?? emptyTree();
-        this.#hostViewPositions = blob.hostViewPositions ?? {};
+        this.#zoneMode = blob.zoneMode === "domain" ? "domain" : "host";
+        this.#hostViewPositions = (this.#zoneMode === "domain" ? blob.domainViewPositions : blob.hostViewPositions) ?? {};
+        this.#inactiveLanePositions = (this.#zoneMode === "domain" ? blob.hostViewPositions : blob.domainViewPositions) ?? {};
         this.#hostZoneWidths = blob.hostZoneWidths ?? {};
         // Gespeicherte Layouts von vor diesem Fix (2026-07-12) haben kein
         // `viewport`-Feld — dann auf den Kachel-Bestand zentrieren statt
@@ -875,7 +889,9 @@ export class FlowCanvas extends HTMLElement {
       positions: positionsToPersist,
       groups: this.#groupTree,
       viewport: this.#viewport,
-      hostViewPositions: hostViewPositionsToPersist,
+      hostViewPositions: this.#zoneMode === "host" ? hostViewPositionsToPersist : this.#inactiveLanePositions,
+      domainViewPositions: this.#zoneMode === "domain" ? hostViewPositionsToPersist : this.#inactiveLanePositions,
+      zoneMode: this.#zoneMode,
       hostZoneWidths: this.#hostZoneWidths,
     };
     try {
@@ -1574,6 +1590,14 @@ export class FlowCanvas extends HTMLElement {
   // Bedeutung wie bei #zoneIdForGroup).
   #zoneIdForWorkflow(wf: WorkflowSummary): string {
     const runtime = wf.runtime;
+    if (this.#zoneMode === "domain") {
+      // Läuft der Workflow, zählen die Domains seiner Instanzen, sonst die Definition (Workflow- und Rollen-Domain).
+      if (runtime && Object.keys(runtime).length > 0) {
+        const set = new Set(Object.values(runtime).map((rt) => instanceDomain(this.#paletteInstances.find((i) => i.id === rt.instanceId))));
+        return set.size === 1 ? [...set][0] : "mixed";
+      }
+      return workflowDomainZone(wf.definition?.roles, wf.definition?.settings as { domain?: string } | undefined);
+    }
     // Nicht gestartet: Zone aus der Planung (voraussichtlicher Host je Rolle); verteilt sich der Workflow auf
     // mehrere Hosts, steht die Kachel in "mixed" und jede beteiligte Zone zeigt einen "Geplant"-Eintrag.
     if (!runtime || Object.keys(runtime).length === 0) return zoneForStoppedWorkflow(this.#planInput(wf));
@@ -1606,11 +1630,16 @@ export class FlowCanvas extends HTMLElement {
       .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   }
   #ghostsForZone(zoneId: string): GhostEntry[] {
+    if (this.#zoneMode === "domain") return []; // "Geplant"-Einträge gibt es nur je Host
     return ghostEntriesForZone(zoneId, this.#workflowsInScope().map((wf) => this.#planInput(wf)));
   }
 
   #zoneIdForNodeId(nodeId: string): string {
     const node = this.#graph.nodes.find((n) => n.id === nodeId);
+    // Domain-Ansicht (Kap. 103): Nodes ohne Launcher-Instanz liegen, soweit bekannt, in der Standarddomain.
+    if (this.#zoneMode === "domain") {
+      return instanceDomain(node?.instanceId ? this.#paletteInstances.find((i) => i.id === node.instanceId) : undefined);
+    }
     if (!node?.instanceId) return "unassigned";
     const inst = this.#paletteInstances.find((i) => i.id === node.instanceId);
     if (!inst || !inst.hostId) return "local";
@@ -1664,7 +1693,14 @@ export class FlowCanvas extends HTMLElement {
   // "Unzugeordnet", zuletzt "Gruppen über mehrere Hosts" (Nutzerfund
   // 2026-08-12: Gruppen-Kacheln mit uneinheitlichen Mitglieder-Zonen,
   // s. #zoneIdForGroup-Doku).
-  #hostZones(tiles: TileSpec[]): { id: string; label: string; metrics?: HostMetrics; maintenance?: HostMaintenance }[] {
+  #hostZones(tiles: TileSpec[]): { id: string; label: string; metrics?: HostMetrics; maintenance?: HostMaintenance; subtitle?: string }[] {
+    if (this.#zoneMode === "domain") {
+      const used = this.#paletteInstances.map((i) => instanceDomain(i));
+      const zones: { id: string; label: string; subtitle?: string }[] = domainZones(this.#domains, used);
+      const wfMixed = this.#workflowsInScope().some((wf) => this.#zoneIdForWorkflow(wf) === "mixed");
+      if (wfMixed || tiles.some((t) => this.#zoneIdForTile(t) === "mixed")) zones.push({ id: "mixed", label: tt("flow.28a45c") });
+      return zones;
+    }
     const zones: { id: string; label: string; metrics?: HostMetrics; maintenance?: HostMaintenance }[] = [
       { id: "local", label: tt("flow.b40ef3") },
       ...this.#paletteHosts.map((h) => ({ id: h.id, label: h.label, metrics: h.metrics, maintenance: h.maintenance })),
@@ -1864,6 +1900,39 @@ export class FlowCanvas extends HTMLElement {
       this.#collapsedZoneIds.add(zoneId);
     }
     this.#render();
+  }
+
+  // Kap. 103: Umschalter Host-/Domain-Ansicht. Ein Klick auf die gerade aktive Ansicht schaltet die Zonen aus, ein Klick auf
+  // die andere wechselt direkt (ohne Umweg über „aus“).
+  #chooseZoneView(mode: "host" | "domain") {
+    this.#hostViewUserSet = true;
+    if (this.#hostViewEnabled && this.#zoneMode === mode) {
+      this.#toggleHostView(false);
+      return;
+    }
+    this.#setZoneMode(mode);
+    if (!this.#hostViewEnabled) this.#toggleHostView(true);
+  }
+
+  // Tauscht die gemerkten Lane-Positionen der beiden Ansichten (Lanes sind je Ansicht andere) und ordnet neu ein.
+  #setZoneMode(mode: "host" | "domain") {
+    if (mode === this.#zoneMode) return;
+    if (this.#hostViewEnabled) {
+      for (const id of [...this.#rootZoneTileIdsFlat(), ...this.#allWorkflowTileIds()]) {
+        if (this.#positions[id]) this.#hostViewPositions[id] = this.#positions[id];
+      }
+    }
+    const active = this.#hostViewPositions;
+    this.#hostViewPositions = this.#inactiveLanePositions;
+    this.#inactiveLanePositions = active;
+    this.#zoneMode = mode;
+    this.#collapsedZoneIds.clear(); // Zonen-IDs gelten nur innerhalb einer Ansicht
+    if (this.#hostViewEnabled) {
+      for (const id of [...this.#rootZoneTileIdsFlat(), ...this.#allWorkflowTileIds()]) delete this.#positions[id];
+      this.#arrangeIntoLanes(this.#rootZoneTiles());
+      this.#render();
+      this.#saveLayout();
+    }
   }
 
   #toggleHostView(enabled: boolean, userInitiated = true) {
@@ -3483,11 +3552,24 @@ export class FlowCanvas extends HTMLElement {
     if (this.#scope === null) {
       const hostViewBtn = document.createElement("button");
       hostViewBtn.setAttribute("data-role", "host-view-toggle");
-      hostViewBtn.textContent = this.#hostViewEnabled ? tt("flow.981290") : tt("flow.7818c8");
-      if (this.#hostViewEnabled) hostViewBtn.className = "omp-btn-primary";
+      const hostActive = this.#hostViewEnabled && this.#zoneMode === "host";
+      hostViewBtn.textContent = hostActive ? tt("flow.981290") : tt("flow.7818c8");
+      if (hostActive) hostViewBtn.className = "omp-btn-primary";
       hostViewBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
-      hostViewBtn.addEventListener("click", () => this.#toggleHostView(!this.#hostViewEnabled));
+      hostViewBtn.addEventListener("click", () => this.#chooseZoneView("host"));
       this.#breadcrumbBar.appendChild(hostViewBtn);
+      // Domain-Ansicht (Kap. 103): nur anbieten, wenn es benannte MXL-Domains gibt (oder sie gerade aktiv ist).
+      if (hasNamedDomains(this.#domains) || this.#zoneMode === "domain") {
+        const domainBtn = document.createElement("button");
+        domainBtn.setAttribute("data-role", "domain-view-toggle");
+        const domainActive = this.#hostViewEnabled && this.#zoneMode === "domain";
+        domainBtn.textContent = domainActive ? tt("flow.domainView.on") : tt("flow.domainView.off");
+        domainBtn.title = tt("flow.domainView.hint");
+        if (domainActive) domainBtn.className = "omp-btn-primary";
+        domainBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
+        domainBtn.addEventListener("click", () => this.#chooseZoneView("domain"));
+        this.#breadcrumbBar.appendChild(domainBtn);
+      }
     }
 
     if (this.#scope !== null) {
@@ -4093,7 +4175,7 @@ export class FlowCanvas extends HTMLElement {
       // Kopf auf. "local"/"unassigned"/"mixed" sind keine echten Hosts
       // (s. Doku beim Punkt weiter unten) und bleiben daher immer im
       // neutralen Rahmen.
-      const isRealHost = zone.id !== "local" && zone.id !== "unassigned" && zone.id !== "mixed";
+      const isRealHost = this.#zoneMode === "host" && zone.id !== "local" && zone.id !== "unassigned" && zone.id !== "mixed";
       const hostOnline = !isRealHost || isHostOnline(zone.metrics);
 
       const rect = document.createElementNS(SVG_NS, "rect");
@@ -4159,6 +4241,32 @@ export class FlowCanvas extends HTMLElement {
         label.appendChild(tooltip);
       }
       g.appendChild(label);
+
+      // Domain-Ansicht (Kap. 103): farbiger Streifen am Zonenrand, Zähler und Beschreibung im Kopf.
+      if (this.#zoneMode === "domain" && zone.id !== "mixed") {
+        const color = domainColor(zone.id);
+        const stripe = document.createElementNS(SVG_NS, "rect");
+        stripe.setAttribute("x", "0");
+        stripe.setAttribute("y", "0");
+        stripe.setAttribute("width", "5");
+        stripe.setAttribute("height", String(collapsed ? HOST_ZONE_HEADER_HEIGHT : bottom));
+        stripe.setAttribute("rx", "2");
+        stripe.setAttribute("fill", color);
+        g.appendChild(stripe);
+        label.setAttribute("fill", color);
+        label.setAttribute("font-weight", "600");
+        if (!collapsed) {
+          const info = document.createElementNS(SVG_NS, "text");
+          info.setAttribute("x", String(labelX));
+          info.setAttribute("y", "34");
+          info.setAttribute("fill", "#9aa0a6");
+          info.setAttribute("font-size", "10");
+          const sub = (zone as { subtitle?: string }).subtitle ?? "";
+          const count = tt("flow.domainView.nodes", { n: zoneTiles.length + zoneWorkflowTileIds.length });
+          info.textContent = truncateTileTitle(sub ? `${count} · ${sub}` : count, Math.max(16, Math.floor((laneWidth - 24) / 6)));
+          g.appendChild(info);
+        }
+      }
 
       // Nutzerauftrag 2026-09-21: ein offline echter Host zeigt hier
       // "Offline" statt (veralteter oder fehlender) CPU/RAM-Zahlen —
@@ -4418,6 +4526,38 @@ export class FlowCanvas extends HTMLElement {
       body.appendChild(standbyTitle);
     }
     g.appendChild(body);
+
+    // Domain-Reiter (Kap. 103): eine Kachel in einer benannten MXL-Domain trägt deren Namen als farbigen Reiter über dem
+    // Kopf — in jeder Ansicht sichtbar, ohne Titel und Knöpfe im Kopf zu verdrängen.
+    if (!isGroup && tile.instanceId) {
+      const dom = instanceDomain(this.#paletteInstances.find((i) => i.id === tile.instanceId));
+      if (dom !== DEFAULT_DOMAIN) {
+        const color = domainColor(dom);
+        const text = truncateTileTitle(dom, 18);
+        const w = Math.round(text.length * 6.4) + 20;
+        const tab = document.createElementNS(SVG_NS, "g");
+        tab.setAttribute("data-role", "domain-tab");
+        tab.setAttribute("pointer-events", "none");
+        const tr = document.createElementNS(SVG_NS, "rect");
+        tr.setAttribute("x", "6");
+        tr.setAttribute("y", "-14");
+        tr.setAttribute("width", String(w));
+        tr.setAttribute("height", "15");
+        tr.setAttribute("rx", "4");
+        tr.setAttribute("fill", color);
+        const tt1 = document.createElementNS(SVG_NS, "text");
+        tt1.setAttribute("x", "14");
+        tt1.setAttribute("y", "-3");
+        tt1.setAttribute("font-size", "10");
+        tt1.setAttribute("font-weight", "700");
+        tt1.setAttribute("fill", "#10151f");
+        tt1.textContent = `⬡ ${text}`;
+        const ttl = document.createElementNS(SVG_NS, "title");
+        ttl.textContent = tt("flow.domainView.tabHint", { name: dom });
+        tab.append(tr, tt1, ttl);
+        g.appendChild(tab);
+      }
+    }
 
     // Kopf: nur oben abgerundet (passt zum Kachelradius), darunter feine Trennlinie.
     const header = document.createElementNS(SVG_NS, "path");
@@ -6306,11 +6446,19 @@ export class FlowCanvas extends HTMLElement {
 
   async #renderPalette() {
     try {
-      const [catalogRes, instancesRes, hostsRes] = await Promise.all([
+      const [catalogRes, instancesRes, hostsRes, domainsRes] = await Promise.all([
         apiFetch("/api/v1/catalog"),
         apiFetch("/api/v1/instances"),
         apiFetch("/api/v1/hosts"),
+        apiFetch("/api/v1/admin/mxl/domains").catch(() => null),
       ]);
+      // Domains (Kap. 103): Admin-Endpunkt, ohne Recht oder ohne Verwaltung (403/404) bleibt die Liste leer.
+      const prevDomains = JSON.stringify(this.#domains.map((d) => d.name));
+      this.#domains = domainsRes?.ok ? (((await domainsRes.json()) as { domains?: DomainInfo[] }).domains ?? []) : [];
+      if (JSON.stringify(this.#domains.map((d) => d.name)) !== prevDomains) {
+        this.#renderBreadcrumb();
+        if (this.#hostViewEnabled && this.#zoneMode === "domain") this.#render();
+      }
       if (!catalogRes.ok) {
         this.#paletteCatalog = null;
         this.#renderPaletteList();

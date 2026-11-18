@@ -81,6 +81,8 @@ interface Settings {
   // benanntes Preset aus STANDARD_FORMATS (ui/graph/roles.ts), exakt
   // wie Role.format — s. dortige Doku.
   programFormat?: string;
+  // domain (Kap. 103): getrennte MXL-Domain für alle Rollen; leer = Standarddomain.
+  domain?: string;
   confirmStop?: boolean;
   // targetLatencyFrames (D8 Teil 2, ARCHITECTURE.md §15.1 Punkt 2):
   // Latenzbudget in Video-Frames — 0/undefined = nicht gesetzt (kein
@@ -235,6 +237,9 @@ class WorkflowsView extends HTMLElement {
   // Kapitel 15: leer gelassen = kein settings-Feld im Request, Nodes
   // laufen mit ihrem eigenen Default (keine erzwungene Auflösung).
   #formProgramFormat = "";
+  // Kap. 103: MXL-Domain des Workflows (leer = Standard) und die angelegten Domainnamen für die Auswahl.
+  #formDomain = "";
+  #domainNames: string[] = [];
   // D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1/2).
   #formSchedules: Schedule[] = [];
   #formConfirmStop = false;
@@ -293,9 +298,17 @@ class WorkflowsView extends HTMLElement {
 
   async #loadStatic() {
     try {
-      const [catalogRes, hostsRes] = await Promise.all([apiFetch("/api/v1/catalog"), apiFetch("/api/v1/hosts")]);
+      const [catalogRes, hostsRes, domainsRes] = await Promise.all([
+        apiFetch("/api/v1/catalog"),
+        apiFetch("/api/v1/hosts"),
+        apiFetch("/api/v1/admin/mxl/domains").catch(() => null),
+      ]);
       if (catalogRes.ok) this.#catalog = await catalogRes.json();
       if (hostsRes.ok) this.#hosts = await hostsRes.json();
+      if (domainsRes?.ok) {
+        const d = (await domainsRes.json()) as { domains?: { name: string; default?: boolean }[] };
+        this.#domainNames = (d.domains ?? []).filter((x) => !x.default).map((x) => x.name);
+      }
       // Neu rendern, falls das Anlegen-Formular schon offen ist, bevor
       // dieser Fetch zurückkam — sonst bliebe die Node-Typ-Auswahl leer
       // (nur die "Node-Typ …"-Leeroption), falls jemand "+ Neu" schneller
@@ -416,6 +429,7 @@ class WorkflowsView extends HTMLElement {
     }
     const settings: Settings = {};
     if (this.#formProgramFormat) settings.programFormat = this.#formProgramFormat;
+    if (this.#formDomain) settings.domain = this.#formDomain;
     if (this.#formConfirmStop) settings.confirmStop = true;
     const targetLatencyFrames = parseInt(this.#formTargetLatencyFrames, 10);
     if (Number.isFinite(targetLatencyFrames) && targetLatencyFrames > 0) {
@@ -487,6 +501,7 @@ class WorkflowsView extends HTMLElement {
     this.#formRoles = [{ name: "", nodeType: "", hostId: "" }];
     this.#formConnections = [];
     this.#formProgramFormat = "";
+    this.#formDomain = "";
     this.#formSchedules = [];
     this.#formConfirmStop = false;
     this.#formTargetLatencyFrames = "";
@@ -505,6 +520,7 @@ class WorkflowsView extends HTMLElement {
     this.#formRoles = wf.definition.roles.map((r) => ({ ...r, hostId: r.hostId ?? "" }));
     this.#formConnections = wf.definition.connections.map((c) => ({ ...c }));
     this.#formProgramFormat = wf.definition.settings?.programFormat ?? "";
+    this.#formDomain = wf.definition.settings?.domain ?? "";
     this.#formConfirmStop = wf.definition.settings?.confirmStop ?? false;
     this.#formTargetLatencyFrames = wf.definition.settings?.targetLatencyFrames
       ? String(wf.definition.settings.targetLatencyFrames)
@@ -1007,10 +1023,10 @@ class WorkflowsView extends HTMLElement {
     // Kapitel 15: nur anzeigen, wenn tatsächlich gesetzt — die meisten
     // Workflows laufen weiterhin mit den Node-eigenen Defaults.
     const settings = wf.definition.settings;
-    if (settings?.programFormat) {
+    if (settings?.programFormat || settings?.domain) {
       const res = document.createElement("div");
       res.style.cssText = "color:var(--omp-text-dim);font-size:11px;margin-top:2px;";
-      res.textContent = settings.programFormat;
+      res.textContent = [settings.programFormat, settings.domain ? `⬡ ${settings.domain}` : ""].filter(Boolean).join(" · ");
       row.appendChild(res);
     }
 
@@ -1341,6 +1357,24 @@ class WorkflowsView extends HTMLElement {
       this.#formProgramFormat = formatSelect.value;
     });
     settingsRow.appendChild(formatSelect);
+    // Kap. 103: MXL-Domain des Workflows — nur anbieten, wenn Domains angelegt sind oder der Workflow schon eine trägt.
+    if (this.#domainNames.length > 0 || this.#formDomain) {
+      const domainSelect = document.createElement("select");
+      domainSelect.title = tt("wf.domain.hint");
+      domainSelect.style.cssText = "width:100%;";
+      const names = [...new Set(["", ...this.#domainNames, ...(this.#formDomain ? [this.#formDomain] : [])])];
+      for (const n of names) {
+        const opt = document.createElement("option");
+        opt.value = n;
+        opt.textContent = n === "" ? tt("wf.domain.default") : `⬡ ${n}`;
+        if (n === this.#formDomain) opt.selected = true;
+        domainSelect.appendChild(opt);
+      }
+      domainSelect.addEventListener("change", () => {
+        this.#formDomain = domainSelect.value;
+      });
+      settingsRow.appendChild(domainSelect);
+    }
     form.appendChild(settingsRow);
 
     // D8 Teil 2 (ARCHITECTURE.md §15.1 Punkt 2): Latenzbudget, optional —

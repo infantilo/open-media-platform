@@ -1291,6 +1291,21 @@ untereinander):
   für Instanzen auf dem Orchestrator-Rechner und nicht für Container-Nodes; die
   Trennung erfolgt nach Pfad, nicht als Sicherheitsgrenze.
 
+  **Domains im Workflow:** In den Workflow-Einstellungen („MXL-Domain“) legen Sie fest,
+  in welcher Domain alle Rollen laufen; im Rollen-Designer kann eine einzelne Rolle
+  eine andere wählen (Auswahl neben dem Host, „⬡ (Workflow)“ = die des Workflows).
+  Die Domain gilt auch auf entfernten Hosts und für Container-Nodes — der Host legt
+  das Verzeichnis selbst an. Der Start wird abgelehnt, wenn eine Domain nicht angelegt
+  ist oder eine Verbindung des Workflows über eine Domain-Grenze läuft.
+
+  **Im Flow Editor:** Sobald es benannte Domains gibt, erscheint neben „Host-Ansicht“
+  der Umschalter **„Domain-Ansicht“**: der Editor gruppiert die Kacheln dann in
+  Zonen je Domain (Standarddomain zuerst, farbiger Streifen und Name in der Domain-Farbe,
+  Kachelzahl im Kopf); „Auto-Anordnen“ und „Alle einpassen“ wirken wie in der
+  Host-Ansicht. Ein Klick auf die aktive Ansicht schaltet die Zonen aus, ein Klick auf
+  die andere wechselt direkt. Unabhängig von der Ansicht trägt jede Kachel in einer
+  benannten Domain einen farbigen **Domain-Reiter** über dem Kopf.
+
 - **Verbundene Clients** (in „Zugang & Rechte“) — zeigt, wer gerade mit einem
   Browser an der Oberfläche hängt: je offener Verbindung **Benutzer**,
   **Adresse** (hinter einem Reverse-Proxy auf demselben Rechner die Adresse des
