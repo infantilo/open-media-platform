@@ -711,6 +711,8 @@ export class FlowCanvas extends HTMLElement {
   #zoneMode: "host" | "domain" = "host";
   #inactiveLanePositions: Record<string, Point> = {};
   #domains: DomainInfo[] = [];
+  // Ob die Domain-Verwaltung erreichbar ist (Admin-Recht): dann gibt es die Schaltfläche „Domain-Ansicht“ auch ohne angelegte Domain.
+  #domainsOk = false;
   #freeRootPositions: Record<string, Point> = {};
   // Nutzerfund 2026-08-14 ("brauchen Möglichkeit, die Host-Frames zu
   // resizen"): Breiten-Override je Zonen-ID, per Ziehgriff gesetzt
@@ -1908,6 +1910,7 @@ export class FlowCanvas extends HTMLElement {
     if (this.#hostViewUserSet) return;
     const shouldEnable = this.#paletteHosts.length > 1;
     if (shouldEnable !== this.#hostViewEnabled) this.#toggleHostView(shouldEnable, false);
+    this.#ensureZonesVisible();
   }
 
   // Kapitel 13 Teil 2 (§13.4: "Zone einklappbar, analog B5-Gruppe") —
@@ -1931,6 +1934,29 @@ export class FlowCanvas extends HTMLElement {
     }
     this.#setZoneMode(mode);
     if (!this.#hostViewEnabled) this.#toggleHostView(true);
+    // Der gespeicherte Ausschnitt gehört zur vorigen Ansicht (anderes Layout, anderer Maßstab): auf die neue einpassen.
+    this.#fitAllToViewport();
+  }
+
+  // Beim ersten Anzeigen der Zonen nach dem Laden gehört der gespeicherte Ausschnitt oft zu einer anderen Ansicht (z. B. der
+  // verkleinerten freien Ansicht) und schiebt die Zonen zur Seite oder aus dem Bild: einmal einpassen, wenn sie nicht
+  // vollständig und halbwegs mittig sichtbar sind. Danach bleibt der Ausschnitt dem Nutzer überlassen.
+  #zonesEnsured = false;
+  #ensureZonesVisible() {
+    if (this.#zonesEnsured || !this.#hostViewEnabled || this.#scope !== null || this.#workflowEditId) return;
+    const tiles = this.#rootZoneTiles();
+    const zones = this.#hostZones(tiles);
+    const last = zones[zones.length - 1];
+    const offsets = this.#laneOffsets(tiles);
+    const rect = this.#svg.getBoundingClientRect();
+    if (!last || rect.width <= 0) return;
+    this.#zonesEnsured = true;
+    const minX = HOST_ZONE_MARGIN;
+    const maxX = offsets.get(last.id)! + this.#laneWidth(last.id);
+    const sx1 = this.#viewport.x + minX * this.#viewport.scale;
+    const sx2 = this.#viewport.x + maxX * this.#viewport.scale;
+    const off = sx1 < 0 || sx2 > rect.width || sx1 > rect.width * 0.2;
+    if (off || this.#viewport.scale < 0.15 || this.#viewport.scale > 1.01) this.#fitAllToViewport();
   }
 
   // Tauscht die gemerkten Lane-Positionen der beiden Ansichten (Lanes sind je Ansicht andere) und ordnet neu ein.
@@ -3578,16 +3604,24 @@ export class FlowCanvas extends HTMLElement {
       hostViewBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
       hostViewBtn.addEventListener("click", () => this.#chooseZoneView("host"));
       this.#breadcrumbBar.appendChild(hostViewBtn);
-      // Domain-Ansicht (Kap. 103): nur anbieten, wenn es benannte MXL-Domains gibt (oder sie gerade aktiv ist).
-      if (hasNamedDomains(this.#domains) || this.#zoneMode === "domain") {
+      // Domain-Ansicht (Kap. 103): immer anbieten, solange die Domain-Verwaltung erreichbar ist; ohne benannte Domain erklärt der
+      // Hinweis, wie man eine anlegt (sonst wirkte die Funktion „verschwunden“).
+      if (this.#domainsOk || this.#zoneMode === "domain") {
         const domainBtn = document.createElement("button");
         domainBtn.setAttribute("data-role", "domain-view-toggle");
         const domainActive = this.#hostViewEnabled && this.#zoneMode === "domain";
         domainBtn.textContent = domainActive ? tt("flow.domainView.on") : tt("flow.domainView.off");
-        domainBtn.title = tt("flow.domainView.hint");
+        const noDomain = !hasNamedDomains(this.#domains) && !domainActive;
+        domainBtn.title = noDomain ? tt("flow.domainView.noDomains") : tt("flow.domainView.hint");
         if (domainActive) domainBtn.className = "omp-btn-primary";
-        domainBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
-        domainBtn.addEventListener("click", () => this.#chooseZoneView("domain"));
+        domainBtn.style.cssText = "font-size:var(--omp-font-size-xs);" + (noDomain ? "opacity:.6;" : "");
+        domainBtn.addEventListener("click", () => {
+          if (noDomain) {
+            this.#showToast(tt("flow.domainView.noDomains"));
+            return;
+          }
+          this.#chooseZoneView("domain");
+        });
         this.#breadcrumbBar.appendChild(domainBtn);
       }
     }
@@ -6613,9 +6647,10 @@ export class FlowCanvas extends HTMLElement {
         apiFetch("/api/v1/admin/mxl/domains").catch(() => null),
       ]);
       // Domains (Kap. 103): Admin-Endpunkt, ohne Recht oder ohne Verwaltung (403/404) bleibt die Liste leer.
-      const prevDomains = JSON.stringify(this.#domains.map((d) => d.name));
+      const prevDomains = JSON.stringify(this.#domains.map((d) => d.name)) + String(this.#domainsOk);
+      this.#domainsOk = !!domainsRes?.ok;
       this.#domains = domainsRes?.ok ? (((await domainsRes.json()) as { domains?: DomainInfo[] }).domains ?? []) : [];
-      if (JSON.stringify(this.#domains.map((d) => d.name)) !== prevDomains) {
+      if (JSON.stringify(this.#domains.map((d) => d.name)) + String(this.#domainsOk) !== prevDomains) {
         this.#renderBreadcrumb();
         if (this.#hostViewEnabled && this.#zoneMode === "domain") this.#render();
       }

@@ -1183,6 +1183,7 @@ export const de = {
   "flow.domainView.moveFail": "Domain-Wechsel fehlgeschlagen: {msg}",
   "flow.domainView.moveWorkflow": "Diese Kachel gehört zu einem Workflow: die Domain dort in den Workflow-Einstellungen oder an der Rolle ändern.",
   "flow.domainView.moveNone": "Es gibt keine andere Domain, in die verschoben werden könnte.",
+  "flow.domainView.noDomains": "Es gibt noch keine MXL-Domain. Unter Administration → Wartung → MXL-Flows mit „Neue Domain“ eine anlegen, dann gruppiert die Domain-Ansicht den Flow-Editor danach.",
   "flow.domainView.bridgeTip": "Domain-Brücke: liest aus „{from}“, schreibt nach „{to}“",
   "rd.domain.target": "Zieldomain dieser Brücke (Domain der geschriebenen Flows). Die Domain links daneben ist ihr Eingang.",
   "rd.domain.targetPick": "→ Ziel wählen",

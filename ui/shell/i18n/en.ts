@@ -1184,6 +1184,7 @@ export const en: Record<keyof typeof de, string> = {
   "flow.domainView.moveFail": "Domain change failed: {msg}",
   "flow.domainView.moveWorkflow": "This tile belongs to a workflow: change the domain in the workflow settings or on the role.",
   "flow.domainView.moveNone": "There is no other domain to move to.",
+  "flow.domainView.noDomains": "There is no MXL domain yet. Create one under Administration → Maintenance → MXL flows with \u201cNew domain\u201d; then the domain view groups the flow editor by it.",
   "flow.domainView.bridgeTip": "Domain bridge: reads from \u201c{from}\u201d, writes to \u201c{to}\u201d",
   "rd.domain.target": "Target domain of this bridge (domain of the written flows). The domain to its left is its input.",
   "rd.domain.targetPick": "→ choose target",
