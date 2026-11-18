@@ -4,14 +4,15 @@ go 1.26.9
 
 require (
 	github.com/expr-lang/expr v1.17.8
+	github.com/go-asn1-ber/asn1-ber v1.5.8
 	github.com/go-ldap/ldap/v3 v3.4.15
 	github.com/hashicorp/raft v1.8.0
 	github.com/hashicorp/raft-boltdb/v2 v2.4.2
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/minio/minio-go/v7 v7.4.1
 	github.com/nats-io/nats.go v1.55.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 )
 
 require (
@@ -20,7 +21,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
-	github.com/go-asn1-ber/asn1-ber v1.5.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
@@ -42,9 +42,9 @@ require (
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.etcd.io/bbolt v1.4.1 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/net v0.60.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
 )
 
@@ -57,7 +57,7 @@ require (
 	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
-	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 )
 
 replace github.com/infantilo/openmediaplatform/tools/contract-check => ../tools/contract-check
