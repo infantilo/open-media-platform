@@ -308,6 +308,8 @@ type Service struct {
 	authz AuthzBinder
 	// alertRules (Kap. 83): E-Mail-Alarmregeln je Workflow — beim Löschen aufräumen, beim Export/Import mitnehmen. nil = aus.
 	alertRules AlertRuleBinder
+	// domains (Kap. 103): Prüfung benannter MXL-Domains beim Start; nil = nicht eingeschaltet.
+	domains DomainResolver
 	// hostMetrics (K7 Teil 4, failover.go) — s. SetHostMetrics/
 	// HostMetricsReader. Nil = Host-Offline-Failover-Trigger bleibt aus
 	// (kein Crash, nur ein fehlendes Feature ohne Verdrahtung, gleiches
@@ -805,6 +807,10 @@ func (s *Service) Start(ctx context.Context, id string) error {
 	if _, err := computeDelayPlan(wf.Definition, s.launcher.Catalog()); err != nil {
 		return err
 	}
+	// Kap. 103: genutzte MXL-Domains müssen angelegt sein (Abbruch vor dem ersten Node).
+	if err := s.checkDomains(wf.Definition); err != nil {
+		return err
+	}
 	// D13 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10): I/O-Karten-Port-
 	// Claim als DRITTER Preflight, gleiche Position/Begründung wie die
 	// beiden Latenz-Prüfungen oben (VOR StatusStarting) — anders als
@@ -1014,6 +1020,7 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 		// statt mutierten Map.
 		roleEnv := roleExtraEnv(extraEnv, role)
 		roleEnv = s.withRoleHooks(roleEnv, wf.Definition, role)
+		roleEnv = withRoleDomain(roleEnv, wf.Definition, role)
 		roleEnv = withRoleSeed(roleEnv, wf.ID, role.Name)
 		// D13-Fix (2026-08-20, s. ioPortExtraEnv-Doku): der geclaimte
 		// physische Port muss an die Instanz weitergereicht werden, sonst
@@ -1602,6 +1609,7 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 	// role.MixerLevels (Nutzerwunsch 2026-08-14) additiv gemergt.
 	roleEnv := roleExtraEnv(extraEnv, role)
 	roleEnv = s.withRoleHooks(roleEnv, wf.Definition, role)
+	roleEnv = withRoleDomain(roleEnv, wf.Definition, role)
 	roleEnv = withRoleSeed(roleEnv, wf.ID, role.Name)
 
 	resolvedHostID := role.HostID
@@ -2283,6 +2291,9 @@ func validate(def Definition) error {
 		if _, ok := standardFormats[def.Settings.ProgramFormat]; !ok {
 			return fmt.Errorf("%w: settings reference unknown format %q (not one of %v)", ErrValidation, def.Settings.ProgramFormat, StandardFormatNames())
 		}
+	}
+	if err := validateDomainNames(def); err != nil {
+		return err
 	}
 	nodeTypeByRole := map[string]string{}
 	for _, r := range def.Roles {

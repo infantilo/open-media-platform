@@ -62,9 +62,11 @@ const (
 // demselben RedundancyGroup-Tag bevorzugt AUSEINANDER gehalten (aber nie
 // so strikt, dass ein Start deswegen scheitert).
 type Role struct {
-	Name            string `json:"name"`
-	NodeType        string `json:"nodeType"`
-	HostID          string `json:"hostId,omitempty"`
+	Name     string `json:"name"`
+	NodeType string `json:"nodeType"`
+	HostID   string `json:"hostId,omitempty"`
+	// Domain überschreibt Settings.Domain für diese Rolle (Kap. 103); leer = die des Workflows.
+	Domain          string `json:"domain,omitempty"`
 	AffinityGroup   string `json:"affinityGroup,omitempty"`
 	RedundancyGroup string `json:"redundancyGroup,omitempty"`
 	// Format (Nutzerwunsch 2026-07-28): benanntes Standard-Auflösung+
@@ -281,6 +283,8 @@ type Settings struct {
 	// bekommen die Framerate der Workflow-weiten Einstellung damit zum
 	// ersten Mal überhaupt mit, nicht nur die Auflösung.
 	ProgramFormat string `json:"programFormat,omitempty"`
+	// Domain: getrennte MXL-Domain für alle Rollen des Workflows (Kap. 103, s. domain.go); leer = Standarddomain.
+	Domain string `json:"domain,omitempty"`
 	// ConfirmStop (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 2): wenn gesetzt,
 	// verlangt Stop() ein explizites confirm=true (zweistufig — ein Stop
 	// ohne Bestätigung wird mit ErrConfirmationRequired abgelehnt, die UI

@@ -93,11 +93,8 @@ func TestPostInstanceWithDomain(t *testing.T) {
 	if rec := postInstance(t, cl, ds, `{"type":"omp-source","domain":"test"}`); rec.Code != http.StatusOK {
 		t.Fatalf("known domain: %d %s", rec.Code, rec.Body)
 	}
-	if got := cl.env["OMP_MXL_DOMAIN"]; got != ds.PathFor("test") {
-		t.Fatalf("env = %v", cl.env)
-	}
-	if st, err := os.Stat(ds.PathFor("test")); err != nil || !st.IsDir() {
-		t.Fatalf("Domain-Verzeichnis wurde nicht angelegt: %v", err)
+	if got := cl.env["OMP_MXL_DOMAIN_NAME"]; got != "test" || cl.env["OMP_MXL_DOMAIN"] != "" {
+		t.Fatalf("env = %v (nur der Name, nie ein Pfad)", cl.env)
 	}
 
 	cl.env = nil
@@ -110,11 +107,14 @@ func TestPostInstanceWithDomain(t *testing.T) {
 	if rec := postInstance(t, cl, ds, `{"type":"omp-source","domain":"nope"}`); rec.Code != http.StatusNotFound {
 		t.Fatalf("unbekannte Domain: %d", rec.Code)
 	}
-	if rec := postInstance(t, cl, ds, `{"type":"omp-source","domain":"test","hostId":"h1"}`); rec.Code != http.StatusBadRequest {
-		t.Fatalf("entfernter Host: %d", rec.Code)
+	// entfernte Hosts und Container-Nodes: der Name reist mit, den Pfad leitet der Zielort ab
+	cl.env = nil
+	if rec := postInstance(t, cl, ds, `{"type":"omp-source","domain":"test","hostId":"h1"}`); rec.Code != http.StatusOK || cl.env["OMP_MXL_DOMAIN_NAME"] != "test" {
+		t.Fatalf("entfernter Host: %d env=%v", rec.Code, cl.env)
 	}
-	if rec := postInstance(t, cl, ds, `{"type":"box","domain":"test"}`); rec.Code != http.StatusBadRequest {
-		t.Fatalf("Container-Node: %d", rec.Code)
+	cl.env = nil
+	if rec := postInstance(t, cl, ds, `{"type":"box","domain":"test"}`); rec.Code != http.StatusOK || cl.env["OMP_MXL_DOMAIN_NAME"] != "test" {
+		t.Fatalf("Container-Node: %d env=%v", rec.Code, cl.env)
 	}
 	if rec := postInstance(t, cl, nil, `{"type":"omp-source","domain":"test"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("ohne Domain-Verwaltung: %d", rec.Code)
@@ -122,10 +122,9 @@ func TestPostInstanceWithDomain(t *testing.T) {
 }
 
 func TestSameMXLDomain(t *testing.T) {
-	ds := newMemDomains(t, "test")
 	ls := fakeLauncherService{instances: []launcher.Instance{
-		{ID: "a", ExtraEnv: map[string]string{"OMP_MXL_DOMAIN": ds.PathFor("test")}},
-		{ID: "b", ExtraEnv: map[string]string{"OMP_MXL_DOMAIN": ds.PathFor("test") + "/"}},
+		{ID: "a", ExtraEnv: map[string]string{"OMP_MXL_DOMAIN_NAME": "test"}},
+		{ID: "b", ExtraEnv: map[string]string{"OMP_MXL_DOMAIN_NAME": "test"}},
 		{ID: "c"},
 	}}
 	g := graph.Graph{Nodes: []graph.Node{
@@ -134,22 +133,22 @@ func TestSameMXLDomain(t *testing.T) {
 		{ID: "nc", InstanceID: "c", Outputs: []graph.Port{{ID: "sc"}}, Inputs: []graph.Port{{ID: "rc"}}},
 		{ID: "nx", Outputs: []graph.Port{{ID: "sx"}}, Inputs: []graph.Port{{ID: "rx"}}}, // nicht vom Launcher
 	}}
-	if err := sameMXLDomain(g, ls, ds, "sa", "rb"); err != nil {
+	if err := sameMXLDomain(g, ls, "sa", "rb"); err != nil {
 		t.Errorf("gleiche Domain (auch mit Schrägstrich): %v", err)
 	}
-	if err := sameMXLDomain(g, ls, ds, "sa", "rc"); err == nil || !strings.Contains(err.Error(), "test / default") {
+	if err := sameMXLDomain(g, ls, "sa", "rc"); err == nil || !strings.Contains(err.Error(), "test / default") {
 		t.Errorf("test -> default muss abgelehnt werden: %v", err)
 	}
-	if err := sameMXLDomain(g, ls, ds, "sc", "ra"); err == nil {
+	if err := sameMXLDomain(g, ls, "sc", "ra"); err == nil {
 		t.Errorf("default -> test muss abgelehnt werden")
 	}
-	if err := sameMXLDomain(g, ls, ds, "sc", "rx"); err != nil {
+	if err := sameMXLDomain(g, ls, "sc", "rx"); err != nil {
 		t.Errorf("Standarddomain zu fremdem Node: %v", err)
 	}
-	if err := sameMXLDomain(g, ls, ds, "unbekannt", "rc"); err != nil {
+	if err := sameMXLDomain(g, ls, "unbekannt", "rc"); err != nil {
 		t.Errorf("unbekannte Ports ändern nichts: %v", err)
 	}
-	if err := sameMXLDomain(g, nil, ds, "sa", "rc"); err != nil {
+	if err := sameMXLDomain(g, nil, "sa", "rc"); err != nil {
 		t.Errorf("ohne Launcher keine Prüfung: %v", err)
 	}
 }
@@ -160,7 +159,7 @@ func TestDeleteMXLDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	ls := fakeLauncherService{instances: []launcher.Instance{
-		{ID: "a", Label: "Quelle", ExtraEnv: map[string]string{"OMP_MXL_DOMAIN": ds.PathFor("test")}},
+		{ID: "a", Label: "Quelle", ExtraEnv: map[string]string{"OMP_MXL_DOMAIN_NAME": "test"}},
 	}}
 	del := func(name string) int {
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/mxl/domains/"+name, nil)

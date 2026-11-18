@@ -264,21 +264,6 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 			http.Error(w, derr.Error(), status)
 			return
 		}
-		if domainEnv != nil {
-			// Entfernte Hosts (eigene Domain, Host-Agent-Allowlist) und Container-Nodes (Mount der Standarddomain)
-			// kennen noch keine Instanz-Domain — ehrlich ablehnen statt still in der falschen Domain zu starten.
-			if body.HostID != "" {
-				http.Error(w, "domain is only supported for instances on the orchestrator host (hostId must be empty)", http.StatusBadRequest)
-				return
-			}
-			for _, e := range svc.Catalog() {
-				if e.Type == body.Type && e.Runner == "podman" {
-					http.Error(w, "domain is not supported for container nodes yet", http.StatusBadRequest)
-					return
-				}
-			}
-		}
-
 		// Direkter Katalog-Start hat keinen Workflow-Kontext, also
 		// normalerweise kein extraEnv (Kapitel 15, s. launcher.Launcher.
 		// Start-Doku) — Nodes laufen mit ihren Katalog-/Programm-Defaults,

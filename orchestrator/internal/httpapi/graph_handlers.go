@@ -27,7 +27,7 @@ func handleGraph(svc GraphService) http.HandlerFunc {
 // Verbindungsversuch sieht, kann die trace_id direkt aus den
 // Browser-Devtools ins Diagnose-Cockpit (§25.3, GET /api/v1/logs)
 // übernehmen.
-func handlePostGraphEdge(svc GraphService, ls LauncherService, ds MXLDomainStore) http.HandlerFunc {
+func handlePostGraphEdge(svc GraphService, ls LauncherService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			From string `json:"from"`
@@ -42,7 +42,7 @@ func handlePostGraphEdge(svc GraphService, ls LauncherService, ds MXLDomainStore
 		w.Header().Set(tracing.HeaderTraceID, tracing.TraceID(ctx))
 		// Getrennte MXL-Domains (Kap. 103): Flows sind nur innerhalb einer Domain lesbar — eine Kante über die
 		// Grenze würde still ohne Bild bleiben, daher klar ablehnen.
-		if err := sameMXLDomain(svc.Graph(ctx), ls, ds, body.From, body.To); err != nil {
+		if err := sameMXLDomain(svc.Graph(ctx), ls, body.From, body.To); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}

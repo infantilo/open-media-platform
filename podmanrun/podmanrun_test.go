@@ -80,3 +80,29 @@ func TestRunError(t *testing.T) {
 		t.Fatal("Fehler erwartet")
 	}
 }
+
+func TestDomainPathAndBuildArgs(t *testing.T) {
+	t.Setenv("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl")
+	for name, want := range map[string]string{"test": "/dev/shm/omp-mxl-test", "studio-2": "/dev/shm/omp-mxl-studio-2"} {
+		if got, ok := DomainPath(name); !ok || got != want {
+			t.Errorf("DomainPath(%q) = %q, %v", name, got, ok)
+		}
+	}
+	for _, bad := range []string{"", "default", "Test", "1a", "a--b", "../x", "a/b", "a-"} {
+		if _, ok := DomainPath(bad); ok {
+			t.Errorf("%q muss abgelehnt werden", bad)
+		}
+	}
+	e := Entry{Type: "box", Image: "img", MxlAccess: true}
+	args := strings.Join(BuildArgs(e, Params{ID: "i1", ExtraEnv: map[string]string{DomainNameKey: "test"}}, 1234, 0), " ")
+	if !strings.Contains(args, "-v /dev/shm/omp-mxl-test:/dev/shm/omp-mxl-test") || !strings.Contains(args, "OMP_MXL_DOMAIN=/dev/shm/omp-mxl-test") {
+		t.Errorf("Domain nicht eingehängt: %s", args)
+	}
+	if strings.Contains(args, DomainNameKey) {
+		t.Errorf("der Name darf nicht in die Container-Umgebung: %s", args)
+	}
+	plain := strings.Join(BuildArgs(e, Params{ID: "i1"}, 1234, 0), " ")
+	if !strings.Contains(plain, "-v /dev/shm/omp-mxl:/dev/shm/omp-mxl") || strings.Contains(plain, "omp-mxl-") {
+		t.Errorf("Standard unverändert: %s", plain)
+	}
+}

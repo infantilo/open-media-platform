@@ -542,7 +542,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/nodes/{id}/https-info", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/https-info", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/graph", g.requireAuth(handleGraph(graphSvc)))
 	mux.HandleFunc("GET /api/v1/graph/network", g.requireAuth(handleGraphNetwork(hostRegistry, hostMetrics, launcherSvc, placementThresholds)))
-	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbOnReceiver(authz.VerbOperate, handlePostGraphEdge(graphSvc, launcherSvc, options.mxlDomains)))
+	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbOnReceiver(authz.VerbOperate, handlePostGraphEdge(graphSvc, launcherSvc)))
 	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", g.requireVerbOnReceiver(authz.VerbOperate, handleDeleteGraphEdge(graphSvc)))
 	mux.HandleFunc("GET /api/v1/layouts/{name}", g.requireAuth(handleGetLayout(layoutStore)))
 	mux.HandleFunc("PUT /api/v1/layouts/{name}", g.requireVerbGlobal(authz.VerbConfigure, handlePutLayout(layoutStore)))

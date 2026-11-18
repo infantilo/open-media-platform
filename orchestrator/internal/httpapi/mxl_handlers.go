@@ -13,6 +13,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mxldomains"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mxlflows"
+	"github.com/infantilo/openmediaplatform/podmanrun"
 )
 
 // mxlFlowView ist ein Flow der lokalen MXL-Domain mit der zugeordneten OMP-Instanz (falls der Schreiber ein
@@ -93,9 +94,9 @@ func WithMXLDomains(s MXLDomainStore) HandlerOption {
 	return func(o *handlerOptions) { o.mxlDomains = s }
 }
 
-// instanceDomainPath: die Domain einer vom Launcher gestarteten Instanz (OMP_MXL_DOMAIN im Instanz-Env); leer =
-// Standarddomain.
-func instanceDomainPath(in launcher.Instance) string { return in.ExtraEnv["OMP_MXL_DOMAIN"] }
+// instanceDomain: der Domainname einer vom Launcher gestarteten Instanz (extraEnv OMP_MXL_DOMAIN_NAME, auch auf
+// entfernten Hosts und für Container-Nodes); leer = Standarddomain.
+func instanceDomain(in launcher.Instance) string { return in.ExtraEnv[podmanrun.DomainNameKey] }
 
 type mxlDomainView struct {
 	mxldomains.Domain
@@ -115,7 +116,7 @@ func handleListMXLDomains(ds MXLDomainStore, ls LauncherService) http.HandlerFun
 		perDomain := map[string]int{}
 		if ls != nil {
 			for _, in := range ls.List() {
-				perDomain[ds.NameForPath(instanceDomainPath(in))]++
+				perDomain[domainOrDefault(instanceDomain(in))]++
 			}
 		}
 		out := make([]mxlDomainView, 0, len(list))
@@ -180,7 +181,7 @@ func handleDeleteMXLDomain(ds MXLDomainStore, ls LauncherService, audit DomainAu
 		}
 		if ls != nil {
 			for _, in := range ls.List() {
-				if ds.NameForPath(instanceDomainPath(in)) == name {
+				if instanceDomain(in) == name {
 					http.Error(w, fmt.Sprintf("domain %q is used by instance %q (%s)", name, in.Label, in.ID), http.StatusConflict)
 					return
 				}
@@ -206,7 +207,9 @@ func handleDeleteMXLDomain(ds MXLDomainStore, ls LauncherService, audit DomainAu
 	}
 }
 
-// domainStartEnv übersetzt den Domainnamen eines Instanzstarts in das Instanz-Env (D2). Standarddomain → kein Env.
+// domainStartEnv übersetzt den Domainnamen eines Instanzstarts in extraEnv (D2). Standarddomain → kein Env. Der Pfad
+// entsteht erst dort, wo die Instanz läuft (Launcher, Host-Agent, Container: podmanrun.DomainPath). Für den
+// Orchestrator-Rechner wird das Verzeichnis sofort angelegt; entfernte Hosts legen es selbst an.
 func domainStartEnv(ds MXLDomainStore, name string) (map[string]string, error) {
 	if name == "" || name == mxldomains.DefaultName {
 		return nil, nil
@@ -214,19 +217,22 @@ func domainStartEnv(ds MXLDomainStore, name string) (map[string]string, error) {
 	if ds == nil {
 		return nil, fmt.Errorf("MXL domains are not enabled on this orchestrator")
 	}
-	path, err := ds.Resolve(name)
-	if err != nil {
+	if _, err := ds.Resolve(name); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		return nil, err
+	return map[string]string{podmanrun.DomainNameKey: name}, nil
+}
+
+func domainOrDefault(n string) string {
+	if n == "" {
+		return mxldomains.DefaultName
 	}
-	return map[string]string{"OMP_MXL_DOMAIN": path}, nil
+	return n
 }
 
 // sameMXLDomain prüft vor einer Verbindung, ob Sender und Empfänger in derselben MXL-Domain liegen. Nur vom Launcher
 // gestartete Nodes sind bekannt; alle anderen gelten als Standarddomain. Nicht verbindbar → Fehlertext.
-func sameMXLDomain(g graph.Graph, ls LauncherService, ds MXLDomainStore, fromSender, toReceiver string) error {
+func sameMXLDomain(g graph.Graph, ls LauncherService, fromSender, toReceiver string) error {
 	if ls == nil {
 		return nil
 	}
@@ -245,25 +251,16 @@ func sameMXLDomain(g graph.Graph, ls LauncherService, ds MXLDomainStore, fromSen
 	}
 	domainOf := func(id string) string {
 		if id == "" {
-			return ""
+			return mxldomains.DefaultName
 		}
 		if in, ok := ls.Get(id); ok {
-			return strings.TrimRight(instanceDomainPath(in), "/")
+			return domainOrDefault(instanceDomain(in))
 		}
-		return ""
+		return mxldomains.DefaultName
 	}
 	a, b := domainOf(fromInst), domainOf(toInst)
 	if a == b {
 		return nil
 	}
-	name := func(p string) string {
-		if ds != nil {
-			return ds.NameForPath(p)
-		}
-		if p == "" {
-			return mxldomains.DefaultName
-		}
-		return p
-	}
-	return fmt.Errorf("sender and receiver are in different MXL domains (%s / %s); a bridge between the domains is needed", name(a), name(b))
+	return fmt.Errorf("sender and receiver are in different MXL domains (%s / %s); a bridge between the domains is needed", a, b)
 }

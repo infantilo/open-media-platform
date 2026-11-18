@@ -71,6 +71,37 @@ func MxlDomainPath() string {
 	return DefaultMxlDomain
 }
 
+// DomainNameKey ist der extraEnv-Schlüssel, mit dem der Orchestrator den NAMEN einer getrennten MXL-Domain an eine
+// Instanz weitergibt (Kap. 103). Der Pfad wird erst dort abgeleitet, wo die Instanz läuft (Orchestrator-Rechner,
+// Host-Agent, Container): `<lokale Standarddomain>-<Name>` — ein Host mit anderem Standardpfad bekommt so seinen
+// eigenen, und über das Netz läuft nie ein Pfad.
+const DomainNameKey = "OMP_MXL_DOMAIN_NAME"
+
+// ValidDomainName: Kleinbuchstaben, Ziffern, Bindestrich; beginnt mit einem Buchstaben; höchstens 32 Zeichen; kein
+// "--", nicht "default" (gleiche Regel wie orchestrator/internal/mxldomains.ValidateName).
+func ValidDomainName(n string) bool {
+	if n == "" || n == "default" || len(n) > 32 || strings.Contains(n, "--") {
+		return false
+	}
+	for i, r := range n {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case i > 0 && (r >= '0' && r <= '9' || r == '-'):
+		default:
+			return false
+		}
+	}
+	return !strings.HasSuffix(n, "-")
+}
+
+// DomainPath leitet den Pfad einer benannten Domain aus der lokalen Standarddomain ab. Ungültiger Name → "", false.
+func DomainPath(name string) (string, bool) {
+	if !ValidDomainName(name) {
+		return "", false
+	}
+	return strings.TrimRight(MxlDomainPath(), "/") + "-" + name, true
+}
+
 // RewriteForContainer ersetzt localhost/127.0.0.1 im Host-Anteil durch ContainerNetworkGateway.
 func RewriteForContainer(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
@@ -152,8 +183,14 @@ func BuildArgs(e Entry, p Params, port, extraPort int) []string {
 	}
 	if e.MxlAccess {
 		domain := MxlDomainPath()
+		// Getrennte Domain (Kap. 103): nur DIESE Domain einhängen und dem Node ihren Pfad nennen.
+		if dp, ok := DomainPath(merged[DomainNameKey]); ok {
+			domain = dp
+			merged["OMP_MXL_DOMAIN"] = dp
+		}
 		args = append(args, "-v", domain+":"+domain)
 	}
+	delete(merged, DomainNameKey)
 	if e.MediaRead {
 		for _, d := range MediaMountPaths() {
 			args = append(args, "-v", d+":"+d+":ro")
@@ -195,6 +232,10 @@ func Run(e Entry, p Params) (containerID string, hostPort int, err error) {
 		if extraPort, err = FindFreePort(); err != nil {
 			return "", 0, err
 		}
+	}
+	// Getrennte MXL-Domain (Kap. 103): das Verzeichnis muss vor dem Einhängen existieren.
+	if dp, ok := DomainPath(p.ExtraEnv[DomainNameKey]); ok && e.MxlAccess {
+		_ = os.MkdirAll(dp, 0o755)
 	}
 	out, err := exec.Command(Binary, BuildArgs(e, p, port, extraPort)...).Output()
 	if err != nil {

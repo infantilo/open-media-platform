@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/infantilo/openmediaplatform/jobwire"
+	"github.com/infantilo/openmediaplatform/podmanrun"
 	"io"
 	"log/slog"
 	"os"
@@ -2700,6 +2701,12 @@ func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, launchSec
 	for k, v := range extraEnv {
 		merged[k] = v
 	}
+	// Getrennte MXL-Domain (Kap. 103): der Name aus extraEnv wird hier — wo die Instanz läuft — zum Pfad.
+	if dp, ok := podmanrun.DomainPath(merged[podmanrun.DomainNameKey]); ok {
+		merged["OMP_MXL_DOMAIN"] = dp
+		_ = os.MkdirAll(dp, 0o755)
+	}
+	delete(merged, podmanrun.DomainNameKey)
 	merged["OMP_INSTANCE_ID"] = instanceID
 	merged["OMP_LABEL"] = label
 	merged["OMP_PORT"] = "0"
