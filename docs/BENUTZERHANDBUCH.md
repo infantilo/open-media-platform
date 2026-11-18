@@ -1268,6 +1268,18 @@ untereinander):
 ![Administration: Nutzer, Rollenbindungen, Node-Katalog, Audit-Log](screenshots/administration.png)
 
 - **Nutzer** — anlegen, Passwort zurücksetzen, löschen.
+- **MXL-Flows** (in „Wartung“) — zeigt die Flows der MXL-Domain des Rechners, auf
+  dem der Orchestrator läuft (`OMP_MXL_DOMAIN`, Standard `/dev/shm/omp-mxl`):
+  Name, Format, Zustand, **Schreiber** und belegten Speicher. Der Schreiber ist der
+  Prozess, der den Flow beschreibt (Programmname, PID, bei Containern die
+  Container-Kennung); stammt er von einer Instanz, die der Orchestrator gestartet
+  hat, steht deren Name davor. Ein Flow ohne Schreiber ist ein **Rest** (orange):
+  Das Verzeichnis liegt noch im Arbeitsspeicher, obwohl der Node beendet wurde oder
+  abgestürzt ist. Die Ansicht hilft bei „Bild bleibt stehen“, bei vollem
+  `/dev/shm` und bei Flows, die kein Node der Plattform beschreibt. Sie liest nur;
+  entfernt wird nichts. Das Suchfeld filtert nach Name, Flow-ID, Node, Programm,
+  PID und Container. Entfernte Hosts haben eine eigene Domain und erscheinen hier
+  nicht.
 - **Verbundene Clients** (in „Zugang & Rechte“) — zeigt, wer gerade mit einem
   Browser an der Oberfläche hängt: je offener Verbindung **Benutzer**,
   **Adresse** (hinter einem Reverse-Proxy auf demselben Rechner die Adresse des
@@ -2345,6 +2357,36 @@ Der Node **Geräte-Hub** (Katalog: „Geräte-Hub“) erkennt die Kameras, Captu
 - **Capture Card (DeckLink, AJA, SDK-Karte mit Betreiber-Plugin):** Ein Katalogeintrag **Capture Card**, eine Instanz je Karte. Im Start-Dialog zuerst den **Host** wählen, an dem die Karte steckt: der Assistent erkennt die Karten dieses Hosts und zeigt je Anschluss **Eingang** und **Ausgang** mit dem Zustand **frei** oder **belegt (von …)**. Häkchen setzen, was die Instanz bedienen soll („Alle freien wählen“ nimmt die ganze Karte). Jeder gewählte Eingang wird zu einem Video- und einem Audio-Sender (Karte → MXL), jeder Ausgang zu drei Empfängern (Video, Audio, ANC/Untertitel; MXL → Karte). **Duplex-Anschlüsse** (DeckLink IP, SDI mit Duplex-Profil) liefern Eingang und Ausgang gleichzeitig in derselben Instanz, wie beim Geräte-Hub. Belegte Anschlüsse sind nicht wählbar und werden beim Stoppen der Instanz wieder frei. Im Workflow belegt eine Rolle einen Anschluss (Hersteller + Richtung im Dropdown der Rolle) oder mit **Ein- und Ausgang (Duplex)** beide Richtungen desselben Geräts gemeinsam; die Planung zählt dann einen Eingang und einen Ausgang. AJA braucht das GStreamer-Plugin von AJA; Der Hersteller liefert kein öffentliches Plugin, der Host braucht ein auf dem Hersteller-SDK gebautes mit den vier Elementnamen in „GStreamer-Elemente“ (**SDK-Karte mit Betreiber-Plugin:** das Plugin meldet keine Geräte, deshalb legen Sie die Anschlüsse im Assistenten selbst an — „Karte ohne automatische Erkennung hinzufügen“: Name, Anzahl der Anschlüsse, Duplex/nur Eingang/nur Ausgang; mit „Entfernen“ nehmen Sie ein Gerät wieder heraus, solange nichts darauf läuft. Wählen Sie dann Anschlüsse dieser Karte, erscheint das Feld für die vier Elementnamen des Plugins; ohne sie lässt sich nicht starten. Alternativ steht die Karte in der Inventardatei des Host-Agents, Port-IDs `matrox-<N>-in|out`). Fehlt Karte oder Plugin, startet die Instanz mit Fehler. Die Erkennung und alle Karten-Pfade sind noch nicht an echter Hardware geprüft.
 - **Karten im ST-2110-Betrieb (z. B. AJA KONA IP):** Die Karte meldet sich per NMOS im Netz; ihre Sender und Empfänger erscheinen in der Kreuzschiene und werden über das **ST-2110-Gateway** angebunden. Dafür ist kein eigener Node nötig.
 - **Netzwerkkarten (NVIDIA Mellanox ConnectX, Intel):** Der Host-Agent meldet je Karte Hersteller, Treiber, Link, PTP-Hardware-Uhr, RDMA und die möglichen Beschleunigungswege. Der ST-2110-Pfad nutzt den Kernel-Socket; `OMP_2110_TRANSPORT=mtl` ist für Intel MTL vorbereitet (noch nicht verdrahtet, die Logzeile nennt den Rückfall).
+
+## 10c-2b. HLS-Eingang (Webquelle, CDN-Feed)
+
+Der Node **HLS Source** (`omp-hls-source`) holt einen HTTP-Live-Streaming-Strom
+(RFC 8216, Adresse auf `.m3u8`) und macht ihn zu einer normalen Live-Quelle:
+Video und Ton erscheinen als MXL-Flows und lassen sich wie jede Kamera in
+Mischer, Switcher, Viewer oder Aufnahme verdrahten.
+
+1. **Instanz anlegen** (Flow Editor, Katalog „HLS Source“).
+2. **Adresse eintragen:** Administration → Einstellungen → Node-Typ „HLS Source“ →
+   *HLS-Adresse* (`http://` oder `https://`). Andere Schemata lehnt der Node ab.
+   Instanz neu starten, die Adresse wirkt erst dann.
+3. **Format:** Der Node schreibt in das Format des Workflows (oder der Optionen
+   Breite/Höhe/Bildrate, Standard 1280×720 bei 25 Bildern). Der Stream wird darauf
+   skaliert und angepasst — er wird nicht aus dem Stream erkannt.
+4. Optional: *Höchste Bitrate* (Obergrenze für die Variantenwahl einer
+   Master-Playlist) und *Stillstandszeit* (Sekunden ohne neues Bild, nach denen
+   neu verbunden wird, Standard 15, 0 = nie).
+
+Der Node **verbindet selbst neu**, wenn das Netz ausfällt, der Server den Stream
+beendet oder keine Bilder mehr kommen. Die Wartezeit wächst von 2 s auf höchstens
+30 s und beginnt nach dem ersten wieder gelieferten Bild von vorn. Der Zustand
+(`connecting`, `playing`, `reconnecting`), die Anzahl der Wiederverbindungen und
+die letzte Fehlermeldung stehen in den Parametern des Nodes. Bei einem Fehler
+kommt außerdem ein Alarm. Hat der Stream **keinen Ton**, trägt der Audio-Flow
+Stille (Parameter `hasAudio` = nein), damit nachgeschaltete Mischer einen gültigen
+Flow finden. Kein Zugangsdaten-Schutz in den Einstellungen: Wer eine Adresse mit
+Anmeldedaten oder Token einträgt, sieht sie dort im Klartext; die Anzeige am
+Node blendet Benutzer, Passwort und Query aus.
+
 
 ## 10c-3. X/Y-Panel (jede Quelle auf jede Senke schalten)
 

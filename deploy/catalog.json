@@ -11,6 +11,17 @@
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
   {
+    "type": "omp-hls-source",
+    "label": "HLS Source",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-hls-source"],
+    "env": {},
+    "description": "HLS-Eingang (HTTP Live Streaming, RFC 8216): holt einen Stream per http(s)-Adresse (.m3u8, z. B. CDN-Feed oder Webquelle), dekodiert ihn und schreibt Video und Ton als MXL-Flows. Die Adresse steht in den Node-Optionen (Administration → Einstellungen). Bild wird auf das Flow-Format skaliert und auf die Bildrate gebracht (Format aus dem Workflow oder den Optionen). Hat der Stream keinen Ton, trägt der Audio-Flow Stille. Bei Netzfehler, Stream-Ende oder Stillstand verbindet der Node selbst neu (2 s bis 30 s Wartezeit). Nur http/https, keine Zugangsdaten in der Anzeige.",
+    "i18n": { "en": {"description": "HLS input (HTTP Live Streaming, RFC 8216): fetches a stream from an http(s) address (.m3u8, e.g. a CDN feed or web source), decodes it and writes video and audio as MXL flows. The address is set in the node options (Administration → Settings). The picture is scaled to the flow format and brought to its frame rate (format from the workflow or the options). If the stream has no audio, the audio flow carries silence. On a network error, end of stream or stall the node reconnects by itself (2 s to 30 s wait). http/https only; no credentials shown in the UI.", "expectedResources": "medium (software decode, scaling), depends on stream and format"} },
+    "expectedResources": "mittel (Software-Dekodierung, Skalierung), abhängig von Stream und Format",
+    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
+  },
+  {
     "type": "omp-capture-card",
     "hostBound": true,
     "label": "Capture Card",

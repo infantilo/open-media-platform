@@ -682,6 +682,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	hostSysCache := newSysCache(options.hostSysinfo, 20*time.Second)
 	// Selbsttest und Support-Paket (Kap. 72): sammeln über den eigenen Router mit den Rechten der aufrufenden Person.
 	mux.HandleFunc("GET /api/v1/admin/selftest", g.requireVerbGlobal(authz.VerbAdmin, handleSelftest(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache, options.trends)))
+	// MXL-Flows der lokalen Domain mit Schreiber-Zuordnung und Rest-Erkennung.
+	mux.HandleFunc("GET /api/v1/admin/mxl/flows", g.requireVerbGlobal(authz.VerbAdmin, handleMXLFlows(launcherSvc)))
 	mux.HandleFunc("POST /api/v1/admin/support/analyze", g.requireVerbGlobal(authz.VerbAdmin, handleAnalyzeUpload()))
 	mux.HandleFunc("GET /api/v1/admin/support-bundle", g.requireVerbGlobal(authz.VerbAdmin, handleSupportBundle(mux, cfg.ClusterDataDir, clusterSvc, hostSysCache, nodeBinaryPaths(launcherSvc), options.trends)))
 	// Orchestrator-Cluster (ARCHITECTURE.md §19.3, UMSETZUNG.md D12 Teil 1).

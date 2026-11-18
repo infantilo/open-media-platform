@@ -480,6 +480,10 @@ with its own UI and self-described parameters (full list with
 functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 
 - **omp-source** — test sources (color bars etc. plus test tone)
+- **omp-hls-source** — HLS input (HTTP Live Streaming, RFC 8216): fetches a
+  stream by `http(s)` address, decodes it and writes video and audio as MXL
+  flows. Scales to the flow format, reconnects by itself after network errors,
+  end of stream or stall; a stream without audio yields a silent audio flow.
 - **omp-capture-card** — SDI/IP capture card bridge for Blackmagic DeckLink,
   AJA and (via an operator-built GStreamer plugin) other vendors' SDK cards; one
   instance per card. The start wizard lists the detected cards of the

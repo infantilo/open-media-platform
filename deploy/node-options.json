@@ -1,4 +1,116 @@
 {
+  "omp-hls-source": [
+    {
+      "key": "OMP_HLS_URL",
+      "i18n": {
+        "en": {
+          "label": "HLS address",
+          "description": "http:// or https:// address of the HLS playlist (.m3u8), e.g. https://example.com/live/index.m3u8. Takes effect after the instance restarts.",
+          "group": "Stream"
+        }
+      },
+      "label": "HLS-Adresse",
+      "type": "url",
+      "description": "http://- oder https://-Adresse der HLS-Playlist (.m3u8), z. B. https://example.com/live/index.m3u8. Wirkt nach einem Neustart der Instanz.",
+      "group": "Stream"
+    },
+    {
+      "key": "OMP_HLS_MAX_BITRATE_KBPS",
+      "i18n": {
+        "en": {
+          "label": "Maximum bitrate (kbit/s)",
+          "description": "Upper limit for the choice of variants in a master playlist. Empty or 0 = no limit.",
+          "group": "Stream"
+        }
+      },
+      "label": "Höchste Bitrate (kbit/s)",
+      "type": "int",
+      "description": "Obergrenze für die Variantenwahl einer Master-Playlist. Leer oder 0 = keine Grenze.",
+      "group": "Stream",
+      "min": 0,
+      "max": 200000
+    },
+    {
+      "key": "OMP_HLS_STALL_SECONDS",
+      "i18n": {
+        "en": {
+          "label": "Stall time (s)",
+          "description": "Seconds without a new picture after which the node reconnects (default 15, 0 = never). Before the first picture at least 30 s are allowed.",
+          "group": "Stream"
+        }
+      },
+      "label": "Stillstandszeit (s)",
+      "type": "int",
+      "description": "Sekunden ohne neues Bild, nach denen der Node neu verbindet (Standard 15, 0 = nie). Vor dem ersten Bild gelten mindestens 30 s.",
+      "group": "Stream",
+      "min": 0,
+      "max": 3600
+    },
+    {
+      "key": "OMP_WIDTH",
+      "i18n": {
+        "en": {
+          "label": "Width",
+          "description": "Picture width in pixels. Empty = from the workflow format or the node default.",
+          "group": "Format (empty = workflow format or node default)"
+        }
+      },
+      "label": "Breite",
+      "type": "int",
+      "description": "Bildbreite in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_HEIGHT",
+      "i18n": {
+        "en": {
+          "label": "Height",
+          "description": "Picture height in pixels. Empty = from the workflow format or the node default.",
+          "group": "Format (empty = workflow format or node default)"
+        }
+      },
+      "label": "Höhe",
+      "type": "int",
+      "description": "Bildhöhe in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_FRAMERATE_NUM",
+      "i18n": {
+        "en": {
+          "label": "Frame rate (numerator)",
+          "description": "e.g. 25 or 30000.",
+          "group": "Format (empty = workflow format or node default)"
+        }
+      },
+      "label": "Bildrate (Zähler)",
+      "type": "int",
+      "description": "z. B. 25 oder 30000.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 240000
+    },
+    {
+      "key": "OMP_FRAMERATE_DEN",
+      "i18n": {
+        "en": {
+          "label": "Frame rate (denominator)",
+          "description": "e.g. 1 or 1001.",
+          "group": "Format (empty = workflow format or node default)"
+        }
+      },
+      "label": "Bildrate (Nenner)",
+      "type": "int",
+      "description": "z. B. 1 oder 1001.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 100000
+    }
+  ],
   "omp-source": [
     {
       "key": "OMP_WIDTH",

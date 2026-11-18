@@ -26,6 +26,7 @@ import { AuditPanel } from "./audit-panel.ts";
 import { DiagnosePanel } from "./diagnose-panel.ts";
 import { SupportPanel } from "./support-panel.ts";
 import { ClientsPanel } from "./clients-panel.ts";
+import { MxlFlowsPanel } from "./mxl-flows-panel.ts";
 import { TimelinePanel } from "./timeline-panel.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
 import { adminGroups, type AdminModuleGroup } from "./modules-logic.ts";
@@ -292,6 +293,7 @@ const ADMIN_SUB_TAB_GROUPS: { id: string; labelKey: I18nKey; tabs: { id: AdminTa
       { id: "storage", labelKey: "admin.tab.storage", clusterKey: "admin.cluster.operations" },
       { id: "audit", labelKey: "admin.tab.audit", clusterKey: "admin.cluster.maintenance" },
       { id: "diagnose", labelKey: "admin.tab.diagnose", clusterKey: "admin.cluster.maintenance" },
+      { id: "mxlflows", labelKey: "admin.tab.mxlflows", clusterKey: "admin.cluster.maintenance" },
       { id: "support", labelKey: "admin.tab.support", clusterKey: "admin.cluster.maintenance" },
       { id: "timeline", labelKey: "admin.tab.timeline", clusterKey: "admin.cluster.maintenance" },
       { id: "backup", labelKey: "admin.tab.backup", clusterKey: "admin.cluster.maintenance" },
@@ -359,6 +361,7 @@ class AdminView extends HTMLElement {
   #diagnosePanel = new DiagnosePanel();
   #supportPanel = new SupportPanel();
   #clientsPanel = new ClientsPanel();
+  #mxlFlowsPanel = new MxlFlowsPanel();
   #timelinePanel = new TimelinePanel();
   #logPollHandle: number | undefined;
   #nodes: NodeEntry[] = [];
@@ -2609,6 +2612,10 @@ class AdminView extends HTMLElement {
         this.#timelinePanel.setContext({ nodes: this.#nodes, workflows: this.#workflows, processes: this.#processes, groups: this.#groups });
         this.appendChild(this.#timelinePanel.el);
         this.#timelinePanel.start();
+        break;
+      case "mxlflows":
+        this.appendChild(this.#mxlFlowsPanel.el);
+        this.#mxlFlowsPanel.start();
         break;
       case "clients":
         this.appendChild(this.#clientsPanel.el);

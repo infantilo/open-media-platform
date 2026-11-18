@@ -6,6 +6,7 @@ members = [
     "omp-node-sdk",
     "playout",
     "omp-source",
+    "omp-hls-source",
     "omp-capture-card",
     "omp-viewer",
     "omp-switcher",
