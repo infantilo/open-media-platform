@@ -1291,6 +1291,8 @@ untereinander):
   für Instanzen auf dem Orchestrator-Rechner und nicht für Container-Nodes; die
   Trennung erfolgt nach Pfad, nicht als Sicherheitsgrenze.
 
+  ![Administration → MXL-Flows mit Domain-Auswahl, „Neue Domain“ und „Domain löschen“; Reste ohne Schreiber orange](screenshots/admin-mxl-domains.png)
+
   **Domains im Workflow:** In den Workflow-Einstellungen („MXL-Domain“) legen Sie fest,
   in welcher Domain alle Rollen laufen; im Rollen-Designer kann eine einzelne Rolle
   eine andere wählen (Auswahl neben dem Host, „⬡ (Workflow)“ = die des Workflows).
@@ -1298,13 +1300,44 @@ untereinander):
   das Verzeichnis selbst an. Der Start wird abgelehnt, wenn eine Domain nicht angelegt
   ist oder eine Verbindung des Workflows über eine Domain-Grenze läuft.
 
+  ![Workflow-Formular mit „MXL-Domain“-Auswahl](screenshots/workflow-domain.png)
+
   **Im Flow Editor:** Sobald es benannte Domains gibt, erscheint neben „Host-Ansicht“
   der Umschalter **„Domain-Ansicht“**: der Editor gruppiert die Kacheln dann in
   Zonen je Domain (Standarddomain zuerst, farbiger Streifen und Name in der Domain-Farbe,
   Kachelzahl im Kopf); „Auto-Anordnen“ und „Alle einpassen“ wirken wie in der
   Host-Ansicht. Ein Klick auf die aktive Ansicht schaltet die Zonen aus, ein Klick auf
   die andere wechselt direkt. Unabhängig von der Ansicht trägt jede Kachel in einer
-  benannten Domain einen farbigen **Domain-Reiter** über dem Kopf.
+  benannten Domain einen farbigen **Domain-Reiter** über dem Kopf. In der Domain-Ansicht
+  zeigt zusätzlich ein **Host-Reiter** („@ Regie-Host-A“, „@ Orchestrator“), auf welchem
+  Rechner der Node läuft; im Zonenkopf steht, auf wie vielen Hosts die Domain-Kacheln
+  laufen (Tooltip: welche). Die Zonen sind in der Farbe der Domain getönt, die Kacheln
+  stehen mittig in der Lane. **Auto-Anordnen** ist in der Domain-Ansicht verfügbar
+  (zonenweise, nach Signalfluss und Host sortiert, ohne Überlappung; in der Host-Ansicht
+  bestimmen weiter die Host-Lanes die Anordnung). Eine Kante über die Zonengrenze ist nur
+  über eine Domain-Brücke möglich und wird lila dargestellt.
+
+  ![Flow Editor, Domain-Ansicht: Zonen je Domain, Domain- und Host-Reiter, Brücke „studio → test“](screenshots/domain-ansicht.png)
+
+  **Domain-Brücke:** Der Node **„MXL Domain Bridge“** verbindet zwei Domains auf dem
+  Orchestrator-Rechner. Er läuft in der Domain seiner Eingänge, die **Zieldomain** wählen
+  Sie beim Start (Start-Dialog bzw. in der Workflow-Rolle neben der Domain: „→ Ziel“).
+  Verbinden Sie im Flow Editor Video und Ton der Quelle mit den Eingängen der Brücke und
+  deren Ausgänge mit den Empfängern in der Zieldomain. **Die Brücke wandelt nicht:** sie
+  kopiert Bild und Ton unverändert (kaum CPU, Bild/Ton-Bezug bleibt erhalten). Das Format
+  der Brücke (Standard 640×480 bei 25 Bildern, 48 kHz, 2 Kanäle; einstellbar wie bei der
+  Quelle) muss dem der Quelle entsprechen, sonst lehnt sie die Verbindung mit einer
+  Meldung ab — dann einen Scaler vor die Brücke schalten. Der Parameter `videoMode` /
+  `audioMode` zeigt „direkt kopiert“ oder den Ablehnungsgrund. Nur optional
+  (`OMP_BRIDGE_CONVERT=1`) wandelt die Brücke selbst, was viel CPU kostet.
+
+  ![Start-Dialog der Domain-Brücke: Domain des Eingangs und Zieldomain](screenshots/start-dialog-bruecke.png)
+
+  **IS-05:** `mxl_domain_id` ist nach BCP-007-03 eine UUID. Jede Instanz trägt die ID ihrer
+  Domain (stabile UUIDv5 aus dem Domainnamen, in der Domain-Liste als `id`), die
+  Constraints nennen genau diese; eine fremde Domain-ID wird mit 400 abgelehnt. Eine
+  Brücke zeigt an ihren Empfängern die Eingangs-, an ihren Sendern die Ziel-Domain-ID.
+
 
 - **Verbundene Clients** (in „Zugang & Rechte“) — zeigt, wer gerade mit einem
   Browser an der Oberfläche hängt: je offener Verbindung **Benutzer**,

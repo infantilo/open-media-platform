@@ -142,10 +142,13 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
     // Getrennte MXL-Domains (Kap. 103): nur anbieten, wenn es welche gibt und die Instanz lokal läuft.
     const domainBox = el("div", "");
     body.append(domainBox);
+    const isBridge = opts.entry.type === "omp-mxl-bridge";
     const renderDomain = (names: string[]) => {
       domainBox.replaceChildren();
       if (names.length === 0 || form.hostId) {
         form.domain = "";
+        form.targetDomain = "";
+        refreshOk();
         return;
       }
       const sel = el("select", INPUT);
@@ -155,8 +158,27 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
         sel.append(o);
       }
       sel.value = form.domain ?? "";
-      sel.addEventListener("change", () => (form.domain = sel.value));
-      domainBox.append(labelled(t("flow.sd.domain"), sel, t("flow.sd.domainHint")));
+      sel.addEventListener("change", () => {
+        form.domain = sel.value;
+        refreshOk();
+      });
+      domainBox.append(labelled(isBridge ? t("flow.sd.bridgeIn") : t("flow.sd.domain"), sel, t("flow.sd.domainHint")));
+      if (isBridge) {
+        // Domain-Brücke: Zieldomain wählen (Pflicht, muss von der eigenen abweichen).
+        const target = el("select", INPUT);
+        for (const n of ["", "default", ...names]) {
+          const o = el("option", "", n === "" ? t("flow.sd.bridgePick") : n === "default" ? t("flow.sd.domainDefault") : n);
+          o.value = n;
+          target.append(o);
+        }
+        target.value = form.targetDomain ?? "";
+        target.addEventListener("change", () => {
+          form.targetDomain = target.value;
+          refreshOk();
+        });
+        domainBox.append(labelled(t("flow.sd.bridgeOut"), target, t("flow.sd.bridgeHint")));
+      }
+      refreshOk();
     };
     let domainNames: string[] = [];
     void loadDomains().then((n) => {
@@ -289,7 +311,10 @@ export function openStartDialog(opts: StartDialogOptions): Promise<boolean> {
     function refreshOk() {
       // SDK-Karten anderer Hersteller laufen über ein Plugin des Betreibers: ohne dessen Elementnamen kann die Instanz nicht starten.
       const needsElements = form.ioCardType === "matrox" && (form.options.OMP_CARD_ELEMENTS ?? "").split(",").filter((x) => x.trim()).length !== 4;
-      ok.disabled = busy || (opts.captureCard && (form.ioPorts.length === 0 || needsElements));
+      // Domain-Brücke: ohne Zieldomain (oder mit der eigenen Domain als Ziel) gibt es nichts zu überbrücken.
+      const ownDomain = form.domain && form.domain !== "" ? form.domain : "default";
+      const bridgeBad = opts.entry.type === "omp-mxl-bridge" && (!form.targetDomain || form.targetDomain === ownDomain);
+      ok.disabled = busy || bridgeBad || (opts.captureCard && (form.ioPorts.length === 0 || needsElements));
     }
     refreshOk();
     dlg.append(head, body, error, errorHelp, actions);

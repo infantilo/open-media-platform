@@ -18,6 +18,16 @@ export function instanceDomain(inst: { extraEnv?: Record<string, string> } | und
   return n && n !== "" ? n : DEFAULT_DOMAIN;
 }
 
+/** Zieldomain einer Domain-Brücke (extraEnv `OMP_MXL_TARGET_DOMAIN_NAME`); sonst leer. */
+export function instanceTargetDomain(inst: { extraEnv?: Record<string, string> } | undefined): string {
+  return inst?.extraEnv?.OMP_MXL_TARGET_DOMAIN_NAME ?? "";
+}
+
+/** Text des Domain-Reiters: "name" bzw. bei einer Brücke "eingang → ziel". */
+export function domainTabText(inputDomain: string, targetDomain: string): string {
+  return targetDomain ? `${inputDomain} → ${targetDomain}` : inputDomain;
+}
+
 /** Domain einer Workflow-Rolle: die der Rolle, sonst die des Workflows, sonst Standard. */
 export function roleDomain(role: { domain?: string } | undefined, settings: { domain?: string } | undefined): string {
   const d = role?.domain || settings?.domain || "";
@@ -59,12 +69,25 @@ export function domainZones(known: DomainInfo[], usedNames: Iterable<string>): D
 
 const HUES = [210, 28, 150, 285, 340, 55, 185, 100];
 
-/** Stabile Farbe je Domainname (Standarddomain neutral). */
-export function domainColor(name: string): string {
-  if (name === DEFAULT_DOMAIN || name === "") return "#7c8798";
+/** Stabile Farbe je Domainname (Standarddomain neutral); `alpha` (0–1) für Tönungen von Flächen. */
+export function domainColor(name: string, alpha?: number): string {
+  if (name === DEFAULT_DOMAIN || name === "") return alpha === undefined ? "#7c8798" : `rgba(124,135,152,${alpha})`;
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return `hsl(${HUES[h % HUES.length]} 62% 58%)`;
+  const hue = HUES[h % HUES.length];
+  return alpha === undefined ? `hsl(${hue} 62% 58%)` : `hsl(${hue} 62% 58% / ${alpha})`;
+}
+
+/** Kurzname eines Hosts für Kachel-Reiter: Platzhalter für den Orchestrator-Rechner, sonst das Label, gekürzt. */
+export function hostChipLabel(hostLabel: string | undefined, localLabel: string, max = 16): string {
+  const l = (hostLabel ?? "").trim() || localLabel;
+  return l.length > max ? l.slice(0, max - 1) + "…" : l;
+}
+
+/** Eindeutige, sortierte Hostnamen für die Zusammenfassung im Zonenkopf. */
+export function hostSummary(hostLabels: string[]): { count: number; text: string } {
+  const set = [...new Set(hostLabels.filter((h) => h !== ""))].sort((a, b) => a.localeCompare(b));
+  return { count: set.length, text: set.join(", ") };
 }
 
 /** Ob die Oberfläche Domains überhaupt anbieten soll: es gibt mindestens eine angelegte außer der Standarddomain. */

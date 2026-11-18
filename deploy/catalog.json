@@ -22,6 +22,17 @@
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
   {
+    "type": "omp-mxl-bridge",
+    "label": "MXL Domain Bridge",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-mxl-bridge"],
+    "env": {},
+    "description": "Brücke zwischen zwei getrennten MXL-Domains auf demselben Rechner: liest je einen Video- und einen Audio-Flow aus der Domain des Nodes (per Verbindung im Flow Editor gewählt) und schreibt sie UNVERÄNDERT als eigene Flows in die Zieldomain (Grains werden direkt kopiert, kaum CPU, Bild/Ton-Bezug bleibt erhalten). Die Zieldomain wird beim Start gewählt (Start-Dialog bzw. Workflow-Rolle). Die Brücke wandelt nicht: Passt das Quellformat nicht zum Format der Brücke (Standard 640×480 bei 25 Bildern, 48 kHz, 2 Kanäle; einstellbar wie bei der Quelle), lehnt sie die Verbindung mit einer Meldung ab — dafür einen Scaler vor die Brücke schalten. Nur optional (OMP_BRIDGE_CONVERT=1) fällt sie auf eine rechenintensive Wandlung zurück. Nur lokal auf dem Orchestrator-Rechner.",
+    "i18n": { "en": {"description": "Bridge between two separate MXL domains on the same machine: reads one video and one audio flow from the node's own domain (chosen by connecting in the flow editor) and writes them UNCHANGED as its own flows into the target domain (grains are copied directly, almost no CPU, picture/sound alignment is kept). The target domain is chosen at start (start dialog or workflow role). The bridge does not convert: if the source format does not match the bridge format (default 640×480 at 25 fps, 48 kHz, 2 channels; configurable like the source), it rejects the connection with a message — put a scaler in front of the bridge. Only optionally (OMP_BRIDGE_CONVERT=1) does it fall back to a CPU-heavy conversion. Local to the orchestrator machine only.", "expectedResources": "very low (memory copy)"} },
+    "expectedResources": "sehr gering (Speicherkopie)",
+    "latency": { "video": { "minLatencyFrames": 1, "maxLatencyFrames": 1 } }
+  },
+  {
     "type": "omp-capture-card",
     "hostBound": true,
     "label": "Capture Card",

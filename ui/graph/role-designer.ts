@@ -1042,7 +1042,7 @@ export class RoleDesigner extends HTMLElement {
     });
     // Kap. 103: Domain-Auswahl neben dem Host (gleiche Zeile, damit die Kachelhöhe unverändert bleibt) — nur, wenn es
     // angelegte Domains gibt oder die Rolle schon eine trägt.
-    if (this.#domainNames.length > 0 || role.domain) {
+    if (this.#domainNames.length > 0 || role.domain || role.nodeType === "omp-mxl-bridge") {
       const row = document.createElement("div");
       row.style.cssText = "display:flex;gap:4px;width:100%;";
       hostSelect.style.width = "58%";
@@ -1067,6 +1067,31 @@ export class RoleDesigner extends HTMLElement {
         role.domain = domainSelect.value || undefined;
       });
       row.append(hostSelect, domainSelect);
+      // Domain-Brücke: dritte Auswahl „→ Ziel“ (Domain der geschriebenen Flows); Domain oben = Eingang.
+      if (role.nodeType === "omp-mxl-bridge") {
+        hostSelect.style.width = "36%";
+        domainSelect.style.width = "32%";
+        const targetSelect = document.createElement("select");
+        targetSelect.title = t("rd.domain.target");
+        targetSelect.style.cssText =
+          "width:32%;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
+        const none = document.createElement("option");
+        none.value = "";
+        none.textContent = t("rd.domain.targetPick");
+        targetSelect.appendChild(none);
+        for (const n of [...new Set(["default", ...this.#domainNames, ...(role.targetDomain ? [role.targetDomain] : [])])]) {
+          const opt = document.createElement("option");
+          opt.value = n;
+          opt.textContent = `→ ${n}`;
+          if (n === role.targetDomain) opt.selected = true;
+          targetSelect.appendChild(opt);
+        }
+        targetSelect.addEventListener("change", () => {
+          this.#pushUndo();
+          role.targetDomain = targetSelect.value || undefined;
+        });
+        row.append(targetSelect);
+      }
       hostObject.appendChild(row);
     } else {
       hostObject.appendChild(hostSelect);

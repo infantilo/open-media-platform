@@ -250,12 +250,22 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 			Options map[string]string `json:"options,omitempty"`
 			// Domain: Name einer getrennten MXL-Domain (Kap. 103); leer/"default" = Standarddomain.
 			Domain string `json:"domain,omitempty"`
+			// TargetDomain: nur für omp-mxl-bridge — Domain der geschriebenen Flows (Ausgang).
+			TargetDomain string `json:"targetDomain,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		domainEnv, derr := domainStartEnv(domains, body.Domain)
+		if body.Type == "omp-mxl-bridge" && (body.TargetDomain == "" || body.TargetDomain == body.Domain) {
+			http.Error(w, "omp-mxl-bridge needs a targetDomain different from its own domain", http.StatusBadRequest)
+			return
+		}
+		if body.Type != "omp-mxl-bridge" && body.TargetDomain != "" {
+			http.Error(w, "targetDomain is only valid for omp-mxl-bridge", http.StatusBadRequest)
+			return
+		}
+		domainEnv, derr := domainStartEnv(domains, body.Domain, body.TargetDomain)
 		if derr != nil {
 			status := http.StatusBadRequest
 			if errors.Is(derr, mxldomains.ErrNotFound) {

@@ -187,3 +187,50 @@ func TestDeleteMXLDomain(t *testing.T) {
 		t.Errorf("freie Domain: %d", c)
 	}
 }
+
+func TestBridgeStartAndEdges(t *testing.T) {
+	ds := newMemDomains(t, "a", "b")
+	cl := &capturingLauncher{fakeLauncherService: fakeLauncherService{
+		catalog: []launcher.CatalogEntry{{Type: "omp-mxl-bridge"}, {Type: "omp-source"}},
+		started: launcher.Instance{ID: "br", Type: "omp-mxl-bridge"},
+	}}
+	if rec := postInstance(t, cl, ds, `{"type":"omp-mxl-bridge","domain":"a","targetDomain":"b"}`); rec.Code != http.StatusOK {
+		t.Fatalf("Brücke: %d %s", rec.Code, rec.Body)
+	}
+	if cl.env["OMP_MXL_DOMAIN_NAME"] != "a" || cl.env["OMP_MXL_TARGET_DOMAIN_NAME"] != "b" {
+		t.Fatalf("env = %v", cl.env)
+	}
+	for body, want := range map[string]int{
+		`{"type":"omp-mxl-bridge","domain":"a"}`:                       http.StatusBadRequest, // Ziel fehlt
+		`{"type":"omp-mxl-bridge","domain":"a","targetDomain":"a"}`:    http.StatusBadRequest, // gleiche Domain
+		`{"type":"omp-mxl-bridge","domain":"a","targetDomain":"nope"}`: http.StatusNotFound,
+		`{"type":"omp-source","targetDomain":"b"}`:                     http.StatusBadRequest, // nur für Brücken
+	} {
+		if rec := postInstance(t, cl, ds, body); rec.Code != want {
+			t.Errorf("%s: %d, want %d", body, rec.Code, want)
+		}
+	}
+	// Kanten: Quelle(a) -> Brücke(a, Ziel b) -> Senke(b) ist erlaubt, Quelle(a) -> Senke(b) nicht
+	ls := fakeLauncherService{instances: []launcher.Instance{
+		{ID: "src", ExtraEnv: map[string]string{"OMP_MXL_DOMAIN_NAME": "a"}},
+		{ID: "br", ExtraEnv: map[string]string{"OMP_MXL_DOMAIN_NAME": "a", "OMP_MXL_TARGET_DOMAIN_NAME": "b"}},
+		{ID: "snk", ExtraEnv: map[string]string{"OMP_MXL_DOMAIN_NAME": "b"}},
+	}}
+	g := graph.Graph{Nodes: []graph.Node{
+		{ID: "n1", InstanceID: "src", Outputs: []graph.Port{{ID: "s1"}}},
+		{ID: "n2", InstanceID: "br", Inputs: []graph.Port{{ID: "r2"}}, Outputs: []graph.Port{{ID: "s2"}}},
+		{ID: "n3", InstanceID: "snk", Inputs: []graph.Port{{ID: "r3"}}},
+	}}
+	if err := sameMXLDomain(g, ls, "s1", "r2"); err != nil {
+		t.Errorf("Quelle -> Brücken-Eingang: %v", err)
+	}
+	if err := sameMXLDomain(g, ls, "s2", "r3"); err != nil {
+		t.Errorf("Brücken-Ausgang -> Senke: %v", err)
+	}
+	if err := sameMXLDomain(g, ls, "s1", "r3"); err == nil {
+		t.Error("Quelle(a) -> Senke(b) ohne Brücke muss abgelehnt werden")
+	}
+	if err := sameMXLDomain(g, ls, "s2", "r2"); err == nil {
+		t.Error("Brücken-Ausgang(b) -> Brücken-Eingang(a) muss abgelehnt werden")
+	}
+}

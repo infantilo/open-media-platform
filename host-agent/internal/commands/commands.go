@@ -67,8 +67,9 @@ var allowedExtraEnvKeys = map[string]bool{
 	"OMP_WIDTH":  true,
 	"OMP_HEIGHT": true,
 	// Getrennte MXL-Domain (Kap. 103): nur der NAME; den Pfad leitet buildEnv aus der lokalen Standarddomain ab.
-	podmanrun.DomainNameKey: true,
-	"OMP_WORKFLOW_ID":       true, // 2026-09-30: Workflow-Zugehörigkeit als NMOS-Node-Tag, s. workflows/state.go workflowIDEnvKey
+	podmanrun.DomainNameKey:       true,
+	podmanrun.TargetDomainNameKey: true, // Zieldomain einer Domain-Brücke
+	"OMP_WORKFLOW_ID":             true, // 2026-09-30: Workflow-Zugehörigkeit als NMOS-Node-Tag, s. workflows/state.go workflowIDEnvKey
 	// Kap. 81: stabiler Zustandsschlüssel der Instanz (launcher.StateKeyEnv) — der Orchestrator setzt ihn bei JEDEM Start;
 	// ohne diesen Eintrag lehnte der Agent jeden Remote-Start ab. Nur ein Dateiname-Baustein, kein Geheimnis.
 	"OMP_STATE_KEY": true,
@@ -607,12 +608,8 @@ func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, registryU
 	for k, v := range extraEnv {
 		merged[k] = v
 	}
-	// Getrennte MXL-Domain (Kap. 103): Name → Pfad (<lokale Standarddomain>-<name>), Verzeichnis anlegen.
-	if dp, ok := podmanrun.DomainPath(merged[podmanrun.DomainNameKey]); ok {
-		merged["OMP_MXL_DOMAIN"] = dp
-		_ = os.MkdirAll(dp, 0o755)
-	}
-	delete(merged, podmanrun.DomainNameKey)
+	// Getrennte MXL-Domains (Kap. 103): Namen → Pfade (<lokale Standarddomain>-<name>), Verzeichnisse anlegen.
+	podmanrun.ApplyDomainEnv(merged)
 	merged["OMP_INSTANCE_ID"] = instanceID
 	merged["OMP_LABEL"] = label
 	merged["OMP_PORT"] = "0"

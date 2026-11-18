@@ -85,7 +85,7 @@ export class MxlFlowsPanel {
     sel.className = "omp-input";
     sel.setAttribute("aria-label", t("mxlflows.domain"));
     for (const d of this.#domains) {
-      const o = el("option", "", domainOptionLabel(d));
+      const o = el("option", "", domainOptionLabel(d, t("mxlflows.opt.flows"), t("mxlflows.opt.inst")));
       o.value = d.default ? "default" : d.name;
       sel.append(o);
     }

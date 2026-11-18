@@ -66,7 +66,9 @@ type Role struct {
 	NodeType string `json:"nodeType"`
 	HostID   string `json:"hostId,omitempty"`
 	// Domain überschreibt Settings.Domain für diese Rolle (Kap. 103); leer = die des Workflows.
-	Domain          string `json:"domain,omitempty"`
+	Domain string `json:"domain,omitempty"`
+	// TargetDomain: nur für Rollen vom Typ omp-mxl-bridge — Domain der geschriebenen Flows (Ausgang); Domain = Eingang.
+	TargetDomain    string `json:"targetDomain,omitempty"`
 	AffinityGroup   string `json:"affinityGroup,omitempty"`
 	RedundancyGroup string `json:"redundancyGroup,omitempty"`
 	// Format (Nutzerwunsch 2026-07-28): benanntes Standard-Auflösung+

@@ -14,6 +14,8 @@ export interface DraftRole {
   hostId?: string;
   // Kap. 103: MXL-Domain dieser Rolle (überschreibt die des Workflows); leer = die des Workflows.
   domain?: string;
+  // Nur Domain-Brücke (omp-mxl-bridge): Domain der geschriebenen Flows.
+  targetDomain?: string;
   format?: string;
   // standbyFor (K7 Teil 4, docs/END-GOAL-FEATURES.md §7.4): Name einer
   // anderen Rolle, für die diese Rolle als warmer Standby dient — s.

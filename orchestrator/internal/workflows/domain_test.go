@@ -77,7 +77,7 @@ func TestCheckDomains(t *testing.T) {
 }
 
 func TestCheckDomainLinks(t *testing.T) {
-	roles := []Role{{Name: "src", NodeType: "omp-source", Domain: "a"}, {Name: "mix", NodeType: "omp-video-mixer-me", Domain: "b"}, {Name: "br", NodeType: "omp-mxl-bridge", Domain: "a"}}
+	roles := []Role{{Name: "src", NodeType: "omp-source", Domain: "a"}, {Name: "mix", NodeType: "omp-video-mixer-me", Domain: "b"}, {Name: "br", NodeType: "omp-mxl-bridge", Domain: "a", TargetDomain: "b"}}
 	def := Definition{Roles: roles, Connections: []Connection{{FromRole: "src", ToRole: "mix"}}}
 	if err := checkDomainLinks(def); !errors.Is(err, ErrValidation) {
 		t.Errorf("a → b ohne Brücke muss abgelehnt werden: %v", err)
@@ -89,5 +89,35 @@ func TestCheckDomainLinks(t *testing.T) {
 	def.Connections = []Connection{{FromRole: "src", ToRole: "src"}}
 	if err := checkDomainLinks(def); err != nil {
 		t.Errorf("gleiche Domain: %v", err)
+	}
+}
+
+func TestBridgeEnvAndTargetCheck(t *testing.T) {
+	def := Definition{Roles: []Role{{Name: "br", NodeType: "omp-mxl-bridge", Domain: "a", TargetDomain: "b"}}}
+	env := withRoleDomain(nil, def, def.Roles[0])
+	if env["OMP_MXL_DOMAIN_NAME"] != "a" || env["OMP_MXL_TARGET_DOMAIN_NAME"] != "b" {
+		t.Errorf("env = %v", env)
+	}
+	// Ziel nur bei Brücken
+	other := Definition{Roles: []Role{{Name: "x", NodeType: "omp-source", Domain: "a", TargetDomain: "b"}}}
+	if env := withRoleDomain(nil, other, other.Roles[0]); env["OMP_MXL_TARGET_DOMAIN_NAME"] != "" {
+		t.Errorf("Ziel nur für Brücken: %v", env)
+	}
+	s := &Service{}
+	s.SetDomains(fakeDomains{"a": true, "b": true})
+	if err := s.checkDomains(def); err != nil {
+		t.Errorf("gültige Brücke: %v", err)
+	}
+	noTarget := Definition{Roles: []Role{{Name: "br", NodeType: "omp-mxl-bridge", Domain: "a"}}}
+	if err := s.checkDomains(noTarget); !errors.Is(err, ErrValidation) {
+		t.Errorf("Brücke ohne Ziel: %v", err)
+	}
+	unknown := Definition{Roles: []Role{{Name: "br", NodeType: "omp-mxl-bridge", Domain: "a", TargetDomain: "weg"}}}
+	if err := s.checkDomains(unknown); !errors.Is(err, ErrValidation) {
+		t.Errorf("unbekanntes Ziel: %v", err)
+	}
+	toDefault := Definition{Roles: []Role{{Name: "br", NodeType: "omp-mxl-bridge", Domain: "a", TargetDomain: "default"}}}
+	if err := s.checkDomains(toDefault); err != nil {
+		t.Errorf("Ziel Standarddomain: %v", err)
 	}
 }

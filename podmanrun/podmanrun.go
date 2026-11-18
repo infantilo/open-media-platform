@@ -6,6 +6,7 @@
 package podmanrun
 
 import (
+	"crypto/sha1"
 	"fmt"
 	"net"
 	"net/url"
@@ -77,6 +78,39 @@ func MxlDomainPath() string {
 // eigenen, und über das Netz läuft nie ein Pfad.
 const DomainNameKey = "OMP_MXL_DOMAIN_NAME"
 
+// TargetDomainNameKey: Zieldomain einer Domain-Brücke (omp-mxl-bridge); wird wie DomainNameKey zu `OMP_MXL_TARGET_DOMAIN`.
+const TargetDomainNameKey = "OMP_MXL_TARGET_DOMAIN_NAME"
+
+// ApplyDomainEnv übersetzt die Domain-Namen in `merged` in Pfade (OMP_MXL_DOMAIN, OMP_MXL_TARGET_DOMAIN), legt die
+// Verzeichnisse an und entfernt die Namensschlüssel. Gemeinsamer Ort für Launcher und Host-Agent.
+func ApplyDomainEnv(merged map[string]string) {
+	// BCP-007-03: `mxl_domain_id` ist eine UUID. Jede Instanz bekommt die ID ihrer Domain (auch die Standarddomain) und,
+	// bei einer Brücke, die der Zieldomain — der Node-SDK trägt sie in die IS-05-Transportparameter ein.
+	own := merged[DomainNameKey]
+	if own == "" {
+		own = "default"
+	}
+	merged["OMP_MXL_DOMAIN_ID"] = DomainID(own)
+	if t := merged[TargetDomainNameKey]; t != "" {
+		merged["OMP_MXL_TARGET_DOMAIN_ID"] = DomainID(t)
+	}
+	if dp, ok := DomainPath(merged[DomainNameKey]); ok {
+		merged["OMP_MXL_DOMAIN"] = dp
+		_ = os.MkdirAll(dp, 0o755)
+	}
+	if dp, ok := DomainPath(merged[TargetDomainNameKey]); ok {
+		merged["OMP_MXL_TARGET_DOMAIN"] = dp
+		_ = os.MkdirAll(dp, 0o755)
+	}
+	name := merged[DomainNameKey]
+	if name == "" {
+		name = "default"
+	}
+	merged["OMP_MXL_DOMAIN_ID"] = DomainID(name)
+	delete(merged, DomainNameKey)
+	delete(merged, TargetDomainNameKey)
+}
+
 // ValidDomainName: Kleinbuchstaben, Ziffern, Bindestrich; beginnt mit einem Buchstaben; höchstens 32 Zeichen; kein
 // "--", nicht "default" (gleiche Regel wie orchestrator/internal/mxldomains.ValidateName).
 func ValidDomainName(n string) bool {
@@ -92,6 +126,22 @@ func ValidDomainName(n string) bool {
 		}
 	}
 	return !strings.HasSuffix(n, "-")
+}
+
+// domainNamespace: Namensraum der Domain-UUIDs (UUIDv5, RFC 9562 §5.5). Fest, damit dieselbe Domain überall dieselbe ID
+// trägt (Orchestrator, Host-Agents, Nodes).
+var domainNamespace = [16]byte{0x6f, 0x7b, 0x3c, 0x1e, 0x5d, 0x2a, 0x4f, 0x8e, 0x9a, 0x41, 0x3c, 0x0d, 0x1e, 0x2f, 0x4b, 0x57}
+
+// DomainID: stabile UUID (v5) einer Domain aus ihrem Namen ("default" für die Standarddomain) — der BCP-007-03-Wert für
+// `mxl_domain_id` (kleingeschriebene kanonische UUID, Version 5, Variante RFC 4122/9562).
+func DomainID(name string) string {
+	h := sha1.New()
+	h.Write(domainNamespace[:])
+	h.Write([]byte("omp-mxl-domain:" + name))
+	b := h.Sum(nil)[:16]
+	b[6] = (b[6] & 0x0f) | 0x50
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // DomainPath leitet den Pfad einer benannten Domain aus der lokalen Standarddomain ab. Ungültiger Name → "", false.

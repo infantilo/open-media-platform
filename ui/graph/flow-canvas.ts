@@ -8,7 +8,7 @@
 import { TallyBoard, tallyLabel } from "./tally-logic.ts";
 import { t as tt, tLoose } from "../shell/i18n.ts";
 import { promptDialog } from "../kit/omp-prompt.ts";
-import { DEFAULT_DOMAIN, domainColor, type DomainInfo, domainZones, hasNamedDomains, instanceDomain, workflowDomainZone } from "./domain-view-logic.ts";
+import { DEFAULT_DOMAIN, domainColor, type DomainInfo, domainZones, hasNamedDomains, domainTabText, hostChipLabel, hostSummary, instanceDomain, instanceTargetDomain, workflowDomainZone } from "./domain-view-logic.ts";
 import { ghostEntriesForZone, type GhostEntry, type PlanInput, type StartPlan, zoneForStoppedWorkflow } from "../shell/workflow-plan-logic.ts";
 import {
   type ArrangeEdge,
@@ -117,7 +117,7 @@ const WORKFLOW_BAND_PAD = 10;
 function workflowBandHeight(count: number): number {
   return count > 0 ? WORKFLOW_BAND_CAPTION + count * (MIN_BODY_HEIGHT + HEADER_HEIGHT + WORKFLOW_BAND_ROW_GAP) + WORKFLOW_BAND_PAD : 0;
 }
-const HOST_ZONE_TILE_GAP = 24;
+const HOST_ZONE_TILE_GAP = 36; // inkl. Platz für die Reiter (Domain, Host) über der nächsten Kachel
 const HOST_ZONE_MARGIN = 24;
 // Ein Host gilt als "online", wenn seine letzte Telemetrie nicht älter
 // als das Dreifache des Sende-Intervalls ist (host-agent, alle 5s,
@@ -1634,6 +1634,16 @@ export class FlowCanvas extends HTMLElement {
     return ghostEntriesForZone(zoneId, this.#workflowsInScope().map((wf) => this.#planInput(wf)));
   }
 
+  // Anzeigename des Hosts einer Kachel (Domain-Ansicht: Host je Node sichtbar). "" = unbekannt/kein Launcher-Node.
+  #hostLabelForTileId(tileId: string): string {
+    const node = this.#graph.nodes.find((n) => n.id === tileId);
+    if (!node?.instanceId) return "";
+    const inst = this.#paletteInstances.find((i) => i.id === node.instanceId);
+    if (!inst) return "";
+    if (!inst.hostId) return tt("flow.hostChip.local");
+    return this.#paletteHosts.find((h) => h.id === inst.hostId)?.label ?? inst.hostId;
+  }
+
   #zoneIdForNodeId(nodeId: string): string {
     const node = this.#graph.nodes.find((n) => n.id === nodeId);
     // Domain-Ansicht (Kap. 103): Nodes ohne Launcher-Instanz liegen, soweit bekannt, in der Standarddomain.
@@ -1830,6 +1840,9 @@ export class FlowCanvas extends HTMLElement {
       this.#workflowsForZone(zone.id).forEach((wf, i) => {
         finalPos.set(workflowTileId(wf.id), { x: bandX, y: bandTop + i * (workflowHeight + WORKFLOW_BAND_ROW_GAP) });
       });
+      // Kacheln stehen mittig in der Lane (wie die Workflow-Kacheln), nicht bündig auf dem Zonenrand; gemerkte Positionen
+      // von früher, die am Rand klebten, rücken hierher.
+      const tileX = x + Math.max(WORKFLOW_BAND_PAD, Math.floor((laneWidth - NODE_WIDTH) / 2));
       const rememberedCandidates = zoneEntries
         .filter((entry) => workflowIdFromTileId(entry.id) === null)
         .map((entry) => ({ entry, remembered: this.#hostViewPositions[entry.id] }))
@@ -1839,7 +1852,8 @@ export class FlowCanvas extends HTMLElement {
         .sort((a, b) => Number(workflowIdFromTileId(b.entry.id) !== null) - Number(workflowIdFromTileId(a.entry.id) !== null) || a.remembered!.y - b.remembered!.y || a.entry.id.localeCompare(b.entry.id));
       for (const { entry, remembered } of rememberedCandidates) {
         if (overlapsReserved(remembered!.y, entry.height)) continue;
-        finalPos.set(entry.id, remembered!);
+        const keep = remembered!.x - x < 12 ? { x: tileX, y: remembered!.y } : remembered!;
+        finalPos.set(entry.id, keep);
         reserved.push({ y: remembered!.y, height: entry.height });
       }
 
@@ -1848,7 +1862,12 @@ export class FlowCanvas extends HTMLElement {
       // zwei gleichzeitig neu erschienene Kacheln je nach Registry-
       // Reihenfolge noch untereinander die Stapelposition streitig
       // machen (geringeres Problem als oben, aber derselbe Grund).
-      const freeEntries = zoneEntries.filter((e) => !finalPos.has(e.id)).sort((a, b) => a.id.localeCompare(b.id));
+      const freeEntries = zoneEntries
+        .filter((e) => !finalPos.has(e.id))
+        .sort((a, b) =>
+          (this.#zoneMode === "domain" ? this.#hostLabelForTileId(a.id).localeCompare(this.#hostLabelForTileId(b.id)) : 0) ||
+          a.id.localeCompare(b.id)
+        );
       let y = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN;
       for (const entry of freeEntries) {
         let candidateY = y;
@@ -1862,7 +1881,7 @@ export class FlowCanvas extends HTMLElement {
             }
           }
         }
-        finalPos.set(entry.id, { x, y: candidateY });
+        finalPos.set(entry.id, { x: tileX, y: candidateY });
         reserved.push({ y: candidateY, height: entry.height });
         y = candidateY + entry.height + GAP;
       }
@@ -3537,7 +3556,8 @@ export class FlowCanvas extends HTMLElement {
     const arrangeBtn = document.createElement("button");
     arrangeBtn.textContent = tt("flow.de024d");
     arrangeBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
-    const hostViewBlocksArrange = this.#hostViewEnabled && this.#scope === null;
+    // Host-Ansicht: Lanes bleiben unangetastet (Entscheidung 2026-08-14). Domain-Ansicht (Kap. 103): zonenweise Anordnung.
+    const hostViewBlocksArrange = this.#hostViewEnabled && this.#scope === null && this.#zoneMode === "host";
     arrangeBtn.disabled = hostViewBlocksArrange;
     arrangeBtn.title = hostViewBlocksArrange
       ? tt("flow.9f38fa")
@@ -3652,15 +3672,66 @@ export class FlowCanvas extends HTMLElement {
       this.#autoArrangeWorkflowEdit();
       return;
     }
+    // Zonenansicht (Host/Domain): je Zone für sich anordnen — der freie Flussplan über die ganze Fläche kennt weder die
+    // Lanes noch die Workflow-Bänder und ließ Kacheln übereinander und auf Zonenrändern landen.
+    if (this.#hostViewEnabled && this.#scope === null) {
+      if (this.#zoneMode === "domain") this.#autoArrangeZones();
+      return; // Host-Ansicht: die Lanes bestimmen die Anordnung
+    }
     const ids = this.#itemsAtScope();
     const tileIds = [...ids.nodeIds, ...ids.groupIds];
-    if (tileIds.length === 0) return;
-    const nodes: ArrangeNode[] = tileIds.map((id) => ({
-      id,
-      width: NODE_WIDTH,
-      height: this.#tileHeightById.get(id) ?? nodeHeight(0, 0),
-    }));
-    this.#applyAutoArrange(tileIds, nodes, this.#edgesAmongTiles(new Set(tileIds)));
+    // Am Root stehen die kollabierten Workflow-Kacheln mit auf der Fläche: ohne sie in der Rechnung liegen Nodes darauf.
+    const workflowIds = this.#scope === null ? this.#allWorkflowTileIds().filter((id) => !!this.#positions[id]) : [];
+    if (tileIds.length === 0 && workflowIds.length === 0) return;
+    const nodes: ArrangeNode[] = [
+      ...tileIds.map((id) => ({
+        id,
+        width: NODE_WIDTH,
+        height: this.#tileHeightById.get(id) ?? nodeHeight(0, 0),
+      })),
+      ...workflowIds.map((id) => ({ id, width: NODE_WIDTH, height: MIN_BODY_HEIGHT + HEADER_HEIGHT })),
+    ];
+    this.#applyAutoArrange([...tileIds, ...workflowIds], nodes, this.#edgesAmongTiles(new Set(tileIds)));
+  }
+
+  // Auto-Anordnen in der Zonenansicht: jede Zone für sich. Die Kacheln einer Zone stehen mittig in der Lane untereinander,
+  // nach Signalfluss geordnet (Quellen oben, in der Domain-Ansicht zusätzlich nach Host gruppiert), mit Platz für die
+  // Reiter über jeder Kachel und unterhalb des Workflow-Bandes der Zone. Eine Lane ist eine Spalte breit — nebeneinander
+  // wäre dort nie Platz, deshalb kein Mehrspalten-Layout wie im freien Plan.
+  #autoArrangeZones() {
+    const tiles = this.#rootZoneTiles();
+    const offsets = this.#laneOffsets(tiles);
+    const rowGap = HOST_ZONE_TILE_GAP;
+    for (const zone of this.#hostZones(tiles)) {
+      const laneX = offsets.get(zone.id);
+      if (laneX === undefined) continue;
+      const inZone = tiles.filter((t) => this.#zoneIdForTile(t) === zone.id);
+      if (inZone.length === 0) continue;
+      const heightOf = (id: string, t?: TileSpec) => this.#tileHeightById.get(id) ?? nodeHeight(t?.inputs.length ?? 0, t?.outputs.length ?? 0);
+      const ids = new Set(inZone.map((t) => t.id));
+      const flow = arrangeByFlow(
+        inZone.map((t) => ({ id: t.id, width: NODE_WIDTH, height: heightOf(t.id, t) })),
+        this.#edgesAmongTiles(ids),
+      );
+      const ordered = [...inZone].sort((a, b) =>
+        flow[a.id].x - flow[b.id].x ||
+        (this.#zoneMode === "domain" ? this.#hostLabelForTileId(a.id).localeCompare(this.#hostLabelForTileId(b.id)) : 0) ||
+        flow[a.id].y - flow[b.id].y ||
+        a.id.localeCompare(b.id)
+      );
+      const tileX = laneX + Math.max(WORKFLOW_BAND_PAD, Math.floor((this.#laneWidth(zone.id) - NODE_WIDTH) / 2));
+      let y = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN + this.#zoneTopInset(zone.id) + 16;
+      for (const t of ordered) {
+        const pos = { x: tileX, y };
+        this.#positions[t.id] = pos;
+        this.#hostViewPositions[t.id] = pos;
+        y += heightOf(t.id, t) + rowGap;
+      }
+    }
+    // Workflow-Kacheln und Bänder ordnet #arrangeIntoLanes selbst; hier nur die Reste (Gemerkte) abgleichen.
+    this.#arrangeIntoLanes(tiles);
+    this.#render();
+    this.#fitAllToViewport();
   }
 
   // Zwei Fälle, je nachdem ob der bearbeitete Workflow gerade läuft oder
@@ -4118,13 +4189,13 @@ export class FlowCanvas extends HTMLElement {
       const pos = this.#positions[tile.id];
       if (!pos) continue;
       const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
-      bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + height + HOST_ZONE_MARGIN);
+      bottom = Math.max(bottom, pos.y + height + HOST_ZONE_MARGIN); // Abstand unter der letzten Kachel
     }
     for (const wf of this.#workflowsInScope()) {
       if (this.#zoneIdForWorkflow(wf) !== zoneId) continue;
       const pos = this.#positions[workflowTileId(wf.id)];
       if (!pos) continue;
-      bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + (MIN_BODY_HEIGHT + HEADER_HEIGHT) + HOST_ZONE_MARGIN);
+      bottom = Math.max(bottom, pos.y + (MIN_BODY_HEIGHT + HEADER_HEIGHT) + HOST_ZONE_MARGIN);
     }
     // Der „Geplant“-Block liegt oben; leere Zonen brauchen trotzdem Platz dafür.
     bottom = Math.max(bottom, HOST_ZONE_HEADER_HEIGHT + this.#zoneTopInset(zoneId) + HOST_ZONE_MARGIN * 2);
@@ -4245,16 +4316,22 @@ export class FlowCanvas extends HTMLElement {
       // Domain-Ansicht (Kap. 103): farbiger Streifen am Zonenrand, Zähler und Beschreibung im Kopf.
       if (this.#zoneMode === "domain" && zone.id !== "mixed") {
         const color = domainColor(zone.id);
-        const stripe = document.createElementNS(SVG_NS, "rect");
-        stripe.setAttribute("x", "0");
-        stripe.setAttribute("y", "0");
-        stripe.setAttribute("width", "5");
-        stripe.setAttribute("height", String(collapsed ? HOST_ZONE_HEADER_HEIGHT : bottom));
-        stripe.setAttribute("rx", "2");
-        stripe.setAttribute("fill", color);
-        g.appendChild(stripe);
+        // Zone in der Domain-Farbe: Rahmen und leichte Tönung der Fläche, Farbleiste oben im Kopf (kein Seitenstreifen,
+        // der die Kacheln berührt).
+        rect.setAttribute("stroke", domainColor(zone.id, 0.55));
+        rect.setAttribute("fill", domainColor(zone.id, 0.07));
+        header.setAttribute("fill", domainColor(zone.id, 0.16));
+        const bar = document.createElementNS(SVG_NS, "rect");
+        bar.setAttribute("x", "10");
+        bar.setAttribute("y", "0");
+        bar.setAttribute("width", String(Math.max(0, laneWidth - 20)));
+        bar.setAttribute("height", "3");
+        bar.setAttribute("rx", "1.5");
+        bar.setAttribute("fill", color);
+        g.appendChild(bar);
         label.setAttribute("fill", color);
         label.setAttribute("font-weight", "600");
+        label.setAttribute("font-size", "13");
         if (!collapsed) {
           const info = document.createElementNS(SVG_NS, "text");
           info.setAttribute("x", String(labelX));
@@ -4263,7 +4340,16 @@ export class FlowCanvas extends HTMLElement {
           info.setAttribute("font-size", "10");
           const sub = (zone as { subtitle?: string }).subtitle ?? "";
           const count = tt("flow.domainView.nodes", { n: zoneTiles.length + zoneWorkflowTileIds.length });
-          info.textContent = truncateTileTitle(sub ? `${count} · ${sub}` : count, Math.max(16, Math.floor((laneWidth - 24) / 6)));
+          // Auf welchen Hosts die Kacheln dieser Domain laufen (Domain-Ansicht zeigt sonst den Host nicht).
+          const hosts = hostSummary(zoneTiles.map((t) => this.#hostLabelForTileId(t.id)));
+          const hostPart = hosts.count > 0 ? tt("flow.domainView.hosts", { n: hosts.count }) : "";
+          const parts = [count, hostPart, sub].filter((x) => x !== "");
+          info.textContent = truncateTileTitle(parts.join(" · "), Math.max(16, Math.floor((laneWidth - 24) / 6)));
+          if (hosts.text) {
+            const hostTitle = document.createElementNS(SVG_NS, "title");
+            hostTitle.textContent = `${tt("flow.domainView.hostsTitle")}: ${hosts.text}`;
+            info.appendChild(hostTitle);
+          }
           g.appendChild(info);
         }
       }
@@ -4527,35 +4613,55 @@ export class FlowCanvas extends HTMLElement {
     }
     g.appendChild(body);
 
-    // Domain-Reiter (Kap. 103): eine Kachel in einer benannten MXL-Domain trägt deren Namen als farbigen Reiter über dem
-    // Kopf — in jeder Ansicht sichtbar, ohne Titel und Knöpfe im Kopf zu verdrängen.
+    // Reiter über dem Kopf (Kap. 103): links die MXL-Domain (nur eine benannte), daneben — in der Domain-Ansicht — der Host,
+    // auf dem der Node läuft. So bleibt beides erkennbar, ohne Titel und Knöpfe im Kopf zu verdrängen.
     if (!isGroup && tile.instanceId) {
-      const dom = instanceDomain(this.#paletteInstances.find((i) => i.id === tile.instanceId));
-      if (dom !== DEFAULT_DOMAIN) {
-        const color = domainColor(dom);
-        const text = truncateTileTitle(dom, 18);
-        const w = Math.round(text.length * 6.4) + 20;
+      const tileInst = this.#paletteInstances.find((i) => i.id === tile.instanceId);
+      const dom = instanceDomain(tileInst);
+      const bridgeTarget = instanceTargetDomain(tileInst);
+      const showHost = this.#hostViewEnabled && this.#zoneMode === "domain";
+      let tabX = 8;
+      const addTab = (text: string, fill: string, textFill: string, tip: string, role: string, stroke?: string) => {
+        const w = Math.round(text.length * 6.2) + 14;
         const tab = document.createElementNS(SVG_NS, "g");
-        tab.setAttribute("data-role", "domain-tab");
+        tab.setAttribute("data-role", role);
         tab.setAttribute("pointer-events", "none");
         const tr = document.createElementNS(SVG_NS, "rect");
-        tr.setAttribute("x", "6");
+        tr.setAttribute("x", String(tabX));
         tr.setAttribute("y", "-14");
         tr.setAttribute("width", String(w));
         tr.setAttribute("height", "15");
         tr.setAttribute("rx", "4");
-        tr.setAttribute("fill", color);
-        const tt1 = document.createElementNS(SVG_NS, "text");
-        tt1.setAttribute("x", "14");
-        tt1.setAttribute("y", "-3");
-        tt1.setAttribute("font-size", "10");
-        tt1.setAttribute("font-weight", "700");
-        tt1.setAttribute("fill", "#10151f");
-        tt1.textContent = `⬡ ${text}`;
+        tr.setAttribute("fill", fill);
+        if (stroke) {
+          tr.setAttribute("stroke", stroke);
+          tr.setAttribute("stroke-width", "1");
+        }
+        const tx = document.createElementNS(SVG_NS, "text");
+        tx.setAttribute("x", String(tabX + 7));
+        tx.setAttribute("y", "-3");
+        tx.setAttribute("font-size", "10");
+        tx.setAttribute("font-weight", "600");
+        tx.setAttribute("fill", textFill);
+        tx.textContent = text;
         const ttl = document.createElementNS(SVG_NS, "title");
-        ttl.textContent = tt("flow.domainView.tabHint", { name: dom });
-        tab.append(tr, tt1, ttl);
+        ttl.textContent = tip;
+        tab.append(tr, tx, ttl);
         g.appendChild(tab);
+        tabX += w + 4;
+      };
+      if (bridgeTarget) {
+        // Domain-Brücke: Eingang → Ziel, zweifarbig (links Eingangs-, rechts Zieldomain).
+        const text = `⬡ ${truncateTileTitle(domainTabText(dom, bridgeTarget), 24)}`;
+        addTab(text, domainColor(dom), "#10151f", tt("flow.domainView.bridgeTip", { from: dom, to: bridgeTarget }), "domain-tab");
+      } else if (dom !== DEFAULT_DOMAIN) {
+        addTab(`⬡ ${truncateTileTitle(dom, 14)}`, domainColor(dom), "#10151f", tt("flow.domainView.tabHint", { name: dom }), "domain-tab");
+      }
+      if (showHost) {
+        const full = this.#hostLabelForTileId(tile.id);
+        if (full) {
+          addTab(`@ ${hostChipLabel(full, tt("flow.hostChip.local"), 15)}`, "rgba(18,24,36,0.92)", "#cfd6e4", tt("flow.hostChip.tip", { name: full }), "host-tab", "rgba(160,172,190,0.55)");
+        }
       }
     }
 
@@ -5075,6 +5181,9 @@ export class FlowCanvas extends HTMLElement {
 
     const selected = edge.id === this.#selectedEdgeId;
     const mxlZoneWarning = this.#isCrossZoneMxlEdge(edge, fromLoc.tileId, toLoc.tileId);
+    // Domain-Ansicht: eine Kante über die Zonengrenze kann es nur über eine Domain-Brücke geben (die API lehnt alles andere
+    // ab) — sie ist gewollt und wird deshalb nicht als Warnung (rot) gezeichnet, sondern als Brücken-Kante.
+    const bridgeEdge = mxlZoneWarning && this.#zoneMode === "domain";
     const midX = (from.x + to.x) / 2;
     const path = document.createElementNS(SVG_NS, "path");
     path.setAttribute(
@@ -5084,7 +5193,7 @@ export class FlowCanvas extends HTMLElement {
     path.setAttribute("fill", "none");
     path.setAttribute(
       "stroke",
-      selected ? "#ffffff" : mxlZoneWarning ? "var(--omp-error)" : edge.state === "active" ? "var(--omp-accent-cyan)" : "#4a5a78",
+      selected ? "#ffffff" : bridgeEdge ? "#b794f6" : mxlZoneWarning ? "var(--omp-error)" : edge.state === "active" ? "var(--omp-accent-cyan)" : "#4a5a78",
     );
     path.setAttribute("stroke-width", selected ? "3" : "2");
     path.setAttribute("stroke-linecap", "round");
@@ -5094,7 +5203,7 @@ export class FlowCanvas extends HTMLElement {
     path.style.cursor = "pointer";
     if (mxlZoneWarning) {
       const title = document.createElementNS(SVG_NS, "title");
-      title.textContent = MXL_ZONE_WARNING_TITLE;
+      title.textContent = bridgeEdge ? tt("flow.domainView.bridgeEdge") : MXL_ZONE_WARNING_TITLE;
       path.appendChild(title);
     }
     path.addEventListener("pointerdown", (ev) => {
@@ -5414,8 +5523,8 @@ export class FlowCanvas extends HTMLElement {
     const zoneId = this.#zoneIdForTileId(tileId);
     const range = this.#zoneXRange(rootTiles, zoneId);
     if (!range) return pos;
-    const minX = range.xMin;
-    const maxX = Math.max(minX, range.xMax - NODE_WIDTH);
+    const minX = range.xMin + 8;
+    const maxX = Math.max(minX, range.xMax - NODE_WIDTH - 8);
     const minY = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN + this.#zoneTopInset(zoneId);
     return {
       x: Math.min(Math.max(pos.x, minX), maxX),

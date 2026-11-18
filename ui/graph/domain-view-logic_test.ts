@@ -1,5 +1,5 @@
 import { assertEquals, assertNotEquals } from "jsr:@std/assert";
-import { domainColor, domainZones, hasNamedDomains, instanceDomain, roleDomain, workflowDomainZone } from "./domain-view-logic.ts";
+import { domainColor, domainZones, hasNamedDomains, hostChipLabel, hostSummary, instanceDomain, roleDomain, workflowDomainZone } from "./domain-view-logic.ts";
 
 Deno.test("Domain einer Instanz und einer Rolle", () => {
   assertEquals(instanceDomain(undefined), "default");
@@ -38,4 +38,26 @@ Deno.test("Farbe: stabil, Standard neutral, verschiedene Namen unterscheiden sic
 Deno.test("hasNamedDomains", () => {
   assertEquals(hasNamedDomains([{ name: "default", default: true }]), false);
   assertEquals(hasNamedDomains([{ name: "default", default: true }, { name: "x" }]), true);
+});
+
+Deno.test("Farbe mit Transparenz", () => {
+  assertEquals(domainColor("default", 0.1), "rgba(124,135,152,0.1)");
+  assertEquals(domainColor("test", 0.1).endsWith("/ 0.1)"), true);
+});
+
+Deno.test("Host-Reiter und Zusammenfassung", () => {
+  assertEquals(hostChipLabel(undefined, "lokal"), "lokal");
+  assertEquals(hostChipLabel("  ", "lokal"), "lokal");
+  assertEquals(hostChipLabel("Regie-Host-A", "lokal"), "Regie-Host-A");
+  assertEquals(hostChipLabel("Ein-sehr-langer-Hostname-hier", "lokal", 10), "Ein-sehr-…");
+  assertEquals(hostSummary(["b", "a", "b", ""]), { count: 2, text: "a, b" });
+  assertEquals(hostSummary([]), { count: 0, text: "" });
+});
+
+Deno.test("Brücken-Reiter", async () => {
+  const { instanceTargetDomain, domainTabText } = await import("./domain-view-logic.ts");
+  assertEquals(instanceTargetDomain({ extraEnv: { OMP_MXL_TARGET_DOMAIN_NAME: "b" } }), "b");
+  assertEquals(instanceTargetDomain(undefined), "");
+  assertEquals(domainTabText("a", "b"), "a → b");
+  assertEquals(domainTabText("a", ""), "a");
 });

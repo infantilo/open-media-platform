@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/infantilo/openmediaplatform/podmanrun"
 )
 
 // DefaultName ist der Name der impliziten Standarddomain.
@@ -45,7 +47,9 @@ func ValidateName(name string) error {
 
 // Domain ist eine Domain samt Pfad.
 type Domain struct {
-	Name        string    `json:"name"`
+	Name string `json:"name"`
+	// ID: die BCP-007-03-Domain-ID (UUIDv5 aus dem Namen, podmanrun.DomainID) — erscheint als mxl_domain_id in IS-05.
+	ID          string    `json:"id"`
 	Path        string    `json:"path"`
 	Description string    `json:"description,omitempty"`
 	Default     bool      `json:"default,omitempty"`
@@ -77,7 +81,7 @@ func (s *Store) PathFor(name string) string {
 
 // List liefert die Standarddomain und alle benannten Domains (nach Namen).
 func (s *Store) List() ([]Domain, error) {
-	out := []Domain{{Name: DefaultName, Path: s.defaultPath, Default: true}}
+	out := []Domain{{Name: DefaultName, ID: podmanrun.DomainID(DefaultName), Path: s.defaultPath, Default: true}}
 	rows, err := s.db.Query(`SELECT name, description, created_by, created_at FROM mxl_domains ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -90,6 +94,7 @@ func (s *Store) List() ([]Domain, error) {
 			return nil, err
 		}
 		d.Path = s.PathFor(d.Name)
+		d.ID = podmanrun.DomainID(d.Name)
 		named = append(named, d)
 	}
 	if err := rows.Err(); err != nil {
@@ -151,7 +156,7 @@ func (s *Store) Create(name, description, by string) (Domain, error) {
 		_, _ = s.db.Exec(`DELETE FROM mxl_domains WHERE name=$1`, name)
 		return Domain{}, fmt.Errorf("Verzeichnis %s anlegen: %w", path, err)
 	}
-	return Domain{Name: name, Path: path, Description: description, CreatedBy: by, CreatedAt: time.Now()}, nil
+	return Domain{Name: name, ID: podmanrun.DomainID(name), Path: path, Description: description, CreatedBy: by, CreatedAt: time.Now()}, nil
 }
 
 // Delete entfernt den Eintrag. Das Verzeichnis wird nur entfernt, wenn es leer ist (os.Remove, kein RemoveAll): was

@@ -60,3 +60,9 @@ Deno.test("Startkörper: MXL-Domain nur lokal und nur wenn nicht Standard", () =
   // mit Zielhost wird die Domain nie mitgesendet (die API lehnt die Kombination ab)
   assertEquals(buildStartBody("omp-source", undefined, { ...empty, hostId: "h1", domain: "test" }), { type: "omp-source", hostId: "h1" });
 });
+
+Deno.test("Startkörper: Brücke sendet die Zieldomain", () => {
+  assertEquals(buildStartBody("omp-mxl-bridge", undefined, { ...empty, domain: "a", targetDomain: "b" }), { type: "omp-mxl-bridge", domain: "a", targetDomain: "b" });
+  assertEquals(buildStartBody("omp-mxl-bridge", undefined, { ...empty, targetDomain: "default" }), { type: "omp-mxl-bridge", targetDomain: "default" });
+  assertEquals(buildStartBody("omp-source", undefined, { ...empty, targetDomain: "b" }), { type: "omp-source" });
+});

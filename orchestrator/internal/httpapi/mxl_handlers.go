@@ -210,17 +210,24 @@ func handleDeleteMXLDomain(ds MXLDomainStore, ls LauncherService, audit DomainAu
 // domainStartEnv übersetzt den Domainnamen eines Instanzstarts in extraEnv (D2). Standarddomain → kein Env. Der Pfad
 // entsteht erst dort, wo die Instanz läuft (Launcher, Host-Agent, Container: podmanrun.DomainPath). Für den
 // Orchestrator-Rechner wird das Verzeichnis sofort angelegt; entfernte Hosts legen es selbst an.
-func domainStartEnv(ds MXLDomainStore, name string) (map[string]string, error) {
-	if name == "" || name == mxldomains.DefaultName {
+func domainStartEnv(ds MXLDomainStore, name, target string) (map[string]string, error) {
+	env := map[string]string{}
+	for key, n := range map[string]string{podmanrun.DomainNameKey: name, podmanrun.TargetDomainNameKey: target} {
+		if n == "" || n == mxldomains.DefaultName {
+			continue
+		}
+		if ds == nil {
+			return nil, fmt.Errorf("MXL domains are not enabled on this orchestrator")
+		}
+		if _, err := ds.Resolve(n); err != nil {
+			return nil, err
+		}
+		env[key] = n
+	}
+	if len(env) == 0 {
 		return nil, nil
 	}
-	if ds == nil {
-		return nil, fmt.Errorf("MXL domains are not enabled on this orchestrator")
-	}
-	if _, err := ds.Resolve(name); err != nil {
-		return nil, err
-	}
-	return map[string]string{podmanrun.DomainNameKey: name}, nil
+	return env, nil
 }
 
 func domainOrDefault(n string) string {
@@ -249,16 +256,20 @@ func sameMXLDomain(g graph.Graph, ls LauncherService, fromSender, toReceiver str
 			}
 		}
 	}
-	domainOf := func(id string) string {
+	// Eingang einer Instanz = ihre Domain; Ausgang einer Domain-Brücke = ihre Zieldomain.
+	domainOf := func(id string, output bool) string {
 		if id == "" {
 			return mxldomains.DefaultName
 		}
 		if in, ok := ls.Get(id); ok {
+			if t := in.ExtraEnv[podmanrun.TargetDomainNameKey]; output && t != "" {
+				return t
+			}
 			return domainOrDefault(instanceDomain(in))
 		}
 		return mxldomains.DefaultName
 	}
-	a, b := domainOf(fromInst), domainOf(toInst)
+	a, b := domainOf(fromInst, true), domainOf(toInst, false)
 	if a == b {
 		return nil
 	}

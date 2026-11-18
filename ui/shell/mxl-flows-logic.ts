@@ -23,11 +23,9 @@ export interface DomainRow {
   instances: number;
 }
 
-/** Text einer Domain in der Auswahl: Name, Flows, Instanzen. */
-export function domainOptionLabel(d: DomainRow): string {
-  return `${
-    d.default ? "default" : d.name
-  } — ${d.flows} flows, ${d.instances} inst.`;
+/** Text einer Domain in der Auswahl: Name, Flows, Instanzen (Wörter für die Sprache übergeben). */
+export function domainOptionLabel(d: DomainRow, flowsWord = "flows", instWord = "inst."): string {
+  return `${d.default ? "default" : d.name} — ${d.flows} ${flowsWord}, ${d.instances} ${instWord}`;
 }
 
 export function formatName(f: string | undefined): string {

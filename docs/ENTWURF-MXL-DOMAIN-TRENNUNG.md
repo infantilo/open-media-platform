@@ -1,6 +1,6 @@
 # Entwurf: Getrennte MXL-Domains auf einem Host (Vorplanung)
 
-Stand 2026-11-18. **D1, D2, die Kantenprüfung aus D3 und die Ansicht aus D4 sind gebaut (UMSETZUNG Kapitel 103); D3-Rest und D5–D7 sind offen.** Nutzerauftrag: als Option starten. Dieser Entwurf hält fest, was heute gilt, was eine Trennung bringt, was sie kostet und in welchen
+Stand 2026-11-18. **D1–D6 sind gebaut (UMSETZUNG Kapitel 103); offen ist D7 (Abschottung per UID/Gruppe).** Nutzerauftrag: als Option starten. Dieser Entwurf hält fest, was heute gilt, was eine Trennung bringt, was sie kostet und in welchen
 Schritten sie sich bauen ließe. Die Entscheidungen in §6 sind offen.
 
 ## 1. Ausgangslage (Ist)
@@ -78,7 +78,7 @@ Pfad-Trennung allein schottet nicht ab. Stufen:
    Domain-Gruppe, `access` für Leser beschreibbar). Braucht je Domain eine Gruppe, die Prozess-Nodes ihre
    Zusatzgruppe, und angepasste `umask`; Prozess-Nodes laufen heute alle unter einer UID.
 
-## 5. Schritte (Vorschlag, je ein Schritt pro Sitzung) — Stand: D1, D2, D4 (Ansicht), D3 (nur Kantenprüfung) erledigt
+## 5. Schritte (Vorschlag, je ein Schritt pro Sitzung) — Stand: D1–D6 erledigt (die Brücke wandelt nicht, sie kopiert), D7 offen
 
 | Schritt | Inhalt | Prüfung |
 |---|---|---|

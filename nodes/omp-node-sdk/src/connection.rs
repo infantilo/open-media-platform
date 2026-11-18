@@ -69,6 +69,42 @@ fn unconstrained_mxl_leg() -> Value {
     })
 }
 
+/// Ob `s` eine MXL-UUID nach BCP-007-03 ist (`docs/bcp-007-03/*.schema.json`, "MXL UUID"): kleingeschrieben, kanonisch,
+/// Versionsnibble 1–f, Variante 8/9/a/b.
+pub fn is_mxl_uuid(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() != 36 {
+        return false;
+    }
+    for (i, c) in b.iter().enumerate() {
+        let ok = match i {
+            8 | 13 | 18 | 23 => *c == b'-',
+            14 => matches!(*c, b'1'..=b'9' | b'a'..=b'f'),
+            19 => matches!(*c, b'8' | b'9' | b'a' | b'b'),
+            _ => matches!(*c, b'0'..=b'9' | b'a'..=b'f'),
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
+/// Die MXL-Domain-ID dieses Nodes für `mxl_domain_id` (Kap. 103): `OMP_MXL_DOMAIN_ID` (vom Launcher aus dem Domainnamen
+/// abgeleitete UUID). Ein SENDER einer Domain-Brücke schreibt in die Zieldomain (`OMP_MXL_TARGET_DOMAIN_ID`). Ohne gültige
+/// Umgebungsvariable `None` — dann bleibt es beim Literal `auto` (Einzel-Domain-Fall der Norm).
+fn node_domain_id(is_sender: bool) -> Option<String> {
+    domain_id_from(is_sender, |k| std::env::var(k).ok())
+}
+
+fn domain_id_from(is_sender: bool, env: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let get = |k: &str| env(k).filter(|v| is_mxl_uuid(v));
+    if is_sender && let Some(t) = get("OMP_MXL_TARGET_DOMAIN_ID") {
+        return Some(t);
+    }
+    get("OMP_MXL_DOMAIN_ID")
+}
+
 /// Die Property-Namen des einen Legs, die ein PATCH auf `transport_params`
 /// für `transport_urn` übernehmen darf — alles andere im PATCH-Body wird
 /// ignoriert (kein `additionalProperties`-Fehler, nur stilles Weglassen,
@@ -82,9 +118,13 @@ fn known_leg_keys(transport_urn: &str) -> &'static [&'static str] {
     }
 }
 
-fn constraints_response(transport_urn: &str) -> Vec<u8> {
+fn constraints_response(transport_urn: &str, is_sender: bool) -> Vec<u8> {
     let leg = if transport_urn == TRANSPORT_MXL {
-        unconstrained_mxl_leg()
+        // BCP-007-03: der Constraints-Endpunkt listet die erlaubten Domain-IDs (nie `auto`).
+        match node_domain_id(is_sender) {
+            Some(id) => serde_json::json!({"mxl_domain_id": {"enum": [id]}, "mxl_flow_id": {}}),
+            None => unconstrained_mxl_leg(),
+        }
     } else {
         unconstrained_rtp_leg()
     };
@@ -103,10 +143,11 @@ fn constraints_response(transport_urn: &str) -> Vec<u8> {
 /// json`, "The literal auto is not used for this parameter").
 fn default_leg(transport_urn: &str, is_sender: bool) -> Value {
     if transport_urn == TRANSPORT_MXL {
+        let domain = node_domain_id(is_sender).map(Value::String).unwrap_or_else(|| Value::String("auto".to_string()));
         if is_sender {
-            serde_json::json!({"mxl_domain_id": "auto", "mxl_flow_id": "auto"})
+            serde_json::json!({"mxl_domain_id": domain, "mxl_flow_id": "auto"})
         } else {
-            serde_json::json!({"mxl_domain_id": "auto", "mxl_flow_id": Value::Null})
+            serde_json::json!({"mxl_domain_id": domain, "mxl_flow_id": Value::Null})
         }
     } else if is_sender {
         serde_json::to_value(TransportParams::default()).unwrap_or_default()
@@ -132,6 +173,15 @@ fn merge_leg(
     if transport_urn == TRANSPORT_MXL
         && !is_sender
         && patch_obj.get("mxl_flow_id").and_then(Value::as_str) == Some("auto")
+    {
+        return Err(());
+    }
+    // Eine konkrete Domain-ID, die nicht die dieses Nodes ist, verletzt die Constraints (IS-05: 400); `auto` und `null` bleiben erlaubt.
+    if transport_urn == TRANSPORT_MXL
+        && let Some(requested) = patch_obj.get("mxl_domain_id").and_then(Value::as_str)
+        && requested != "auto"
+        && let Some(own) = node_domain_id(is_sender)
+        && requested != own
     {
         return Err(());
     }
@@ -512,7 +562,7 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
             ("GET", "constraints") => Some((
                 200,
                 "application/json",
-                constraints_response(self.transport_urn),
+                constraints_response(self.transport_urn, true),
             )),
             ("GET", "transporttype") => Some((
                 200,
@@ -723,7 +773,7 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
             ("GET", "constraints") => Some((
                 200,
                 "application/json",
-                constraints_response(self.transport_urn),
+                constraints_response(self.transport_urn, false),
             )),
             ("GET", "transporttype") => Some((
                 200,
@@ -1281,5 +1331,30 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn mxl_uuid_validation_follows_bcp_007_03() {
+        assert!(is_mxl_uuid("6f7b3c1e-5d2a-5f8e-9a41-3c0d1e2f4b57"));
+        assert!(!is_mxl_uuid("6F7B3C1E-5D2A-5F8E-9A41-3C0D1E2F4B57"), "nur kleingeschrieben");
+        assert!(!is_mxl_uuid("6f7b3c1e-5d2a-0f8e-9a41-3c0d1e2f4b57"), "Version 0 nicht erlaubt");
+        assert!(!is_mxl_uuid("6f7b3c1e-5d2a-5f8e-1a41-3c0d1e2f4b57"), "Variante muss 8/9/a/b sein");
+        assert!(!is_mxl_uuid("auto"));
+        assert!(!is_mxl_uuid(""));
+    }
+
+    #[test]
+    fn domain_id_prefers_target_for_senders_only() {
+        let own = "6f7b3c1e-5d2a-5f8e-9a41-3c0d1e2f4b57";
+        let target = "7a7b3c1e-5d2a-5f8e-9a41-3c0d1e2f4b58";
+        let env = |k: &str| match k {
+            "OMP_MXL_DOMAIN_ID" => Some(own.to_string()),
+            "OMP_MXL_TARGET_DOMAIN_ID" => Some(target.to_string()),
+            _ => None,
+        };
+        assert_eq!(domain_id_from(true, env).as_deref(), Some(target));
+        assert_eq!(domain_id_from(false, env).as_deref(), Some(own));
+        assert_eq!(domain_id_from(true, |_| None), None);
+        assert_eq!(domain_id_from(false, |k| (k == "OMP_MXL_DOMAIN_ID").then(|| "kaputt".to_string())), None);
     }
 }

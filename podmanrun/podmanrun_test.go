@@ -3,6 +3,7 @@ package podmanrun
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -104,5 +105,29 @@ func TestDomainPathAndBuildArgs(t *testing.T) {
 	plain := strings.Join(BuildArgs(e, Params{ID: "i1"}, 1234, 0), " ")
 	if !strings.Contains(plain, "-v /dev/shm/omp-mxl:/dev/shm/omp-mxl") || strings.Contains(plain, "omp-mxl-") {
 		t.Errorf("Standard unverändert: %s", plain)
+	}
+}
+
+func TestDomainID(t *testing.T) {
+	re := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-9a-f][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	a, b := DomainID("default"), DomainID("studio")
+	if !re.MatchString(a) || !re.MatchString(b) {
+		t.Fatalf("keine gültige BCP-007-03-UUID: %s %s", a, b)
+	}
+	if a == b || a != DomainID("default") {
+		t.Errorf("IDs müssen stabil und je Domain verschieden sein: %s %s", a, b)
+	}
+	if a[14] != '5' {
+		t.Errorf("Version 5 erwartet: %s", a)
+	}
+	m := map[string]string{DomainNameKey: "studio", TargetDomainNameKey: "test"}
+	ApplyDomainEnv(m)
+	if m["OMP_MXL_DOMAIN_ID"] != b || m["OMP_MXL_TARGET_DOMAIN_ID"] != DomainID("test") {
+		t.Errorf("IDs fehlen: %v", m)
+	}
+	d := map[string]string{}
+	ApplyDomainEnv(d)
+	if d["OMP_MXL_DOMAIN_ID"] != a {
+		t.Errorf("Standarddomain bekommt ihre ID: %v", d)
 	}
 }
