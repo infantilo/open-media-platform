@@ -1,0 +1,27 @@
+name: Issues mit Nachfrage schließen
+
+# Issues mit Label needs-info, auf die 14 Tage niemand geantwortet hat, werden geschlossen (jederzeit wieder zu öffnen).
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Schließen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          cutoff=$(date -u -d '14 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          gh issue list --repo "$REPO" --state open --label needs-info --limit 100 --json number,updatedAt \
+            --jq ".[]|select(.updatedAt < \"$cutoff\")|.number" | while read -r n; do
+            gh issue comment "$n" --repo "$REPO" --body "Keine Rückmeldung seit 14 Tagen, deshalb wird das Issue geschlossen. Mit den fehlenden Angaben (siehe oben) kann es jederzeit wieder geöffnet werden."
+            gh issue close "$n" --repo "$REPO" --reason "not planned"
+          done

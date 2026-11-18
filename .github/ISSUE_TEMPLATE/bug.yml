@@ -1,0 +1,90 @@
+name: Fehler melden / Bug report
+description: Etwas funktioniert nicht wie dokumentiert. Deutsch oder Englisch. / Something does not work as documented.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke für die Meldung. Je vollständiger sie ist, desto schneller kann sie bearbeitet werden.
+        **Keine Passwörter, Tokens oder Schlüssel in den Text schreiben.** Sicherheitslücken bitte privat melden (siehe `SECURITY.md`).
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release-Tag oder Commit (Hosts › Software-Stand der Hosts, oder `git describe --tags`).
+      placeholder: "v0.11.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installationsart
+      options:
+        - Entwicklung (make start)
+        - systemd-Dienste (install.sh)
+        - Offline-Paket
+        - Container / Podman
+        - Cluster (mehrere Hosts)
+        - Andere
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Bereich
+      options:
+        - Orchestrator / Cluster
+        - Web-Oberfläche
+        - Videomischer / Switcher
+        - Audiomischer
+        - Playout / Automation
+        - Grafik (OGraf)
+        - Aufnahme / Ingest / Dateien
+        - Gateways (ST 2110, SRT, MXL, NMOS)
+        - Host-Agent / Update / Installation
+        - Dokumentation
+        - Weiß nicht
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Auswirkung
+      options:
+        - Sendeausfall oder Datenverlust
+        - Funktion fällt aus, Umgehung möglich
+        - Kleinigkeit / kosmetisch
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Schritte zum Nachstellen
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Erwartet und tatsächlich
+      description: Was sollte passieren, was passiert stattdessen? Fehlermeldung und Fehlercode (z. B. OMP-4001) wörtlich angeben.
+    validations:
+      required: true
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Support-Paket
+      description: |
+        Support-Tab → „Support-Paket erstellen“, die ZIP-Datei hier hineinziehen (nicht entpacken). Geheimnisse werden beim Erstellen entfernt,
+        prüfe trotzdem, was du hochlädst. Das Paket wird automatisch ausgewertet. Ohne Paket bitte kurz begründen.
+    validations:
+      required: false
+  - type: textarea
+    id: more
+    attributes:
+      label: Weitere Angaben
+      description: Hardware, Netzwerk, was sich zuletzt geändert hat, Screenshots.
+    validations:
+      required: false

@@ -1,0 +1,24 @@
+name: Wunsch / Feature request
+description: Eine Funktion fehlt oder soll anders arbeiten. / A feature is missing.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Was willst du erreichen?
+      description: Beschreibe die Aufgabe im Betrieb, nicht die Lösung.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Wie stellst du dir das vor?
+    validations:
+      required: false
+  - type: textarea
+    id: standard
+    attributes:
+      label: Gibt es dafür eine Norm?
+      description: Norm mit Nummer und Version (AMWA, EBU, SMPTE ...), falls bekannt.
+    validations:
+      required: false

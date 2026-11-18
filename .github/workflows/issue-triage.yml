@@ -1,0 +1,45 @@
+name: Issue-Vorsortierung
+
+# Labels, Support-Paket auswerten, nachfragen. Kein KI-Einsatz, keine Codeänderung.
+# Sicherheit: läuft immer auf dem Stand des Default-Branches (nie Code aus dem Issue), Issue-Text nur über Umgebungsvariablen
+# und Datei, Rechte nur für Issues.
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Selbst gesetzte Labels/Kommentare des Bots lösen "edited" nicht aus; Pull Requests sind keine Issues hier.
+    if: ${{ !github.event.issue.pull_request }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.26"
+          check-latest: true
+          cache-dependency-path: orchestrator/go.sum
+
+      - name: Vorsortieren
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          TITLE: ${{ github.event.issue.title }}
+          BODY: ${{ github.event.issue.body }}
+          AUTHOR_ASSOC: ${{ github.event.issue.author_association }}
+        run: |
+          printf '%s' "$BODY" > "$RUNNER_TEMP/body.md"
+          BODY_FILE="$RUNNER_TEMP/body.md" bash .github/scripts/triage.sh

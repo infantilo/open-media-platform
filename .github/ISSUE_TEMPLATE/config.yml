@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Sicherheitslücke melden / Report a vulnerability
+    url: https://github.com/infantilo/open-media-platform/security/advisories/new
+    about: Bitte NICHT als öffentliches Issue. Nutze die private Meldung (siehe SECURITY.md). / Do not file this publicly.
