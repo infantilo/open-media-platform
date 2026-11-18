@@ -1,4 +1,4 @@
-//! Regeln der Studio-Logik (Kapitel 89/RC2, `docs/CONTRACT-STUDIO-LOGIC.md`). Reine Zustandsmaschine mit eingespeister Zeit:
+//! Regeln der Studio-Logik (Kapitel 89/RC2, `docs/contracts/CONTRACT-STUDIO-LOGIC.md`). Reine Zustandsmaschine mit eingespeister Zeit:
 //! sie bekommt eine Beobachtung (Mischer-`onAir`/`mute`, Kontakt-Eingänge) und liefert Aktionen (Rotlicht, Stummschalten).
 //! Die Regeln stehen als Daten (`Config`), nicht im Code.
 

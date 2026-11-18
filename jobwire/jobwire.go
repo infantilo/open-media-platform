@@ -1,5 +1,5 @@
 // Package jobwire ist die gemeinsame Beschreibung des Wire-Formats zwischen Orchestrator und Host-Agent für ffmpeg-Jobs
-// (docs/ENTWURF-FFMPEG-HOSTWAHL.md). Beide Seiten importieren diese Typen — es gibt keine zweite, von Hand gepflegte Kopie,
+// (docs/entwuerfe/ENTWURF-FFMPEG-HOSTWAHL.md). Beide Seiten importieren diese Typen — es gibt keine zweite, von Hand gepflegte Kopie,
 // die auseinanderlaufen könnte.
 package jobwire
 

@@ -2,7 +2,7 @@
 // Controller (Pool-Abgleich, Reservierungen, Autoscaling, Budgetdeckel) und Oberfläche. Die Fachlogik liegt im Paket
 // `internal/cloud` (Anbieter-Adapter, Kosten, Lebenszyklus); dieses Paket ist die Anbindung an den Orchestrator-Kern.
 //
-// Konfiguration über die Umgebung (docs/CLOUD-AWS.md): ohne `OMP_CLOUD_PROVIDER` bleibt das Modul gemountet, antwortet aber
+// Konfiguration über die Umgebung (docs/betrieb/CLOUD-AWS.md): ohne `OMP_CLOUD_PROVIDER` bleibt das Modul gemountet, antwortet aber
 // mit `configured:false` (die Oberfläche zeigt einen Hinweis) — der Kern ist ohne Anbieter voll lauffähig.
 package cloud
 

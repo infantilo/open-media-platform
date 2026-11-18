@@ -8,7 +8,7 @@ import (
 	"github.com/hashicorp/raft"
 )
 
-// Kompatibilitätswächter fürs Cluster-Rolling-Update (Kap. 84, docs/ENTWURF-SYSTEM-UPDATE.md §11.4):
+// Kompatibilitätswächter fürs Cluster-Rolling-Update (Kap. 84, docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md §11.4):
 // Während des Rollouts liest ein Mitglied der alten Version das Log, das ein neueres schreibt.
 // Der FSM muss daher unbekannte Befehlsarten/Felder überspringen, ohne Zustand zu beschädigen.
 
@@ -18,7 +18,7 @@ func TestCommandTypesAreKnownSet(t *testing.T) {
 	want := []CommandType{"set_peer_http_addr", "remove_peer_http_addr"}
 	got := KnownCommandTypes()
 	if len(got) != len(want) {
-		t.Fatalf("CommandType-Liste geaendert (%v) - rollingSafe-Folgen pruefen (docs/ENTWURF-SYSTEM-UPDATE.md §11.4) und diese Liste anpassen", got)
+		t.Fatalf("CommandType-Liste geaendert (%v) - rollingSafe-Folgen pruefen (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md §11.4) und diese Liste anpassen", got)
 	}
 	for i := range want {
 		if got[i] != want[i] {

@@ -4,7 +4,7 @@ Stand: 2026-11-05. Dieser Vertrag beschreibt, **was die Plattform von einem Bild
 Playout-Automation ihn aus den Vorgaben eines Channels einrichten kann und er Workflow-Stopp/-Start übersteht — unabhängig
 davon, wer den Mischer herstellt. `omp-audio-mixer` und `omp-video-mixer-me` sind Implementierungen; ein Mischer eines
 anderen Herstellers (auch über einen kleinen Adapter-Node) erfüllt dieselben Punkte und ersetzt unseren, ohne dass die
-Automation oder der Orchestrator geändert werden. Muster wie in `docs/CONTRACT-INTERCOM.md`.
+Automation oder der Orchestrator geändert werden. Muster wie in `docs/contracts/CONTRACT-INTERCOM.md`.
 
 Alle Aufrufe laufen über den Node-Proxy des Orchestrators (`/api/v1/nodes/{nodeId}/params/<name>`,
 `/api/v1/nodes/{nodeId}/methods/<name>`); Parameter und Methoden stehen im `descriptor.json` des Nodes.

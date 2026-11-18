@@ -1,6 +1,6 @@
 //! omp-studio-logic (Radio, Kapitel 89/RC2): Mikrofonlogik des Moderationsplatzes. Liest `onAir` je Mischerkanal und die Kontakt-Eingänge
 //! des GPIO-Nodes, schaltet Rotlicht (GPO mit Haltezeit), Studio-Lautsprecher, Cough und die Studio-Übergabe auf einen TAI-Zeitpunkt.
-//! Regeln stehen als Daten im Parameter `config` (`docs/CONTRACT-STUDIO-LOGIC.md`). Fernaufrufe laufen über den Orchestrator-Proxy.
+//! Regeln stehen als Daten im Parameter `config` (`docs/contracts/CONTRACT-STUDIO-LOGIC.md`). Fernaufrufe laufen über den Orchestrator-Proxy.
 
 mod logic;
 mod uibundle;

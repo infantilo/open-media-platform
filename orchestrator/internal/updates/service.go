@@ -1,5 +1,5 @@
 // Package updates verwaltet hochgeladene System-Update-Pakete
-// (docs/ENTWURF-SYSTEM-UPDATE.md): Streaming-Import mit vollständiger
+// (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md): Streaming-Import mit vollständiger
 // Prüfung (Struktur, SHA-256, Ed25519-Signatur), Ablage unter
 // OMP_UPDATE_DIR, Liste/Löschen und Lesen der vom Supervisor
 // geschriebenen Update-Historie. Angewendet wird ein Paket NICHT hier,

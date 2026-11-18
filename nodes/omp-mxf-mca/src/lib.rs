@@ -1,5 +1,5 @@
 //! MXF Multichannel Audio Labeling Framework (SMPTE ST 377-4) mit dem
-//! kontrollierten Vokabular aus ST 377-41. Siehe docs/ENTWURF-MXF-MCA.md.
+//! kontrollierten Vokabular aus ST 377-41. Siehe docs/entwuerfe/ENTWURF-MXF-MCA.md.
 
 pub mod inject;
 pub mod keys;

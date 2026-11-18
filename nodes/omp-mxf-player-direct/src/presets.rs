@@ -1,4 +1,4 @@
-//! Ansicht des gemeinsamen Audio-Dokuments (`omp-audio-rules`, docs/ENTWURF-AUDIO-REGELN.md, A8) für
+//! Ansicht des gemeinsamen Audio-Dokuments (`omp-audio-rules`, docs/entwuerfe/ENTWURF-AUDIO-REGELN.md, A8) für
 //! die Parameter und das UI dieses Nodes: Programmgruppen und „Shuffle-Presets“ (jetzt Zuordnungs-
 //! vorlagen). Die Matrizen berechnet die Engine (`omp_audio_rules::resolve`); hier stehen nur die
 //! Datentypen der bisherigen Parameter `programGroups`/`shufflePresets` und die Umrechnung aus dem

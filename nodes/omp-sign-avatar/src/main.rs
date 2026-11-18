@@ -1,4 +1,4 @@
-//! omp-sign-avatar: Gebärdensprach-Avatar (Phase 1 = Spike, docs/GEBAERDENSPRACHE.md §7).
+//! omp-sign-avatar: Gebärdensprach-Avatar (Phase 1 = Spike, docs/funktionen/GEBAERDENSPRACHE.md §7).
 //! Software-Rasterizer (CPU) → Fill + Key als MXL-Flows.
 
 mod alphabet;

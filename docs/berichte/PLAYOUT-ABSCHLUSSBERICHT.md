@@ -1,6 +1,6 @@
 # Abschlussbericht Kapitel 27 — Playout-Automation (Stand 2026-10-05)
 
-Gemäß Spec §274. Technische Referenz: `docs/PLAYOUT-AUTOMATION.md`; Entscheidungen und
+Gemäß Spec §274. Technische Referenz: `docs/funktionen/PLAYOUT-AUTOMATION.md`; Entscheidungen und
 Messungen je Schritt: `UMSETZUNG.md` (Kapitel 27, §27.7), `docs/decisions.md`.
 
 **Ehrliches Gesamtbild:** P1–P10 sind umgesetzt und live geprüft. P9 (2026-10-05 nachgeholt):
@@ -15,7 +15,7 @@ Untertitel nur Text. Ein Dauerbetrieb über Tage wurde **nicht** gemessen.
   System, Prozess-Engine, Audit, `/metrics`), NMOS-Registry (IS-04/05), NATS, Postgres.
 - **Aus PIPELINE CONTROLLER übernommen (gelesen, neu gebaut):** Playlist-Engine-Verhalten
   (Sequenz, Fixtime, Precue, Hold, NextLive), Child-Event-Idee, Panel-Muster (Drag&Drop,
-  Property-Editor, Carts-Raster). Mapping: `docs/PLAYOUT-AUTOMATION.md` §13.
+  Property-Editor, Carts-Raster). Mapping: `docs/funktionen/PLAYOUT-AUTOMATION.md` §13.
 
 ## Architektur
 - **Neue Module:** `omp-playout-automation` (`playlist`, `schedule`, `children`, `trigger`,

@@ -1,4 +1,4 @@
-// Package files ist das Modul „Dateien“ (Kapitel 86, docs/ENTWURF-DATEIVERWALTUNG.md): Explorer über Wurzeln je Host
+// Package files ist das Modul „Dateien“ (Kapitel 86, docs/entwuerfe/ENTWURF-DATEIVERWALTUNG.md): Explorer über Wurzeln je Host
 // (Host-Agent-Operationen aus jobwire), Dateizustand je Representation („Datei fehlt“-Filter und -Alarme), Löschen über einen
 // Papierkorb mit Verwendungsprüfung und dynamischem Sperrfenster, Notfall-Leerung bei knappem Speicher.
 package files

@@ -149,7 +149,7 @@ type registerHostResponse struct {
 // ist das Bootstrap-Token selbst (ARCHITECTURE.md §18.3 Punkt 3/4 —
 // "Erkennung ist nie ungesichert-anonym"), nicht ein Bearer-Token aus
 // internal/auth. Broadcastet nach erfolgreicher Registrierung
-// "host.registered" (S2 — docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md):
+// "host.registered" (S2 — docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md):
 // hosts-view.ts soll einen neuen Host ohne Poll <1s anzeigen, statt bis
 // zum nächsten Poll-Intervall zu warten. events darf nil sein (z. B. in
 // Tests) — dann bleibt das Verhalten unverändert (kein Broadcast, kein

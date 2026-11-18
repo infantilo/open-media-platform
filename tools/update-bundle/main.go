@@ -1,5 +1,5 @@
 // update-bundle baut, signiert und prüft OMP-Update-Pakete
-// (docs/ENTWURF-SYSTEM-UPDATE.md).
+// (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md).
 //
 //	update-bundle keygen -out <dir>
 //	    erzeugt <dir>/update-signing.key (GEHEIM, 0600) und update-trusted.pub

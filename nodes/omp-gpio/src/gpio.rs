@@ -1,4 +1,4 @@
-//! Zustandsmaschine von `omp-gpio` (Kapitel 89/RC1, `docs/CONTRACT-GPIO.md`): Eingänge mit Entprellung, Ausgänge mit Haltezeit
+//! Zustandsmaschine von `omp-gpio` (Kapitel 89/RC1, `docs/contracts/CONTRACT-GPIO.md`): Eingänge mit Entprellung, Ausgänge mit Haltezeit
 //! (Lease) und Fail-Safe-Pegel. Reine Logik mit eingespeister Zeit (ms, monoton) — ohne Gerät und ohne Netz testbar.
 
 #[derive(Debug, Clone, PartialEq)]

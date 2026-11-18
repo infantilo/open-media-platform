@@ -6,7 +6,7 @@ edition = "2024"
 publish = false
 
 # Rasterizer, Avatar und Wiedergabe sind reines Rust ohne Fremdabhängigkeiten
-# (Lizenzlage, docs/GEBAERDENSPRACHE.md §5); GStreamer/MXL nur im Ausgabe-Rahmen.
+# (Lizenzlage, docs/funktionen/GEBAERDENSPRACHE.md §5); GStreamer/MXL nur im Ausgabe-Rahmen.
 [dependencies]
 gstreamer = "0.25.3"
 gstreamer-app = "0.25.2"

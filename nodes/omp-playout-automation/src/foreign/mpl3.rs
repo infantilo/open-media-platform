@@ -1,5 +1,5 @@
 //! Adapter `mpl3`: XML-Sendeliste (Wurzelelement endet auf `Playlist`, Kind `eventList`, Version 3.x). Aufbau und Zeitmodell siehe
-//! `docs/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md` §1. Zeitstempel `YYYY-MM-DDThh:mm:ss:ff` sind Hausuhr (UTC),
+//! `docs/entwuerfe/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md` §1. Zeitstempel `YYYY-MM-DDThh:mm:ss:ff` sind Hausuhr (UTC),
 //! das letzte Feld sind Frames. Nur lesend; der Laufzeitzustand des Fremdsystems wird nicht übernommen.
 
 use std::collections::BTreeMap;

@@ -1,5 +1,5 @@
 // Package update beschreibt, prüft und entpackt OMP-Update-Pakete
-// (docs/ENTWURF-SYSTEM-UPDATE.md). Gemeinsam genutzt von Orchestrator
+// (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md). Gemeinsam genutzt von Orchestrator
 // (Upload/Vorprüfung), Supervisor (Anwenden, prüft ERNEUT — vertraut dem
 // Orchestrator nicht blind, der ja gerade ersetzt wird) und
 // tools/update-bundle (Paket bauen/signieren). Bewusst ein eigenes,

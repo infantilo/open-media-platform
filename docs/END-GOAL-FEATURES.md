@@ -1536,7 +1536,7 @@ Schicht — §6.3 Stufen 1–3):**
   §6.3 Stufe 2, jetzt konkret geplant statt nur konzeptionell benannt.
 - **Degradation (§6.3 Stufe 3):** bereits gelebtes Muster
   (`omp-switcher`s Schwarzbild-Fallback, C7) — als SDK-Leitlinie in
-  `docs/NODE-TUTORIAL.md` (D5) verankern, falls dort noch nicht
+  `docs/entwicklung/NODE-TUTORIAL.md` (D5) verankern, falls dort noch nicht
   geschehen (kurze Prüfung als Teil der Umsetzung, kein neuer Code).
 
 **b) Medientransport-Ebene (unterscheidet sich fundamental nach
@@ -1602,7 +1602,7 @@ zweite Konfigurationsebene einführen.
   innerhalb der Backoff-Zeit, IS-05-Verbindung automatisch wieder
   hergestellt, UI zeigt den Restart-Zähler hoch.
 - **Teil 2 — Degradation-Leitlinie verankern:** Prüfen/Ergänzen in
-  `docs/NODE-TUTORIAL.md`, kein Code.
+  `docs/entwicklung/NODE-TUTORIAL.md`, kein Code.
 - **Teil 3 — ST 2022-7 Dual-Path:** als neue, pro Workflow-Rolle
   opt-in konfigurierbare Fähigkeit in `omp-mediaio::st2110` (D4-Basis).
   Kleinster Schritt mit „echtem" Broadcast-Redundanz-Anspruch (0 Frames

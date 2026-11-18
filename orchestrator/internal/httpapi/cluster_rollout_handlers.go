@@ -1,6 +1,6 @@
 package httpapi
 
-// Cluster-Rolling-Update (Kap. 84, docs/ENTWURF-SYSTEM-UPDATE.md §11): Admin-API (Start/Fortsetzen/Abbrechen/Stand)
+// Cluster-Rolling-Update (Kap. 84, docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md §11): Admin-API (Start/Fortsetzen/Abbrechen/Stand)
 // und die internen Mitglieds-Routen, über die der Koordinator die übrigen Orchestratoren ansteuert.
 
 import (

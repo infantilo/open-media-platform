@@ -45,7 +45,7 @@ fi
 echo "==> Supervisor starten"
 export OMP_ROOT_DIR="$ROOT_DIR"
 export OMP_BACKUP_DIR="$ROOT_DIR/.backups"
-# System-Update (docs/ENTWURF-SYSTEM-UPDATE.md) — gleiche Pfade wie beim
+# System-Update (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md) — gleiche Pfade wie beim
 # Orchestrator (start-omp.sh); der Supervisor prüft Pakete selbst erneut.
 export OMP_UPDATE_DIR="${OMP_UPDATE_DIR:-$ROOT_DIR/.updates}"
 export OMP_UPDATE_PUBKEY_FILE="${OMP_UPDATE_PUBKEY_FILE:-$ROOT_DIR/.run/update-trusted.pub}"

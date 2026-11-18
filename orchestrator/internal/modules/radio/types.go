@@ -1,4 +1,4 @@
-// Package radio ist das Modul „Radio“ (Kapitel 89, docs/ENTWURF-RADIO-KONSOLE.md): Sendungen, die Moderatorinnen und Moderatoren
+// Package radio ist das Modul „Radio“ (Kapitel 89, docs/entwuerfe/ENTWURF-RADIO-KONSOLE.md): Sendungen, die Moderatorinnen und Moderatoren
 // **vor** der Sendung vorbereiten (Ablauf, Moderationskarten, Hotkeys, Notizen) und die zur Sendezeit in die Radio-Automation geladen werden.
 // Eine Sendung ist ein Dokument mit Versionen, Zeitfenster, Verantwortlichen und Status; Vorlagen (Formate) sind Sendungen mit `template`.
 package radio

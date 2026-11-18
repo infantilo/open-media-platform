@@ -1,4 +1,4 @@
-// Package jobrun verteilt ffmpeg-/ffprobe-Jobs auf Hosts (docs/ENTWURF-FFMPEG-HOSTWAHL.md): Ziel-Auswahl, automatische
+// Package jobrun verteilt ffmpeg-/ffprobe-Jobs auf Hosts (docs/entwuerfe/ENTWURF-FFMPEG-HOSTWAHL.md): Ziel-Auswahl, automatische
 // Zuweisung nach Last, Sendeschutz, Wiederholung bei Hostverlust. Aufrufer (script-Schritt, File-QC, Review-Proxy,
 // Ingest-Convert) reichen einen [Spec] ein und bekommen ein [Result]; ob der Job lokal oder auf einem Host-Agent läuft,
 // entscheidet der Dispatcher.

@@ -604,7 +604,7 @@ func main() {
 	poller.HealthTracker = healthTracker
 	poller.HealthStaleAfter = healthStaleAfter
 	poller.OnChange = func(eventType string, node registry.NodeView) {
-		// S1 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): hält den
+		// S1 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): hält den
 		// Graph-Edge-Cache bei Node-Zu-/Abgang aktuell, statt bis zum
 		// nächsten periodischen Reconcile (graph.ReconcileInterval) zu
 		// warten — node.added/node.removed sind die einzigen für den
@@ -686,7 +686,7 @@ func main() {
 	// ProcessSampler.
 	go launcherSvc.Run(ctx)
 
-	// S3 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Remote-Parität für
+	// S3 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Remote-Parität für
 	// Instanzen — der Host-Agent meldet ein unerwartetes Prozessende auf
 	// omp.host.<hostId>.events (host-agent/internal/commands.
 	// Executor.publishExit), der Launcher behandelt es wie das lokale
@@ -780,7 +780,7 @@ func main() {
 	groupStore := groups.NewStore(database)
 	groupStore.OnChange = authzStore.Invalidate // Audit H7: Mitgliedschaftsänderung verwirft den Rechte-Cache sofort
 	auditStore := audit.NewStore(database, hub)
-	// S5 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Startup- + täglicher
+	// S5 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Startup- + täglicher
 	// Retention-Lauf, löscht Audit-Zeilen älter als cfg.AuditRetentionDays.
 	go auditStore.RunRetention(ctx, cfg.AuditRetentionDays)
 	// Fachliches Domain-Audit (Kapitel 21 B13), additiv zu auditStore oben

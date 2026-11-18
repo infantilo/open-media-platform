@@ -3,7 +3,7 @@
 // UMSETZUNG.md D6 Teil 2: "Instanz-Launcher wird Remote-fähig") — das
 // Host-Agent-Gegenstück zu orchestrator/internal/launcher.
 //
-// Seit S3 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) meldet der
+// Seit S3 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) meldet der
 // Executor ein unerwartetes Prozessende zusätzlich als NATS-Event
 // (omp.host.<hostId>.events) an den Orchestrator zurück — das
 // Gegenstück zu orchestrator/internal/launcher.supervise()'s lokalem
@@ -158,7 +158,7 @@ type Request struct {
 	Kind string `json:"kind,omitempty"`
 	// FileOp: Action "files" (Kap. 86) — Dateiliste/Existenzprüfung/Papierkorb in einer Wurzel dieses Hosts (jobwire.RunFileOp).
 	FileOp *jobwire.FileOp `json:"fileOp,omitempty"`
-	// Jobs (Aktionen exec, exec-cancel, exec-list, exec-pause, exec-resume, exec-nice; docs/ENTWURF-FFMPEG-HOSTWAHL.md).
+	// Jobs (Aktionen exec, exec-cancel, exec-list, exec-pause, exec-resume, exec-nice; docs/entwuerfe/ENTWURF-FFMPEG-HOSTWAHL.md).
 	JobID    string   `json:"jobId,omitempty"`
 	Tool     string   `json:"tool,omitempty"`
 	Args     []string `json:"args,omitempty"`

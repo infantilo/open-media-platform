@@ -287,7 +287,7 @@ func main() {
 			slog.Error("node-options.json invalid — options disabled on this host", "path", optionsPath, "error", err)
 		}
 	}
-	// System-Update auf diesem Host (docs/ENTWURF-SYSTEM-UPDATE.md): der
+	// System-Update auf diesem Host (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md): der
 	// Agent prüft Pakete mit seinem EIGENEN Vertrauensanker. Ohne
 	// Schlüsseldatei lehnt er jedes Paket ab.
 	if selfPath, err := os.Executable(); err == nil {
@@ -313,7 +313,7 @@ func main() {
 	} else {
 		slog.Warn("microservice store unavailable — imported microservices disabled on this host", "error", err)
 	}
-	// Job-Ausführung (ffmpeg/ffprobe im Auftrag des Orchestrators, docs/ENTWURF-FFMPEG-HOSTWAHL.md): nur mit tools.json
+	// Job-Ausführung (ffmpeg/ffprobe im Auftrag des Orchestrators, docs/entwuerfe/ENTWURF-FFMPEG-HOSTWAHL.md): nur mit tools.json
 	// neben dem Katalog — der Host entscheidet, was und wo ausgeführt werden darf.
 	toolsPath := envOr("OMP_HOST_AGENT_TOOLS", filepath.Join(filepath.Dir(catalogPath), "tools.json"))
 	if catalogPath != "" {

@@ -1,4 +1,4 @@
-//! Entscheidungslogik des Havarieumschalters (`docs/ENTWURF-HAVARIEUMSCHALTER.md`): reine Zustandsmaschine mit eingespeister Zeit.
+//! Entscheidungslogik des Havarieumschalters (`docs/entwuerfe/ENTWURF-HAVARIEUMSCHALTER.md`): reine Zustandsmaschine mit eingespeister Zeit.
 //! Sie bekommt je Block die Beobachtung jeder Quelle (Signal da? Pegel? später Freeze/Schwarz) und liefert Ereignisse sowie die aktive Quelle.
 //! Haltezeiten und Schwellen sind Eigenlösung (keine Norm), s. `Rules::default`.
 

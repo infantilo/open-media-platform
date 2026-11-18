@@ -53,7 +53,7 @@ type InfoResponse struct {
 type NodeLister interface {
 	List() []registry.NodeView
 	Get(id string) (registry.NodeView, bool)
-	// PollDuration (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
+	// PollDuration (S8, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
 	// handleMetrics in metrics.go.
 	PollDuration() time.Duration
 }
@@ -62,12 +62,12 @@ type NodeLister interface {
 // und erlaubt zusätzlich das Verteilen synthetischer Events, die nicht
 // über NATS laufen (implementiert von *sse.Hub). Broadcast wird bisher
 // nur von handleRegisterHost genutzt ("host.registered", S2 —
-// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): eine neue Host-
+// docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): eine neue Host-
 // Registrierung soll ohne Poll <1s im hosts-view sichtbar werden.
 type EventSubscriber interface {
 	Subscribe() (<-chan sse.Event, func())
 	Broadcast(sse.Event)
-	// ClientCount/TotalDrops (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md)
+	// ClientCount/TotalDrops (S8, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md)
 	// — s. handleMetrics in metrics.go.
 	ClientCount() int
 	TotalDrops() uint64
@@ -136,7 +136,7 @@ type LauncherService interface {
 	Stop(id string) error
 	// Rename ändert das Label einer Instanz (ID bleibt) — s. handlePatchInstance.
 	Rename(id, label string) error
-	// TotalRestarts (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
+	// TotalRestarts (S8, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
 	// handleMetrics in metrics.go.
 	TotalRestarts() uint64
 	// ImportCatalogEntry/RemoveCatalogEntry (§17 Teil 4, docs/END-GOAL-
@@ -398,7 +398,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// auth.LoginLockout-Doku für die Bedrohungsmodell-Begründung).
 	loginLockout := auth.NewLoginLockout()
 
-	// S8 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): ein Zähler pro
+	// S8 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): ein Zähler pro
 	// Prozess, geteilt zwischen der zählenden Middleware (unten,
 	// umschließt den ganzen Mux) und /metrics selbst.
 	reqCounters := &requestCounters{}
@@ -612,7 +612,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/backups/upload", g.requireVerbGlobal(authz.VerbAdmin, handleUploadBackup(backupSvc)))
 	mux.HandleFunc("POST /api/v1/admin/restore", g.requireVerbGlobal(authz.VerbAdmin, handleRestore(backupSvc, supervisorClient)))
 
-	// System-Update per Browser-Upload (docs/ENTWURF-SYSTEM-UPDATE.md).
+	// System-Update per Browser-Upload (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md).
 	// VerbAdmin: ein Update-Paket ist ausführbarer Code.
 	mux.HandleFunc("GET /api/v1/admin/updates", g.requireVerbGlobal(authz.VerbAdmin, handleListUpdates(options.updates, options.updateSup, launcherSvc, options.updateDist)))
 	mux.HandleFunc("POST /api/v1/admin/updates/upload", g.requireVerbGlobal(authz.VerbAdmin, handleUploadUpdate(options.updates, options.nodeRegistrar(), options.domainAudit)))

@@ -1,6 +1,6 @@
 package commands
 
-// System-Update auf einem Remote-Host (docs/ENTWURF-SYSTEM-UPDATE.md, §6):
+// System-Update auf einem Remote-Host (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md, §6):
 // der Orchestrator schickt `action:"update"` mit einem Pfad + Einmal-Token
 // zum Paket-Download. Der Agent lädt das Paket NUR vom eigenen
 // Orchestrator (updatePath wird an OMP_ORCHESTRATOR_URL gehängt, nie eine

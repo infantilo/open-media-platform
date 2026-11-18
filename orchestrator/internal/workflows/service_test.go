@@ -536,7 +536,7 @@ func TestDeleteRequiresStopped(t *testing.T) {
 }
 
 // TestCreatePublishesWorkflowUpdated ist ein S2-Regressionstest
-// (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): per Live-CDP-Test
+// (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): per Live-CDP-Test
 // gefunden, dass Create() als einziger Schreibpfad kein "workflow.
 // updated" broadcastete — ein extern (nicht über workflows-view.ts'
 // eigenes #createWorkflow(), das nach dem POST selbst pollt) angelegter

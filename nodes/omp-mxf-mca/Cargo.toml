@@ -8,7 +8,7 @@ publish = false
 # ST 377-41): Lesen der MCA-Label-SubDescriptors aus MXF-Dateien und
 # (Schreib-Teil) Einfügen in bestehende Dateien. Reine Logik ohne
 # GStreamer/ffmpeg — weder mxfdemux noch ffmpeg 5.1 liefern die Labels
-# (docs/ENTWURF-MXF-MCA.md). Nur serde für die JSON-Sicht in Node-Parametern.
+# (docs/entwuerfe/ENTWURF-MXF-MCA.md). Nur serde für die JSON-Sicht in Node-Parametern.
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

@@ -7,7 +7,7 @@ import (
 	"github.com/hashicorp/raft"
 )
 
-// Bausteine für das Cluster-Rolling-Update (Kap. 84, docs/ENTWURF-SYSTEM-UPDATE.md §11).
+// Bausteine für das Cluster-Rolling-Update (Kap. 84, docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md §11).
 // Der Treiber selbst folgt in 84.3; hier nur: Führung abgeben und das Tor je Mitglied.
 
 // DefaultMaxLag ist die Standard-Schwelle für lastIndex−appliedIndex, unter der ein Mitglied als „aufgeholt“ gilt.

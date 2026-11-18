@@ -3,7 +3,7 @@
 Stand: 2026-11-05 (Kapitel 89, RB2/RB3). Dieser Vertrag beschreibt, **was die Radio-Automation von einem Abspieler erwartet**, der
 mehrere Dateien gleichzeitig und sample-genau überlappend abspielt — unabhängig davon, wer ihn herstellt. `omp-segue-player` ist die
 Implementierung; ein anderer Abspieler (auch ein Adapter-Node vor fremder Hardware) erfüllt dieselben Punkte und ersetzt ihn, ohne
-dass Automation oder Orchestrator sich ändern. Muster wie `docs/CONTRACT-MIXER-SETUP.md`.
+dass Automation oder Orchestrator sich ändern. Muster wie `docs/contracts/CONTRACT-MIXER-SETUP.md`.
 
 Alle Aufrufe laufen über den Node-Proxy des Orchestrators (`/api/v1/nodes/{nodeId}/methods/<name>`, `…/params/<name>`); Parameter und
 Methoden stehen im `descriptor.json`.

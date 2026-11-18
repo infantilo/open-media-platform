@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Baut das OFFLINE-PAKET für Rechner ohne Internetzugang (docs/OFFLINE-INSTALLATION.md).
+# Baut das OFFLINE-PAKET für Rechner ohne Internetzugang (docs/betrieb/OFFLINE-INSTALLATION.md).
 # Läuft auf einem Rechner MIT Internet, auf dem OMP schon gebaut ist (./install.sh --media, make nodes),
 # idealerweise gleiche Distribution/gleiches Release/gleiche Architektur wie der Zielrechner.
 #
@@ -288,7 +288,7 @@ fi
 # ---- 6. Manifest, Installer, Prüfsummen --------------------------------------------------------------
 say "6/7 Manifest und Prüfsummen"
 cp -a "$HERE/install-offline.sh" "$STAGE/install-offline.sh"; chmod +x "$STAGE/install-offline.sh"
-cp -a "$ROOT_DIR/docs/OFFLINE-INSTALLATION.md" "$STAGE/ANLEITUNG.md" 2>/dev/null || true
+cp -a "$ROOT_DIR/docs/betrieb/OFFLINE-INSTALLATION.md" "$STAGE/ANLEITUNG.md" 2>/dev/null || true
 cat > "$STAGE/MANIFEST.json" <<JSON
 {
   "name": "$NAME",
@@ -321,4 +321,4 @@ else ARCHIVE="$ARCHIVE.gz"; tar -C "$STAGE" -cf - . | nice -n 10 gzip -3 > "$ARC
 echo
 echo "Fertig: $ARCHIVE ($(du -sh "$ARCHIVE" | cut -f1))"
 echo "Prüfsumme: $(cut -d' ' -f1 "$ARCHIVE.sha256")"
-echo "Auf den Zielrechner kopieren (USB/scp), dort entpacken und ./install-offline.sh ausführen — docs/OFFLINE-INSTALLATION.md"
+echo "Auf den Zielrechner kopieren (USB/scp), dort entpacken und ./install-offline.sh ausführen — docs/betrieb/OFFLINE-INSTALLATION.md"

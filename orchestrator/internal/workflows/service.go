@@ -448,7 +448,7 @@ func (s *Service) Create(name string, def Definition, adopt map[string]RoleRunti
 	if len(adopt) > 0 {
 		s.runOpen(wf, RunSourceAdopted)
 	}
-	// S2 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md), live-verifiziert
+	// S2 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md), live-verifiziert
 	// per CDP gefunden: Create() fehlte bisher als einziger Schreibpfad
 	// das publish() — ein extern (nicht über workflows-view.ts' eigenes
 	// #createWorkflow()) angelegter Workflow blieb in jedem anderen

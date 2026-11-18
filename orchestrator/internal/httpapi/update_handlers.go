@@ -23,7 +23,7 @@ import (
 	"github.com/infantilo/openmediaplatform/update"
 )
 
-// System-Update per Browser-Upload (docs/ENTWURF-SYSTEM-UPDATE.md). Der
+// System-Update per Browser-Upload (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md). Der
 // Orchestrator nimmt Pakete entgegen, prüft sie (Struktur, SHA-256,
 // Ed25519-Signatur) und übergibt das Anwenden an den Supervisor, der ihn
 // dafür stoppen/ersetzen/starten muss. Alle Routen VerbAdmin — ein

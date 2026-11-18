@@ -5,7 +5,7 @@ version: 1.0.0
 author: infantilo
 tags: [broadcast, nmos, is-04, mxl, rust, microservice, gstreamer]
 license: MIT
-compatibility: Needs a checkout of the OpenMediaPlatform repository (docs/NODE-TUTORIAL.md, ARCHITECTURE.md), Rust/cargo for path 1, Go for the contract checker, Podman for path 2.
+compatibility: Needs a checkout of the OpenMediaPlatform repository (docs/entwicklung/NODE-TUTORIAL.md, ARCHITECTURE.md), Rust/cargo for path 1, Go for the contract checker, Podman for path 2.
 allowed-tools:
   - Read
   - Write
@@ -19,7 +19,7 @@ argument-hint: "<purpose in one sentence> [rust|container]"
 Build one node that passes the contract check. Do not guess the contract: the repository is the specification.
 
 ## 1. Read the specification first
-Read `docs/NODE-TUTORIAL.md` and `ARCHITECTURE.md` section 5 in the repository. If either is missing, stop and ask for the checkout. Details are in `references/node-contract.md`.
+Read `docs/entwicklung/NODE-TUTORIAL.md` and `ARCHITECTURE.md` section 5 in the repository. If either is missing, stop and ask for the checkout. Details are in `references/node-contract.md`.
 
 ## 2. Collect the order (ask only what is missing)
 1. Purpose in one sentence.

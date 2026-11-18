@@ -303,7 +303,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
     };
 
     // Intercom-Paarung (Kapitel 50): den Intercom-Dienst über Typ und Rolle finden (nie über einen Produktnamen,
-    // docs/CONTRACT-INTERCOM.md) — nur auf einer KAMERA-Instanz und nur, wenn die Person Gäste einladen darf.
+    // docs/contracts/CONTRACT-INTERCOM.md) — nur auf einer KAMERA-Instanz und nur, wenn die Person Gäste einladen darf.
     let intercom = null; // { name, roles }
     const icCall = (role, params, body) => {
       const rt = intercom.roles[role];

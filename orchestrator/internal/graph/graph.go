@@ -23,7 +23,7 @@ import (
 )
 
 // ReconcileInterval ist der Abstand zwischen zwei vollen Edge-Cache-
-// Neuaufbauten im Hintergrund (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md
+// Neuaufbauten im Hintergrund (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md
 // S1) — fängt Abweichungen ab, die an Service.Connect/Disconnect und den
 // gezielten Node-Event-Abgleich (HandleNodeEvent) vorbei entstanden sind
 // (z. B. eine Connection, die direkt per curl am Node geschaltet wurde).

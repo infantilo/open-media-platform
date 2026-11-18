@@ -403,7 +403,7 @@ func TestHandleWhoamiReportsIsAdminFalseWithoutBinding(t *testing.T) {
 	}
 }
 
-// --- S5: handleListAuditLog Cursor-Pagination (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) ---
+// --- S5: handleListAuditLog Cursor-Pagination (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) ---
 
 func TestHandleListAuditLogDefaultsWithoutQueryParams(t *testing.T) {
 	reader := &fakeAuditSvc{}

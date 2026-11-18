@@ -1,5 +1,5 @@
 //! Mackie-Control-Codec (Kapitel 93) — Rust-Gegenstück zu `ui/shell/midi/mcu.ts`, gegen dieselben Prüfwerte getestet
-//! (`docs/midi/golden.json`). Quelle und Prüfstatus: `docs/CONTRACT-MIDI.md` §2.
+//! (`docs/midi/golden.json`). Quelle und Prüfstatus: `docs/contracts/CONTRACT-MIDI.md` §2.
 
 pub const DEVICE_ID_MCU: u8 = 0x14;
 pub const FADER_MAX: i32 = 16383;
@@ -231,7 +231,7 @@ pub fn device_query(id: u8) -> Vec<u8> {
     sysex(id, 0x00, &[])
 }
 
-/// Antwortcode auf die Anmeldeaufforderung (docs/CONTRACT-MIDI.md §2.4).
+/// Antwortcode auf die Anmeldeaufforderung (docs/contracts/CONTRACT-MIDI.md §2.4).
 pub fn connection_response(c: [u8; 4]) -> [u8; 4] {
     let (c0, c1, c2, c3) = (c[0] as i32, c[1] as i32, c[2] as i32, c[3] as i32);
     [

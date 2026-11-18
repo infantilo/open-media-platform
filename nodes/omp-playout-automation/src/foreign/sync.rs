@@ -1,4 +1,4 @@
-//! Watchfolder-Mitlauf (Kern, `docs/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md` §2): neueste vollständige Datei finden,
+//! Watchfolder-Mitlauf (Kern, `docs/entwuerfe/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md` §2): neueste vollständige Datei finden,
 //! gegen den bisherigen Stand abgleichen, Position und Veralterung bestimmen. Rein bis auf den Verzeichnisscan.
 
 use std::path::{Path, PathBuf};

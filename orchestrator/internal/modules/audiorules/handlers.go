@@ -17,7 +17,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 )
 
-// Dynamische Audio-Zuordnung (docs/ENTWURF-AUDIO-REGELN.md, A2): ein
+// Dynamische Audio-Zuordnung (docs/entwuerfe/ENTWURF-AUDIO-REGELN.md, A2): ein
 // Einstellungsdokument für die ganze Plattform — Ausgabeprofil (Zielgruppen),
 // Spurschemata, Zuordnungsvorlagen und Regelsatz. Persistiert im generischen
 // NodeSettingsStore unter dem Schlüssel "audio-rules"; Auflösung und

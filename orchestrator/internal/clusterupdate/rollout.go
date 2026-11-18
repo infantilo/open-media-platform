@@ -1,5 +1,5 @@
 // Package clusterupdate steuert das Cluster-Rolling-Update und den rollierenden Cluster-Neustart (Kap. 84,
-// docs/ENTWURF-SYSTEM-UPDATE.md §11): Mitglieder nacheinander, der Leader zuletzt nach Führungsübergabe.
+// docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md §11): Mitglieder nacheinander, der Leader zuletzt nach Führungsübergabe.
 // Der Zustand liegt in Postgres; der Treiber läuft nur auf dem Leader und setzt nach einem Wechsel dort fort.
 package clusterupdate
 

@@ -28,7 +28,7 @@ Legende: **✔** erfüllt · **◐** teilweise · **✘** offen · **n/a** nicht
 | M-DO-03 | P1 | Schnittstellen, Zugangspunkte, Netzkommunikation vollständig beschrieben | ◐ | `docs/INSTALLATION.md` §4 listet die Ports; die Routentabelle (`orchestrator/cmd/routetable/testdata/routes.golden.json`) beschreibt alle HTTP-Endpunkte mit Rechtepflicht. Es fehlt eine Gesamtübersicht der Node-Ports und NATS-Subjects als Betreiberdokument. |
 | M-DO-04 | P2 | Integrationshinweise (nur nötige Ports offen) | ◐ | siehe M-DO-03; netzwerkarme Platzierung Kap. 56. |
 | M-DO-05 | P1 | Härtungsempfehlungen | ◐ | systemd-Härtung (Audit M11) und Produktionsprofil `OMP_PROFILE=production` (Kap. 66) existieren; ein Härtungsleitfaden für Betreiber fehlt. |
-| M-DO-06 | P1 | Patch-/Release-Prozess, besonders Sicherheitsupdates | ◐ | Signierte Update-Pakete mit Rollback (`docs/ENTWURF-SYSTEM-UPDATE.md`), Image-Pins per Digest, Dependabot/`govulncheck`/`cargo audit` in CI. Es fehlt eine schriftliche Zusage zu Fristen für Sicherheitsupdates. |
+| M-DO-06 | P1 | Patch-/Release-Prozess, besonders Sicherheitsupdates | ◐ | Signierte Update-Pakete mit Rollback (`docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md`), Image-Pins per Digest, Dependabot/`govulncheck`/`cargo audit` in CI. Es fehlt eine schriftliche Zusage zu Fristen für Sicherheitsupdates. |
 
 ### AA — Authentisierung und Autorisierung
 | ID | P | Anforderung | Stand | Beleg / Lücke |
@@ -65,7 +65,7 @@ Legende: **✔** erfüllt · **◐** teilweise · **✘** offen · **n/a** nicht
 | ID | P | Anforderung | Stand | Beleg / Lücke |
 |---|---|---|---|---|
 | M-NE-01 | P1 | Feingranulare Netzsegmentierung **unterstützen** | ◐ | Steuer- und Medienebene getrennt gedacht (ARCHITECTURE.md), NIC-Zuordnung je Host; keine Dokumentation einer Segmentierung (VLAN-Plan). |
-| M-NE-02 | P2–P3 | Betrieb ohne ständige Internetverbindung; Inhaltsprüfung; Jumphost; Verkehrsüberwachung | ◐ | Betrieb ohne Internet ist möglich (Offline-Installation, `docs/OFFLINE-INSTALLATION.md`); keine Call-Home-Funktion. Inhaltsprüfung/Jumphost/Verkehrsüberwachung sind Betreibersache und nicht dokumentiert. |
+| M-NE-02 | P2–P3 | Betrieb ohne ständige Internetverbindung; Inhaltsprüfung; Jumphost; Verkehrsüberwachung | ◐ | Betrieb ohne Internet ist möglich (Offline-Installation, `docs/betrieb/OFFLINE-INSTALLATION.md`); keine Call-Home-Funktion. Inhaltsprüfung/Jumphost/Verkehrsüberwachung sind Betreibersache und nicht dokumentiert. |
 
 ### AP — Anwendungssicherheit
 | ID | P | Anforderung | Stand | Beleg / Lücke |

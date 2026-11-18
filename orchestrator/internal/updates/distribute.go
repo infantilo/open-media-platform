@@ -1,6 +1,6 @@
 package updates
 
-// Verteilung eines Pakets an Remote-Hosts (docs/ENTWURF-SYSTEM-UPDATE.md,
+// Verteilung eines Pakets an Remote-Hosts (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md,
 // §6 „Host-Agents“): der Orchestrator schickt jedem online gemeldeten
 // Host-Agent per NATS ein `update`-Kommando mit einem Einmal-Token-Pfad.
 // Der Agent lädt das Paket über GET /api/v1/host-updates/<id>?token=…,

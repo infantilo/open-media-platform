@@ -50,7 +50,7 @@ Codecs** (H.264, HEVC, AAC über `gstreamer1.0-plugins-ugly`, `-libav`, `ffmpeg`
 | pyannote-segmentation-3-0 | MIT |
 | 3D-Speaker CAM++ | **Lizenz nicht verifiziert** — vor kommerzieller Nutzung klären |
 | Pigo-Gesichtsdetektor (facefinder) | MIT (Bibliothek), eingebettet |
-| Gebärdensprach-Lexikon | nur eigene/verifizierte Daten, keine GPL-/Forschungsquellen (`docs/GEBAERDENSPRACHE.md`) |
+| Gebärdensprach-Lexikon | nur eigene/verifizierte Daten, keine GPL-/Forschungsquellen (`docs/funktionen/GEBAERDENSPRACHE.md`) |
 
 ## 5. Offene Punkte (nicht technisch lösbar)
 

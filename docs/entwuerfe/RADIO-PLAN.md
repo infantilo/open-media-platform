@@ -1,6 +1,6 @@
 # Radio auf der OpenMediaPlatform — Lückenanalyse, Zielbild und Phasenplan (Vorschlag)
 
-Stand: 2026-11-05. Auftrag: `docs/RADIO-ANALYSE-PROMPT.md`. **Reiner Vorschlag, kein Code.** Der Nutzer hat am 2026-11-05 die
+Stand: 2026-11-05. Auftrag: `docs/entwuerfe/RADIO-ANALYSE-PROMPT.md`. **Reiner Vorschlag, kein Code.** Der Nutzer hat am 2026-11-05 die
 Grundentscheidungen getroffen (unten); als Kapitel 89 steht der Plan in `UMSETZUNG.md`. Die Phasen RA–RG sind weiter Vorschlag, bis sie je Schritt freigegeben werden.
 
 **Entscheidungen des Nutzers (2026-11-05):**
@@ -13,9 +13,9 @@ Grundentscheidungen getroffen (unten); als Kapitel 89 steht der Plan in `UMSETZU
 Offen bleiben die übrigen Rückfragen in §12 (Verbreitungs-Lautheit, Archiv, KI-Stimmen, Hardware, Reihenfolge).
 
 Grundlage sind die Projektdateien, die ich selbst gelesen habe: `CLAUDE.md`, `ARCHITECTURE.md` (§1–§5, §12–§14, §20.6–§21,
-§24, §28–§31), `UMSETZUNG.md` (§0, Kap. 27 mit §27.1–§27.7, Kap. 39, 42–45, 47–49, 74, 75), `docs/PLAYOUT-AUTOMATION.md`,
-`docs/HANDBUCH.md` §9, `docs/CONTRACT-MIXER-SETUP.md`, `docs/ASR-UNTERTITEL.md`, `docs/ENTWURF-INGEST.md`,
-`docs/ENTWURF-FILE-QC.md` und `deploy/catalog.json`. Dazu kommen gezielte Blicke in den Code unter `nodes/`
+§24, §28–§31), `UMSETZUNG.md` (§0, Kap. 27 mit §27.1–§27.7, Kap. 39, 42–45, 47–49, 74, 75), `docs/funktionen/PLAYOUT-AUTOMATION.md`,
+`docs/HANDBUCH.md` §9, `docs/contracts/CONTRACT-MIXER-SETUP.md`, `docs/funktionen/ASR-UNTERTITEL.md`, `docs/entwuerfe/ENTWURF-INGEST.md`,
+`docs/entwuerfe/ENTWURF-FILE-QC.md` und `deploy/catalog.json`. Dazu kommen gezielte Blicke in den Code unter `nodes/`
 (`omp-playout-automation`, `omp-channel-player`, `omp-audio-mixer`, `omp-recorder`, `omp-intercom`, `omp-audio-rules`).
 Aussagen über den Code nennen die Fundstelle. Was ich nur vermute, ist als **ungeprüft** markiert.
 

@@ -105,7 +105,7 @@ type Tools struct {
 	FFprobe string
 	R       Runner
 	// QCJobs/ProxyJobs: optional — Jobs über den Job-Dispatcher (Host-Auswahl, Lastverteilung, Sendeschutz,
-	// docs/ENTWURF-FFMPEG-HOSTWAHL.md). nil: lokal über R. Die Selbstauskunft (-version, -filters) bleibt immer lokal (R).
+	// docs/entwuerfe/ENTWURF-FFMPEG-HOSTWAHL.md). nil: lokal über R. Die Selbstauskunft (-version, -filters) bleibt immer lokal (R).
 	QCJobs    Runner
 	ProxyJobs Runner
 

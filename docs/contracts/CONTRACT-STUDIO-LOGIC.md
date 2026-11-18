@@ -1,7 +1,7 @@
 # Vertrag „Studio-Logik“ (Mikrofonlogik des Moderationsplatzes)
 
 Stand: 2026-11-06 (Kapitel 89, RC2). Beschreibt, **was die Studio-Logik tut und wovon sie ausgeht**. `omp-studio-logic` ist die Implementierung;
-sie liest den Mischer (`omp-audio-mixer`) und einen GPIO-Node (`docs/CONTRACT-GPIO.md`) über den Orchestrator-Proxy und schreibt dorthin
+sie liest den Mischer (`omp-audio-mixer`) und einen GPIO-Node (`docs/contracts/CONTRACT-GPIO.md`) über den Orchestrator-Proxy und schreibt dorthin
 zurück. Die Regeln sind Daten (Parameter `config`), kein Code. Es gibt keine Norm dafür; Haltezeiten und Höchstdauern sind Eigenlösung.
 
 ## 1. Konfiguration (`config`, JSON)

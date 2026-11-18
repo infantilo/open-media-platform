@@ -1,4 +1,4 @@
-//! Eigenes Echtzeit-DSP des Audiomischers (Kapitel 26, `docs/AUDIOMIXER-PLAN.md`).
+//! Eigenes Echtzeit-DSP des Audiomischers (Kapitel 26, `docs/entwuerfe/AUDIOMIXER-PLAN.md`).
 //!
 //! Warum eigener Code statt GStreamer-Elementen: auf dem Zielsystem sind
 //! keine LADSPA/LV2-Plugins installiert, `audiodynamic` hat weder

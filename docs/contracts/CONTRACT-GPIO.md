@@ -3,7 +3,7 @@
 Stand: 2026-11-06 (Kapitel 89, RC1). Dieser Vertrag beschreibt, **was Studio-Logik, Automation und Tasten-Pulte von einem
 Kontakt-Gerät erwarten** (Taster, Fernstart, Rotlicht, Relais) — unabhängig vom Hersteller. `omp-gpio` ist die Implementierung mit
 einem **Simulator** als Gerät; ein Treiber für echte Hardware (USB, seriell, Netzwerk-Kontakte) setzt hinter dieselbe Zustandsmaschine
-und ändert den Vertrag nicht. Muster wie `docs/CONTRACT-SEGUE-PLAYER.md`. Es gibt keine Norm für diese Schnittstelle (sie ist
+und ändert den Vertrag nicht. Muster wie `docs/contracts/CONTRACT-SEGUE-PLAYER.md`. Es gibt keine Norm für diese Schnittstelle (sie ist
 herstellerabhängig); Entprellzeit, Haltezeit und der Fail-Safe-Mechanismus sind **Eigenlösung** von OMP.
 
 ## 1. Grundsatz

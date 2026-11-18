@@ -168,7 +168,7 @@ Auf dem Build-Rechner ein neues Paket bauen, übertragen, entpacken und `./insta
   (Rückfall: Dateien zurückkopieren, `make start`).
 - **Vorher sichern:** Oberfläche → Administration → Backup (`docs/HANDBUCH.md` §5).
 
-Alternativ geht der signierte **Browser-Upload** des Update-Pakets (`make update-bundle`, `docs/ENTWURF-SYSTEM-UPDATE.md`):
+Alternativ geht der signierte **Browser-Upload** des Update-Pakets (`make update-bundle`, `docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md`):
 er aktualisiert Orchestrator, UI und Nodes, aber **nicht** Container-Images und Systempakete. Für diese ist das
 Offline-Paket der Weg.
 

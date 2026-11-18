@@ -13,7 +13,7 @@ alles, was den Sendepfad berührt, hat eine Messung vorher/nachher und ein Abbru
 Umsetzung zu klären. Bewertungen der Latenz ohne Messung sind als Erwartung gekennzeichnet.
 
 **Normen (UMSETZUNG.md §0 Regel 10):** Im Projekt gelesen und mit Version belegt sind
-EBU R 143 v3.0 (März 2025, `docs/R143-KONFORMITAET.md`), AMWA BCP-003-01/-02 und IS-10
+EBU R 143 v3.0 (März 2025, `docs/berichte/R143-KONFORMITAET.md`), AMWA BCP-003-01/-02 und IS-10
 (`ARCHITECTURE.md` §4.6). Weitere einschlägige Texte (Lieferketten-, Container-, Signatur- und
 SBOM-Spezifikationen) werden hier bewusst **ohne Nummer** genannt: Sie wurden für diesen Plan nicht
 im Original gelesen. Der jeweilige Schritt nennt das als Vorarbeit.
@@ -158,7 +158,7 @@ Sicherheitsparameter. Beleg: Suche nach `seccomp|landlock|sysctl|auditd` ohne Tr
 | 8.4 | Rücksprung automatisch bei fehlgeschlagener Gesundheitsprüfung, drei Stände werden aufbewahrt; Downgrade-Sperre vorhanden. | `supervisor/update.go:295-370,505-518`, `AUDIT_2026_10_23.md` (M9) |
 | 8.5 | Rollierendes Cluster-Update vorhanden. | `orchestrator/internal/clusterupdate/rollout.go`, `UMSETZUNG.md` Kap. 84 |
 | 8.6 | **Das Update-Paket enthält nur OMP-Programme.** Kernel, GStreamer, ffmpeg, Web-Renderer kommen vom Betriebssystem — genau dort landet die Flut an Funden, und dafür gibt es keinen gesteuerten Kanal. | `Makefile:81-86` |
-| 8.7 | Schlüsseltausch/Widerruf: kein Verfahren im Code gefunden — **zu prüfen** in `docs/ENTWURF-SYSTEM-UPDATE.md`. | — |
+| 8.7 | Schlüsseltausch/Widerruf: kein Verfahren im Code gefunden — **zu prüfen** in `docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md`. | — |
 
 ---
 

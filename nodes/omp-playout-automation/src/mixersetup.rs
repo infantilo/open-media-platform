@@ -1,4 +1,4 @@
-//! Audio- und Bildmischer aus den Vorgaben des Channels einrichten (Vertrag: docs/CONTRACT-MIXER-SETUP.md).
+//! Audio- und Bildmischer aus den Vorgaben des Channels einrichten (Vertrag: docs/contracts/CONTRACT-MIXER-SETUP.md).
 //!
 //! Der Channel legt im Audio-Ausgabe-Dokument fest, welche Programme (Ausgabegruppen: Programmton,
 //! Hörfilm, Originalton, Dolby E, 5.1 …) seine Player ausgeben. Jede Gruppe ist ein eigener Sender der

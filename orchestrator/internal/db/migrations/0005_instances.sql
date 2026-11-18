@@ -1,4 +1,4 @@
--- Instanz-Launcher-Zustand (S4, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md)
+-- Instanz-Launcher-Zustand (S4, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md)
 -- ersetzt data/instances.json (UMSETZUNG.md C8) — ein Blob pro Instanz,
 -- gleiches Muster wie workflows.data (0004_workflows.sql): der
 -- Orchestrator interpretiert das JSON in Go (internal/launcher), die DB

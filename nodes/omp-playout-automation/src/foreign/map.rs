@@ -1,4 +1,4 @@
-//! Abbildung Zwischenmodell → Playlist-Items (formatunabhängiger Kern, `docs/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md` §3).
+//! Abbildung Zwischenmodell → Playlist-Items (formatunabhängiger Kern, `docs/entwuerfe/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md` §3).
 //!
 //! Rein: erzeugt je Fremd-Event die Argumente der vorhandenen Methoden `append` und `updateItem` (so greifen
 //! alle bestehenden Prüfungen) plus einen Bericht. Nichts verschwindet stillschweigend: was nicht

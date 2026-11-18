@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Dynamische Audio-Zuordnung + Regel-Engine (docs/ENTWURF-AUDIO-REGELN.md, A1):
+# Dynamische Audio-Zuordnung + Regel-Engine (docs/entwuerfe/ENTWURF-AUDIO-REGELN.md, A1):
 # reine Logik ohne GStreamer/HTTP/Uhr. Gemeinsam genutzt von Playout-Automation
 # (Auflösung beim Cue), Ausspielnodes (Plan -> Matrix) und dem Orchestrator
 # (Validierung der Einstellungen).

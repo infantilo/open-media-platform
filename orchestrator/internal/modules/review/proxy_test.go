@@ -130,7 +130,7 @@ func TestProxyBecomesStaleWhenSourceChanges(t *testing.T) {
 	e.drain(t)
 }
 
-// Referenzprofil der Plattform (aus einer realen Anlieferdatei, siehe docs/ENTWURF-FILE-QC.md §3): MXF OP1a, MPEG-2 4:2:2
+// Referenzprofil der Plattform (aus einer realen Anlieferdatei, siehe docs/entwuerfe/ENTWURF-FILE-QC.md §3): MXF OP1a, MPEG-2 4:2:2
 // 1920×1080 25 fps interlaced (TFF), 50 Mbit/s, 8 getrennte Mono-Tonspuren PCM 24 Bit/48 kHz, Start-Timecode 00:00:00:00.
 // Synthetisch nachgebaut (kurz) — beweist den Pfad Probe → QC → Proxy für genau dieses Profil.
 func TestReferenceProfile1080i8Tracks(t *testing.T) {

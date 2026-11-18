@@ -59,7 +59,7 @@ func (e Event) Wire() ([]byte, error) {
 
 // lostEventsEvent wird einem Client zugestellt, sobald wieder Platz in
 // seinem Puffer ist, nachdem ihm zuvor mindestens ein Event verloren
-// gegangen war (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md S2). Der
+// gegangen war (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md S2). Der
 // Payload trägt keine Nutzdaten — reiner Trigger, wie bei den übrigen
 // synthetischen Events (s. graph.Service.publish), die UI lädt bei
 // Empfang einmal den vollen Zustand statt der einzelnen Events neu.
@@ -75,7 +75,7 @@ type Hub struct {
 	// zugestellt, statt still auf veraltetem Stand zu bleiben.
 	dropped map[chan Event]bool
 	// totalDrops zählt jeden fehlgeschlagenen Zustellversuch kumulativ
-	// (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "SSE-Clients+Drops"
+	// (S8, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "SSE-Clients+Drops"
 	// für /metrics) — anders als `dropped` (aktueller Zustand pro Client)
 	// wird dieser Zähler nie zurückgesetzt, ein monoton wachsender
 	// Prometheus-Counter.

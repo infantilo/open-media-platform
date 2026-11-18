@@ -19,7 +19,7 @@ du `omp_node_sdk::run()`/`start()` aufrufst:
 
 1. **IS-04-Registrierung** — SDK macht das.
 2. **Selbstbeschreibung (IS-12/14-artig)** — du implementierst den
-   [`ParamStore`](../nodes/omp-node-sdk/src/server.rs)-Trait, SDK liefert
+   [`ParamStore`](../../nodes/omp-node-sdk/src/server.rs)-Trait, SDK liefert
    ihn über `GET /descriptor.json` aus.
 3. **`/ui/manifest.json` + `/ui/bundle.js`** — optional, nur falls dein
    Node eine eigene UI mitbringt (§4.5; Kurzanleitung unten:
@@ -460,7 +460,7 @@ sinnvoll sind — das musst du liefern. Vor dem Prompt kurz festlegen:
 ```
 Ich baue einen neuen Node für OpenMediaPlatform (Rust-SDK
 `omp-node-sdk`, Workspace unter `nodes/`). Lies zuerst
-`docs/NODE-TUTORIAL.md` und `ARCHITECTURE.md` §5 (Node-Contract) im
+`docs/entwicklung/NODE-TUTORIAL.md` und `ARCHITECTURE.md` §5 (Node-Contract) im
 Repo — das ist die verbindliche Spec, nicht raten.
 
 Zweck: [z. B. "ein Node, der einen MXL-Videostream liest, ein
@@ -504,7 +504,7 @@ Der Node-Contract (sechs Pflichtpunkte, sprachunabhängig, HTTP+JSON):
    .../x-nmos/registration/v1.3/resource).
 2. GET /descriptor.json liefert Parameter/Methoden als JSON
    (Feldformat: [hier das reale Beispiel aus
-   `docs/NODE-TUTORIAL.md` Schritt 2 einfügen]).
+   `docs/entwicklung/NODE-TUTORIAL.md` Schritt 2 einfügen]).
 3. PATCH /params/<name> setzt einen Parameterwert, POST
    /methods/<name> ruft eine Methode auf.
 4. Nur falls echtes Medien-I/O nötig: MXL (lokal, Zero-Copy) oder
@@ -534,7 +534,7 @@ durch.
 ### Fertige Skill-Datei für KI-Werkzeuge
 
 Der Arbeitsablauf dieses Abschnitts liegt als wiederverwendbare Skill-Datei
-im Repo: [`skills/omp-node-builder/SKILL.md`](../skills/omp-node-builder/SKILL.md)
+im Repo: [`skills/omp-node-builder/SKILL.md`](../../skills/omp-node-builder/SKILL.md)
 (mit `references/node-contract.md` und `references/diagnostics.md`). Sie
 folgt dem SKILL.md-Format (Frontmatter `name`/`description`, Ordnername =
 Name) und lässt sich in Claude Code (`.claude/skills/`) oder auf einem
@@ -628,13 +628,13 @@ Node-Oberfläche“ unten).
 
 Die Operator-Konsole kann ein **Stream Deck** (XL, +, + XL, 15-Tasten-Modelle)
 als Hardware-Pult betreiben (`docs/BENUTZERHANDBUCH.md` §10g,
-`docs/ENTWURF-STREAMDECK.md`). Das Gerät hängt am **Browser** (WebHID), nicht am
+`docs/entwuerfe/ENTWURF-STREAMDECK.md`). Das Gerät hängt am **Browser** (WebHID), nicht am
 Node: Eine Taste ruft dieselbe Proxy-API auf wie ein Mausklick. Ein Node
 braucht deshalb **keinen Treiber und keinen USB-Code** — er entscheidet nur,
 *was auf den Tasten steht und was sie auslösen*. Es gibt drei Stufen, vom
 einfachsten zum aufwendigsten:
 
-![Stream Deck XL mit dem OGraf-Adapter: Vorlagen als Tasten, Steuerzeile unten, eine Grafik on air](screenshots/streamdeck-xl-ograf-onair.png)
+![Stream Deck XL mit dem OGraf-Adapter: Vorlagen als Tasten, Steuerzeile unten, eine Grafik on air](../screenshots/streamdeck-xl-ograf-onair.png)
 
 ### Stufe 0 — nichts tun: das Auto-Raster
 
@@ -750,7 +750,7 @@ Eintrag in `adapters/index.ts` (Fabrik nach dem Elementnamen, z. B.
 `KeyDef.plot`/`DialDef.plot` über mehrere Tasten bzw. den Touch-Streifen
 möglich (`plot-logic.ts`, `plot-draw.ts`).
 
-![Audio-Mixer-Detailseite EQ am + XL: Kurve über Tasten und Touch-Streifen](screenshots/streamdeck-plusxl-audio-eq.png)
+![Audio-Mixer-Detailseite EQ am + XL: Kurve über Tasten und Touch-Streifen](../screenshots/streamdeck-plusxl-audio-eq.png)
 
 ### Ausprobieren ohne Gerät
 
@@ -766,7 +766,7 @@ den Test eines **echten Geräts** (Drehung der Bilder, USB-Dauer) siehe
 
 ```
 Zusätzlich soll der Node am Stream Deck bedienbar sein. Lies dazu
-`docs/NODE-TUTORIAL.md`, Abschnitt „Stream-Deck-Belegung für einen eigenen
+`docs/entwicklung/NODE-TUTORIAL.md`, Abschnitt „Stream-Deck-Belegung für einen eigenen
 Node“, und `ui/shell/streamdeck/adapter.ts`.
 
 Tasten (Zeile für Zeile, wie sie auf einem 8×3-Raster stehen sollen):

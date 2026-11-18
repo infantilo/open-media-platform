@@ -1,7 +1,7 @@
 # Geplante Live-Aufnahme: Zeitplan, Ressourcenplanung, Ablauf (Kapitel 42)
 
 Stand 2026-10-19. Orchestrator-Modul `internal/modules/ingest` (Name `ingest`, abschaltbar mit `OMP_MODULES_DISABLE=ingest`) und UI-Modul
-`ui/modules/ingest` (Tab „Aufnahmen“). Auftragstext: `Live Ingest.txt`; Plan und Entscheidungen: `docs/PLAN-LIVE-INGEST-UND-FILE-QC.md`.
+`ui/modules/ingest` (Tab „Aufnahmen“). Auftragstext: `Live Ingest.txt`; Plan und Entscheidungen: `docs/entwuerfe/PLAN-LIVE-INGEST-UND-FILE-QC.md`.
 Das aufgenommene Asset geht automatisch in den **Eingang** (Kapitel 43, QC, Review).
 
 ## 1. Bestand (vor Kapitel 42) und Lücken

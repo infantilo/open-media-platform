@@ -1,4 +1,4 @@
-//! Store-seitige PIP-Logik (Kapitel 87, `docs/ENTWURF-PIP-MEHRFACH-2D.md`): Szenen (vormals "PIP-Presets"), Zustand
+//! Store-seitige PIP-Logik (Kapitel 87, `docs/entwuerfe/ENTWURF-PIP-MEHRFACH-2D.md`): Szenen (vormals "PIP-Presets"), Zustand
 //! je Slot, Fokus. Die Funktionen `plan_*` ändern den Store-Zustand und liefern die **Aktionen**, die der Aufrufer
 //! danach an die Pipeline schickt — so bleibt die Entscheidungslogik ohne GStreamer testbar.
 

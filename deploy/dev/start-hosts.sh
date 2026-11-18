@@ -75,7 +75,7 @@ export OMP_NATS_TLS_CERT_FILE="${OMP_NATS_TLS_CERT_FILE:-$ROOT_DIR/.run/mtls/nat
 export OMP_NATS_TLS_KEY_FILE="${OMP_NATS_TLS_KEY_FILE:-$ROOT_DIR/.run/mtls/nats-client.key}"
 export OMP_NATS_TLS_CA_FILE="${OMP_NATS_TLS_CA_FILE:-$ROOT_DIR/.run/mtls/root_ca.crt}"
 
-# System-Update (docs/ENTWURF-SYSTEM-UPDATE.md): jeder Host-Agent prüft
+# System-Update (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md): jeder Host-Agent prüft
 # Update-Pakete mit seinem EIGENEN Vertrauensanker — hier dieselbe
 # Schlüsseldatei wie beim Orchestrator (auf echten Remote-Hosts liegt
 # sie lokal auf dem Host). Ohne Datei lehnt der Agent jedes Paket ab.

@@ -1,5 +1,5 @@
 // Mackie-Control-Codec (Kap. 93). Reine Funktionen ohne Ein-/Ausgabe: Byte-Strom → Ereignisse (Pult → Rechner)
-// und Rechner → Pult-Nachrichten. Quelle und Prüfstatus: docs/CONTRACT-MIDI.md §2 (nachgebaut aus dem Emagic-Logic-Control-
+// und Rechner → Pult-Nachrichten. Quelle und Prüfstatus: docs/contracts/CONTRACT-MIDI.md §2 (nachgebaut aus dem Emagic-Logic-Control-
 // Protokoll, gegen ein Mackie Control Universal Pro Firmware 3.0.0 geprüft — von Dritten; OMP hat kein Originalgerät).
 // Das Rust-Gegenstück (nodes/omp-midi-gateway/src/mcu.rs) wird gegen dieselben Prüfwerte getestet (docs/midi/golden.json).
 
@@ -199,7 +199,7 @@ export const faderTouchSensitivity = (strip: number, level: number, id = DEVICE_
 export const channelMeterMode = (strip: number, bits: { level?: boolean; peak?: boolean; signal?: boolean }, id = DEVICE_ID_MCU): number[] =>
   sysex(id, 0x20, [strip, (bits.level ? 4 : 0) | (bits.peak ? 2 : 0) | (bits.signal ? 1 : 0)]);
 
-/** Antwortcode auf die Anmeldeaufforderung des Pults (Algorithmus nach docs/CONTRACT-MIDI.md §2.4). */
+/** Antwortcode auf die Anmeldeaufforderung des Pults (Algorithmus nach docs/contracts/CONTRACT-MIDI.md §2.4). */
 export function connectionResponse(c: number[]): number[] {
   const [c0, c1, c2, c3] = c;
   return [

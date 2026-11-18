@@ -35,7 +35,7 @@ func (p *recordingPublisher) snapshot() []sse.Event {
 }
 
 // fakeInstanceStore ist ein In-Memory-Test-Double für instanceStore
-// (S4, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — für Tests, denen es
+// (S4, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — für Tests, denen es
 // nicht um die Postgres-Persistenz selbst geht (die hat store_test.go
 // gegen eine echte Datenbank), gleiches Muster wie workflows_test.go's
 // fakeStore. Eine Instanz kann über zwei Launcher hinweg geteilt werden
@@ -709,7 +709,7 @@ func TestLauncherStopUnknownInstanceReturnsError(t *testing.T) {
 }
 
 // TestLauncherReloadsStillRunningInstanceAfterRestart läuft seit S4
-// (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) gegen eine echte,
+// (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) gegen eine echte,
 // migrierte Postgres-Datenbank statt gegen data/instances.json — die
 // beiden Launcher (l1/l2, simulieren einen Orchestrator-Neustart) teilen
 // sich denselben *Store auf derselben Datenbankverbindung.
@@ -1186,7 +1186,7 @@ func TestLauncherStopRemoteSendsStopCommand(t *testing.T) {
 	}
 }
 
-// --- S3: HandleRemoteExit (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) ---
+// --- S3: HandleRemoteExit (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) ---
 
 func exitEventJSON(t *testing.T, instanceID string, exitCode int, stderrTail string) []byte {
 	t.Helper()

@@ -6,7 +6,7 @@
 //   - GET /api/v1/instances (crashed/restartCount, K7-Teil-1)
 //   - GET /api/v1/placement/advice (Ressourcen-Ampel, D6 Teil 3)
 //   - GET /api/v1/workflows (status "failed")
-// SSE-first (S2, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): reagiert
+// SSE-first (S2, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): reagiert
 // auf "instance.crashed"/"instance.restarted" (launcher.go),
 // "placement.advice" (D6 Teil 3) und "workflow.updated" — alle drei
 // existieren bereits, kein neues Backend-Event nötig — statt alle paar

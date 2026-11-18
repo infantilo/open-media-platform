@@ -1,4 +1,4 @@
-// GET /metrics (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "/metrics
+// GET /metrics (S8, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "/metrics
 // im Prometheus-Textformat handgeschrieben — Minimal-Dependency-Regel §0
 // Punkt 5, das Format ist trivial, kein Client-Library-Zwang"). Kein
 // prometheus/client_golang, keine Registry-Abstraktion — die paar

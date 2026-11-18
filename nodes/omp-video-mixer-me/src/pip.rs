@@ -1,4 +1,4 @@
-//! PIP-Pose (Kapitel 87, `docs/ENTWURF-PIP-MEHRFACH-2D.md`): vier Eckpunkte in Mischer-Pixeln, Reihenfolge
+//! PIP-Pose (Kapitel 87, `docs/entwuerfe/ENTWURF-PIP-MEHRFACH-2D.md`): vier Eckpunkte in Mischer-Pixeln, Reihenfolge
 //! oben-links, oben-rechts, unten-rechts, unten-links. Rotation, Trapez und Perspektive sind dieselbe
 //! Homographie — eine Datenform für Editor, Animation, Trefferprüfung und Transform-Element.
 //!

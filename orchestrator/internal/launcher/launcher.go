@@ -450,7 +450,7 @@ type Launcher struct {
 
 	// totalRestarts zählt jeden tatsächlichen automatischen Neustart
 	// (lokal wie remote, beide laufen durch recordRestartLocked) seit
-	// Prozessstart kumulativ (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md:
+	// Prozessstart kumulativ (S8, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md:
 	// "Launcher (Instanzen, Restarts)" für /metrics) — bewusst ein
 	// eigener, nie sinkender Zähler statt der Summe der aktuell in
 	// `instances` befindlichen `RestartCount`-Werte: Letztere sänke
@@ -1089,7 +1089,7 @@ func (l *Launcher) sampleLocalResources() {
 // docs/END-GOAL-FEATURES.md §15.3c), die pro Workflow-Start variieren,
 // ohne den Katalog selbst zu ändern. Darf nil sein (z. B. ein direkter
 // Katalog-Start über die Palette, ohne Workflow-Kontext).
-// Seit S3 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) auch für Remote-
+// Seit S3 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) auch für Remote-
 // Starts wirksam — der Host-Agent prüft jeden extraEnv-Schlüssel gegen
 // seine eigene Allowlist (host-agent/internal/commands.
 // allowedExtraEnvKeys, zunächst nur OMP_WIDTH/OMP_HEIGHT) und lehnt die
@@ -2165,7 +2165,7 @@ type remoteExitEvent struct {
 }
 
 // HandleRemoteExit verarbeitet ein vom Host-Agent gemeldetes
-// unerwartetes Prozessende (S3, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md
+// unerwartetes Prozessende (S3, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md
 // — omp.host.<hostId>.events, main.go verdrahtet dies an eine eigene
 // NATS-Subscription). Remote-Pendant zu supervise()'s lokalem
 // cmd.Wait()-Ende: gleiche Crash-Loop-Bremse (recordRestartLocked),

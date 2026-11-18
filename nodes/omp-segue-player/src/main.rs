@@ -1,6 +1,6 @@
 //! omp-segue-player (Radio, Kapitel 89/RB3): mehrere Stimmen (Dateien) in **einem** Prozess, sample-genau auf eine gemeinsame
 //! Ausgabeuhr gemischt (`mix.rs`). Der Automator entscheidet *was und wann* (Methoden `play`/`stop`/`fade` mit TAI-Zeitpunkt), der
-//! Player *wie* (Überblendkurven, Pegel). Vertrag: `docs/CONTRACT-SEGUE-PLAYER.md`.
+//! Player *wie* (Überblendkurven, Pegel). Vertrag: `docs/contracts/CONTRACT-SEGUE-PLAYER.md`.
 //!
 //! Jede Stimme hat eine vom Aufrufer vergebene `voiceId` — ein zweites `play` mit derselben ID wird ignoriert (kein Doppelstart bei
 //! Wiederholung nach einem Neustart der Automation).

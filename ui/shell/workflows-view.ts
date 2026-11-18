@@ -6,7 +6,7 @@
 // App-Bar-Tab "Workflows" (app-shell.ts), vormals ein per Knopf ein-/
 // ausblendbares Floating-Panel (gleiches Muster wie hosts-view.ts).
 //
-// SSE-first (S2, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): reagiert
+// SSE-first (S2, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): reagiert
 // auf "workflow.updated" (workflows/service.go) statt alle paar Sekunden
 // zu pollen — Poll bleibt nur als deutlich langsamerer Reconnect-/
 // Fallback-Pfad (POLL_FALLBACK_INTERVAL_MS), falls die SSE-Verbindung

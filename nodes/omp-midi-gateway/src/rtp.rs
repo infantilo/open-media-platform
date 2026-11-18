@@ -1,6 +1,6 @@
 //! Netzwerk-MIDI (Kapitel 93, Weg B): RTP-MIDI nach RFC 6295 (Nutzlast) mit der Sitzungsverwaltung „AppleMIDI“ (Apple, „MIDI Network
 //! Driver Protocol“; macOS, Windows rtpMIDI, iOS und viele Geräte sprechen sie). Zwei UDP-Ports: Steuerport N und Datenport N+1.
-//! Rollen: **Hörer** (wartet auf Einladung) und **Einlader** (verbindet sich zu einem Gerät). Abweichungen und Grenzen: `docs/CONTRACT-MIDI.md` §5.
+//! Rollen: **Hörer** (wartet auf Einladung) und **Einlader** (verbindet sich zu einem Gerät). Abweichungen und Grenzen: `docs/contracts/CONTRACT-MIDI.md` §5.
 //! Kein Journal beim Senden (J = 0; Journale beim Empfang werden übersprungen), keine Wiederherstellung verlorener Pakete, kein
 //! segmentiertes SysEx. Auf einem LAN genügt das; Pakete werden nicht neu angefordert.
 

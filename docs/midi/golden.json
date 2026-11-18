@@ -1,5 +1,5 @@
 {
-  "_comment": "Gemeinsame Prüfwerte für den Mackie-Control-Codec (TypeScript: ui/shell/midi/mcu_test.ts, Rust: nodes/omp-midi-gateway/src/mcu.rs). Von Hand aus docs/CONTRACT-MIDI.md §2 hergeleitet, nicht aus dem Code erzeugt.",
+  "_comment": "Gemeinsame Prüfwerte für den Mackie-Control-Codec (TypeScript: ui/shell/midi/mcu_test.ts, Rust: nodes/omp-midi-gateway/src/mcu.rs). Von Hand aus docs/contracts/CONTRACT-MIDI.md §2 hergeleitet, nicht aus dem Code erzeugt.",
   "encode": [
     {"fn": "ledNote", "args": [24, "on"], "bytes": [144, 24, 127]},
     {"fn": "ledNote", "args": [16, "blink"], "bytes": [144, 16, 1]},

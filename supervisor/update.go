@@ -1,6 +1,6 @@
 package main
 
-// System-Update (docs/ENTWURF-SYSTEM-UPDATE.md): der Supervisor wendet ein
+// System-Update (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md): der Supervisor wendet ein
 // vom Orchestrator geprüft abgelegtes Update-Paket an. Er prüft es selbst
 // noch einmal (Struktur, SHA-256, Ed25519-Signatur) und vertraut dem
 // Orchestrator nicht blind — der wird ja gerade ersetzt.

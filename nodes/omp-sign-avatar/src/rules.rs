@@ -1,4 +1,4 @@
-//! Regelbasierte Satzaufbereitung „Untertitel → Glossenfolge“ (docs/GEBAERDENSPRACHE.md §3), ohne KI und ohne Raten:
+//! Regelbasierte Satzaufbereitung „Untertitel → Glossenfolge“ (docs/funktionen/GEBAERDENSPRACHE.md §3), ohne KI und ohne Raten:
 //! Sätze trennen, Wörter auf Gebärden abbilden, Füllwörter weglassen, Zeitangaben nach vorn, Verb nach hinten, Verneinung
 //! hinter das Verb, Fragewort ans Ende; unbekannte Wörter werden buchstabiert, Zahlen als Zahlgebärden; ist ein Satz zu
 //! mehr als `maxUnknownRatio` unbekannt, wird er nicht gebärdet, sondern als Text eingeblendet.

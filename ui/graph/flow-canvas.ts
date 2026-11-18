@@ -556,7 +556,7 @@ export class FlowCanvas extends HTMLElement {
   #workflowInterfaces = new Map<string, ResolvedInterfaceView>();
   // Plan-Vorschau nicht gestarteter Workflows (voraussichtliche Hosts je Rolle) für die Host-Ansicht.
   #workflowPlans = new Map<string, StartPlan>();
-  // S6 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Flow-Editor-Filter
+  // S6 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Flow-Editor-Filter
   // auf die Nodes des gewählten Workflows, globale Sicht bleibt als
   // 'Alle' wählbar") — gesetzt von außen über setWorkflowFilter()
   // (ui/shell/app-shell.ts, dort die eigentliche Auswahl-UI in der
@@ -680,7 +680,7 @@ export class FlowCanvas extends HTMLElement {
   #palette!: HTMLDivElement;
   #hostMigrateMenu!: HTMLDivElement;
   #closeHostMigrateMenuListener: ((ev: PointerEvent) => void) | null = null;
-  // Skalierungs-Review D5 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md):
+  // Skalierungs-Review D5 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md):
   // Suchfeld für den Node-Katalog — Query + zuletzt geholte Daten getrennt
   // von #renderPalette() gehalten, damit ein Tastendruck nur neu filtert
   // (#renderPaletteList()), statt Katalog/Instanzen/Hosts erneut vom

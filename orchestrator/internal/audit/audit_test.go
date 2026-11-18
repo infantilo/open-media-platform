@@ -77,7 +77,7 @@ func TestLogBroadcastsAuditAppended(t *testing.T) {
 }
 
 // TestListCursorPaginatesThroughAllEntries ist die S5-Kern-Verifikation
-// (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): "Mehr laden" muss über
+// (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): "Mehr laden" muss über
 // mehrere Seiten hinweg jeden Eintrag genau einmal liefern, neueste
 // zuerst, und am Ende eine kürzere Seite als limit signalisieren.
 func TestListCursorPaginatesThroughAllEntries(t *testing.T) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# S8-Soak-Grundlage (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "make
+# S8-Soak-Grundlage (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "make
 # soak: Skript startet den Stack + 2 Nodes und sammelt /metrics alle
 # 60 s in eine CSV"). Kein jq/python3 (Minimal-Dependency-Regel §0
 # Punkt 5, dieselbe Haltung wie /metrics selbst — reines

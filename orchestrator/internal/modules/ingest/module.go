@@ -322,7 +322,7 @@ func (m *Module) channelCount(src Source) (int, bool) {
 }
 
 // BusyOn meldet, ob auf dem Host zwischen from und to eine Aufnahme gebucht ist oder läuft (Sendeschutz der ffmpeg-Jobs,
-// docs/ENTWURF-FFMPEG-HOSTWAHL.md §3.6). Vor der ersten Nutzung des Moduls (Dienst noch nicht gebaut): keine Buchungen bekannt.
+// docs/entwuerfe/ENTWURF-FFMPEG-HOSTWAHL.md §3.6). Vor der ersten Nutzung des Moduls (Dienst noch nicht gebaut): keine Buchungen bekannt.
 func (m *Module) BusyOn(hostID string, from, to time.Time) (bool, string) {
 	m.mu.Lock()
 	svc := m.svc

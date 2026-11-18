@@ -1,6 +1,6 @@
 // Package ebucore bildet Assets auf EBUCore ab und zurück (EBU Tech 3293 v1.10,
 // Schema ebucore.xsd 1.10.1, Namensraum urn:ebu:metadata-schema:ebucore) —
-// UMSETZUNG.md Kapitel 78.2, Entwurf docs/ENTWURF-NORMEN-EBUCORE-R103-R143.md.
+// UMSETZUNG.md Kapitel 78.2, Entwurf docs/entwuerfe/ENTWURF-NORMEN-EBUCORE-R103-R143.md.
 //
 // Der Export erzeugt ein ebuCoreMain-Dokument mit einem coreMetadata-Element. Felder
 // mit EBUCore-Ziel (asset.Field.EBUCoreTarget) landen im passenden Standardelement;

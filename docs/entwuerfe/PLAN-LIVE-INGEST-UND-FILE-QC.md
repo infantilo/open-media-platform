@@ -1,6 +1,6 @@
 # Plan: Geplanter Live-Ingest (Kap. 42) und File-QC / Review / Conform (Kap. 43)
 
-Stand 2026-10-19 (Kapitel 43 umgesetzt, siehe `docs/ENTWURF-FILE-QC.md`; Kapitel 42 umgesetzt, siehe `docs/ENTWURF-INGEST.md`). Quellen: `Live Ingest.txt`, `File QC.txt` (Aufgabentexte, Verzeichnis oberhalb des Repos).
+Stand 2026-10-19 (Kapitel 43 umgesetzt, siehe `docs/entwuerfe/ENTWURF-FILE-QC.md`; Kapitel 42 umgesetzt, siehe `docs/entwuerfe/ENTWURF-INGEST.md`). Quellen: `Live Ingest.txt`, `File QC.txt` (Aufgabentexte, Verzeichnis oberhalb des Repos).
 Dieser Plan ist **Bestandsaufnahme + Entscheidungen + Schrittfolge**. Es wurde noch kein Code geändert.
 Alle Aussagen unter „Bestand" sind gegen die Dateien geprüft (Stichproben, keine Vollanalyse); was nicht
 geprüft ist, steht unter „Vor Beginn zu klären".
@@ -30,7 +30,7 @@ vom Ingest nur „Asset ist registriert". Entscheidungen und Fakten: §5.
 
 **Wichtig für die Aufgabentexte:** Beide Texte verweisen auf `github.com/infantilo/open-media-platform` und verlangen
 „Repository erst inspizieren". Das ist mit dieser Tabelle geleistet; sie wird in Schritt 42.0/43.0 als
-`docs/ENTWURF-INGEST.md` / `docs/ENTWURF-FILE-QC.md` mit Datei-/Zeilenverweisen finalisiert (Deliverable 1 der Texte).
+`docs/entwuerfe/ENTWURF-INGEST.md` / `docs/entwuerfe/ENTWURF-FILE-QC.md` mit Datei-/Zeilenverweisen finalisiert (Deliverable 1 der Texte).
 
 ---
 
@@ -54,7 +54,7 @@ Empfehlung: **C, hybrid — aber ohne eigenen Pool-Manager.** Begründung aus de
 - MXL ist **kein** Scheduler. Verantwortung: Control-Plane = Plan/Admission/Reservierung; Orchestrator/Launcher =
   Instanzen, Host-Wahl; MXL = Medienaustausch (Shm-Flows). MXL-Shm-Budget wird als Ressource **gezählt**, nicht verwaltet.
 
-Vergleichstabelle (A/B/C × die 13 Kriterien des Textes) wird in `docs/ENTWURF-INGEST.md` ausgeführt, mit gemessenen
+Vergleichstabelle (A/B/C × die 13 Kriterien des Textes) wird in `docs/entwuerfe/ENTWURF-INGEST.md` ausgeführt, mit gemessenen
 Startlatenzen als Beleg (Schritt 42.1).
 
 ### 2.2 Datenmodell (Migration 0042, 0043)
@@ -118,7 +118,7 @@ Pool-Auslastung, Startlatenz, verwaiste/unreconcilierte Instanzen. Keine Zugangs
 
 | Schritt | Inhalt | Verifikation |
 |---|---|---|
-| 42.0 | Bestandsdoku `docs/ENTWURF-INGEST.md` (Datei-Referenzen, Lücken); offene Fragen §5 klären | Review durch Nutzer |
+| 42.0 | Bestandsdoku `docs/entwuerfe/ENTWURF-INGEST.md` (Datei-Referenzen, Lücken); offene Fragen §5 klären | Review durch Nutzer |
 | 42.1 | **Messung** Startlatenz `omp-recorder` (Launcher → ready → erste Datei) lokal + .60/.61; Entscheidung A/B/C mit Zahlen festschreiben | Messprotokoll im Entwurf |
 | 42.2 | Migration 0042/0043, Paket `ingest` (Store, Zustandsmaschine, Idempotenzschlüssel, Events), reine Tests | `go test ./internal/ingest/...` inkl. Restart-/Doppelstart-Test (dbtest-Isolierung!) |
 | 42.3 | Zeit/Wiederholung: IANA-Zone, RRULE-Teilmenge, DST-Lücke/-Überlappung deterministisch | Tabellentests Frühling/Herbst Europe/Berlin |

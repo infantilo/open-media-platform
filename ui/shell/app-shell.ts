@@ -105,7 +105,7 @@ const TAB_BUTTON_BASE =
   "border:1px solid transparent;border-radius:var(--omp-radius);" +
   "padding:6px 10px;font-size:var(--omp-font-size-sm);font-family:var(--omp-font);cursor:pointer;white-space:nowrap;flex:0 0 auto;";
 
-// S6 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Workflow-Auswahl in
+// S6 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Workflow-Auswahl in
 // der App-Bar, Flow-Editor-Filter auf die Nodes des gewählten
 // Workflows — globale Sicht bleibt als 'Alle' wählbar"). Nur die für
 // die Auswahl-Beschriftung gebrauchten Felder — Wire-Format identisch

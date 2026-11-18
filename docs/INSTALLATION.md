@@ -49,7 +49,7 @@ Das Installationsskript erledigt das (apt, dnf, pacman, zypper). Zum Nachlesen o
 **Hardware (Richtwerte)**: Grundsystem ≥ 2 GB RAM; mit Medien-Bausteinen 8 GB und 4+ Kerne;
 ≥ 10 GB freier Plattenplatz (Container-Images, Rust-Build).
 **Internet** wird beim ersten Start und Build gebraucht (Container-Images, Go-/Rust-Abhängigkeiten, MXL-Quellen).
-**Ohne Internet** auf dem Zielrechner: fertig gebautes Offline-Paket — `docs/OFFLINE-INSTALLATION.md` (auch für das optionale Plugin `avvideofilter`, §9).
+**Ohne Internet** auf dem Zielrechner: fertig gebautes Offline-Paket — `docs/betrieb/OFFLINE-INSTALLATION.md` (auch für das optionale Plugin `avvideofilter`, §9).
 
 **Prüfen**: `make preflight` kontrolliert alles (Werkzeuge, Podman, Images, belegte Ports, GStreamer, MXL) und nennt zu
 jedem Problem den Befehl zur Behebung. `make start` ruft die Kurzform selbst auf.
@@ -317,7 +317,7 @@ Das Archiv wird **immer** gegen den angepinnten SHA256 geprüft; bei Abweichung 
 Beim Hash-Test wird auch eine ältere/neuere Version abgelehnt — für ein Update erst `avvideofilter.version` anpassen.
 Ohne Internet braucht das Plugin sonst nichts nach (kein Nachladen zur Laufzeit). Die Offline-Installation des
 **gesamten Systems** (Container-Images, Systempakete, fertige Binaries, dieses Plugin inklusive) steht in
-`docs/OFFLINE-INSTALLATION.md`; dort wird das Plugin automatisch aus dem Paket installiert.
+`docs/betrieb/OFFLINE-INSTALLATION.md`; dort wird das Plugin automatisch aus dem Paket installiert.
 
 **Lizenz-Hinweis:** Plugin und das enthaltene FFmpeg sind LGPL-2.1-or-later; die Lizenztexte liegen im Archiv
 (`COPYING`, `avvideofilter-ffmpeg/`) und werden mit installiert. OMP selbst linkt das Plugin nicht, sondern lädt es

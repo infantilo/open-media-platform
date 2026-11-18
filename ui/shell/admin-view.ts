@@ -14,7 +14,7 @@
 // Audit-Log aktualisiert sich automatisch, das stört kein offenes
 // Formular.
 //
-// SSE-first (S2, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): das
+// SSE-first (S2, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): das
 // Audit-Log reagiert auf "audit.appended" (neu, audit.go) statt alle
 // paar Sekunden zu pollen. Poll bleibt nur als deutlich langsamerer
 // Reconnect-/Fallback-Pfad (AUDIT_POLL_FALLBACK_INTERVAL_MS).
@@ -474,7 +474,7 @@ class AdminView extends HTMLElement {
   #restoring = false;
   #reconnecting = false;
 
-  // System-Update per Browser-Upload (docs/ENTWURF-SYSTEM-UPDATE.md):
+  // System-Update per Browser-Upload (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md):
   // Pakete sind signiert (Ed25519) und werden vom Orchestrator UND vom
   // Supervisor geprüft; angewendet wird per Supervisor (Backup → Stop →
   // Tausch → Start → Prüfung → ggf. Rollback). #updTyped ist die

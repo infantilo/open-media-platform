@@ -77,7 +77,7 @@ fi
 # shellcheck disable=SC1090
 source "$STORAGE_SECRET_FILE"
 
-# Cloud-Konfiguration und -Zugangsdaten (Kapitel 35, docs/CLOUD-AWS.md): optional, nur wenn die Datei existiert —
+# Cloud-Konfiguration und -Zugangsdaten (Kapitel 35, docs/betrieb/CLOUD-AWS.md): optional, nur wenn die Datei existiert —
 # ohne sie bleiben alle Cloud-Funktionen aus. Die Datei enthält Geheimnisse (AWS-Schlüssel): sie steht in der
 # .gitignore und sollte nur für den Besitzer lesbar sein (chmod 600). Muster wie mxl.env/storage-secret.env oben;
 # `OMP_CLOUD_ENV_FILE` verweist auf einen anderen Ort. Werte, die schon in der Umgebung stehen, bleiben gültig, wenn
@@ -183,7 +183,7 @@ export OMP_CATALOG_PATH="$ROOT_DIR/deploy/catalog.json"
 # Ordner wie backup-omp.sh/restore-omp.sh, gleicher Grund für den
 # absoluten Pfad wie bei OMP_UI_DIR/OMP_CATALOG_PATH oben.
 export OMP_BACKUP_DIR="$ROOT_DIR/.backups"
-# System-Update per Browser-Upload (docs/ENTWURF-SYSTEM-UPDATE.md): Ablage
+# System-Update per Browser-Upload (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md): Ablage
 # der Pakete + vertrauenswürdige Ed25519-Public-Keys (einer pro Zeile,
 # erzeugt mit `make update-keygen`). Ohne Schlüsseldatei wird jedes Paket
 # abgelehnt (OMP_UPDATE_ALLOW_UNSIGNED=true nur für die Entwicklung).

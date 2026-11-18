@@ -59,7 +59,7 @@ type Config struct {
 	CatalogPath string
 	// PostgresURL ist die Verbindungs-DSN für Layouts/Snapshots
 	// (UMSETZUNG.md D1, ARCHITECTURE.md §4.4) sowie seit S4
-	// (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) den Instanz-Launcher-
+	// (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) den Instanz-Launcher-
 	// Zustand (vorher data/instances.json, C8) — kein separates DataDir
 	// mehr nötig, dieses Feld wurde mit S4 entfernt (nichts referenzierte
 	// es mehr; role-bindings.json war bereits mit D3 Teil 2 durch die
@@ -154,7 +154,7 @@ type Config struct {
 	PlacementGpuThreshold        float64
 	PlacementHealthyGpuThreshold float64
 	// AuditRetentionDays ist die Aufbewahrungsdauer des Audit-Logs (S5,
-	// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — audit.Store.RunRetention
+	// docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — audit.Store.RunRetention
 	// löscht täglich Zeilen, die älter sind. <= 0 deaktiviert die
 	// Löschung (s. audit.Store.PurgeOlderThan).
 	AuditRetentionDays int
@@ -211,7 +211,7 @@ type Config struct {
 	// Vertrauensgrenze.
 	SupervisorURL string
 	// UpdateDir/UpdatePubKeyFile/UpdateAllowUnsigned steuern das
-	// System-Update per Browser-Upload (docs/ENTWURF-SYSTEM-UPDATE.md):
+	// System-Update per Browser-Upload (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md):
 	// Ablage der Pakete, Datei mit den vertrauenswürdigen Ed25519-
 	// Public-Keys (einer pro Zeile) und der Dev-Schalter für unsignierte
 	// Pakete. Ohne Schlüssel und ohne AllowUnsigned wird jedes Paket

@@ -4,7 +4,7 @@
 // K1-Teil-1 eine Vollansicht im App-Bar-Tab "Hosts" (app-shell.ts),
 // vormals ein per Knopf ein-/ausblendbares Floating-Panel.
 //
-// SSE-first (S2, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): reagiert
+// SSE-first (S2, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): reagiert
 // auf "host.registered" (neu, host_handlers.go), die per-Host-Telemetrie
 // "omp.host.<hostId>.metrics" (roher NATS-Subject-Passthrough, s.
 // eventbus.go — bereits vorhanden, kein neues Backend-Event nötig) und

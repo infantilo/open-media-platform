@@ -505,7 +505,7 @@ func (s *statusRecorder) WriteHeader(code int) {
 // http.ResponseWriter als Interface-Feld die Flusher-Fähigkeit *nicht*
 // automatisch mitbringen (Go promotet nur Methoden des statischen
 // Feld-Typs, nicht die des zugrundeliegenden konkreten Werts). S8
-// (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) wickelt mit
+// (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) wickelt mit
 // countRequests jetzt *jeden* Request in einen statusRecorder — ohne
 // dieses Flush() bräche das SSE-Streaming (GET /api/v1/events)
 // still, weil dessen eigener `w.(http.Flusher)`-Type-Assert dann immer

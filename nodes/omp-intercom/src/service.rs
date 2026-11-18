@@ -174,7 +174,7 @@ fn l(de: &str, en: &str) -> Value {
 pub fn manifest(importable: bool) -> Value {
     let grp = l("Intercom", "Intercom");
     let route = |method: &str, path: &str, features: &[&str]| json!({"method": method, "path": path, "features": features});
-    // Route mit Rolle im Vertrag des Diensttyps „intercom“ (docs/CONTRACT-INTERCOM.md).
+    // Route mit Rolle im Vertrag des Diensttyps „intercom“ (docs/contracts/CONTRACT-INTERCOM.md).
     let role = |method: &str, path: &str, features: &[&str], role: &str| json!({"method": method, "path": path, "features": features, "role": role});
     json!({
         "name": "intercom",

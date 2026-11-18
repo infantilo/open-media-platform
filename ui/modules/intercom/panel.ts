@@ -1,6 +1,6 @@
 // Bedienoberfläche des Intercom-Dienstes in der Operator-Konsole (Kapitel 47, ab Kapitel 49 über den Dienstvertrag): bettet
 // die eigene Sprechstelle ein und bietet dem Stream Deck die Eigenschaft `streamDeck` (Adapter dieser Oberfläche, nicht der
-// Shell). Der Dienst wird über Typ und Rolle gefunden (`GET /api/v1/ext`, docs/CONTRACT-INTERCOM.md), nie über einen
+// Shell). Der Dienst wird über Typ und Rolle gefunden (`GET /api/v1/ext`, docs/contracts/CONTRACT-INTERCOM.md), nie über einen
 // Produktnamen. Eigenständiges Bundle (kein Zugriff auf die Shell außer dem Anmelde-Token) — es kommt vom Node selbst
 // (`/ui/bundle.js`).
 

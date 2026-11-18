@@ -479,7 +479,7 @@ func TestServiceConnectErrorDoesNotPublish(t *testing.T) {
 	}
 }
 
-// --- S1: Edge-Cache-Verhalten (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) ---
+// --- S1: Edge-Cache-Verhalten (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) ---
 
 func TestGraphDoesNotCallIS05PerRequest(t *testing.T) {
 	views := []registry.NodeView{{

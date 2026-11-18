@@ -19,7 +19,7 @@ import (
 )
 
 // RetentionInterval ist der Abstand zwischen zwei Durchläufen des
-// Retention-Jobs (S5, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) —
+// Retention-Jobs (S5, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) —
 // "täglicher Job" laut Review, ein Löschlauf pro Tag reicht bei einer
 // Aufbewahrung von standardmäßig 90 Tagen bei weitem.
 const RetentionInterval = 24 * time.Hour
@@ -41,7 +41,7 @@ type Entry struct {
 
 // EventPublisher verteilt ein "audit.appended"-Event an alle verbundenen
 // Flow-Editor-/Admin-Tab-Clients (implementiert von *sse.Hub, S2 —
-// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md). Optional, darf nil sein
+// docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md). Optional, darf nil sein
 // (z. B. in Tests) — gleiches Muster wie graph.EventPublisher.
 type EventPublisher interface {
 	Broadcast(sse.Event)

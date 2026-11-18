@@ -689,7 +689,7 @@ type scriptConfig struct {
 	Args           []string `json:"args,omitempty"`
 	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
 	// Target: Ziel für ffmpeg/ffprobe, wenn ein JobRunner verdrahtet ist ("" = Standard der Konfiguration; auto | local |
-	// host:<id> | pool:<name>, docs/ENTWURF-FFMPEG-HOSTWAHL.md).
+	// host:<id> | pool:<name>, docs/entwuerfe/ENTWURF-FFMPEG-HOSTWAHL.md).
 	Target string `json:"target,omitempty"`
 }
 

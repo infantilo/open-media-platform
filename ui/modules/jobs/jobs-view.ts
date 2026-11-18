@@ -1,4 +1,4 @@
-// <omp-jobs-view> — ffmpeg-Jobs (Kapitel 52, docs/ENTWURF-FFMPEG-HOSTWAHL.md): Hosts mit Last und Live-Reserve, laufende/wartende/
+// <omp-jobs-view> — ffmpeg-Jobs (Kapitel 52, docs/entwuerfe/ENTWURF-FFMPEG-HOSTWAHL.md): Hosts mit Last und Live-Reserve, laufende/wartende/
 // beendete Jobs mit „Warum dort?“, Testjob und die Einstellungen (Standardziel, Live-Reserve, Sendeschutz, Gewichte, Hosts,
 // Pfadzuordnung). Einstellungen werden explizit gespeichert und vom Poll nicht überschrieben.
 import { apiFetch, confirmDialog, features, showToast, t } from "../host.ts";

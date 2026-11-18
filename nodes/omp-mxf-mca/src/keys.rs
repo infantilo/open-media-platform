@@ -1,5 +1,5 @@
 //! Schlüssel (ULs) und lokale Tags — alle aus SMPTE ST 377-1:2019, ST 377-4:2021
-//! (Tab. 1–6), ST 2067-8:2013 und ST 428-12:2013 übernommen (docs/ENTWURF-MXF-MCA.md).
+//! (Tab. 1–6), ST 2067-8:2013 und ST 428-12:2013 übernommen (docs/entwuerfe/ENTWURF-MXF-MCA.md).
 
 pub type Ul = [u8; 16];
 pub type Uuid = [u8; 16];

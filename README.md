@@ -38,7 +38,7 @@
 | EBU R 128 / ITU-R BS.1770 | Loudness & true peak | `omp-scope` computes both and gives a live compliance verdict |
 | EBU R 103 v3.0 | Video signal tolerance (RGB/Y gamut, 1 % area rule, prescribed pre-filter) | `omp-scope` live alarm and a file-QC check; one set of test vectors in Rust and Go; file QC run on real generated files (approximation: measured on a downscaled image) |
 | EBU Tech 3293 v1.10 (EBUCore) | Metadata exchange for assets, including your own dynamic fields | Export validated against the official `ebucore.xsd` 1.10.1; round trip keeps dynamic fields; import preview |
-| EBU R 143 v3.0 | Cybersecurity requirements for media vendors' products | Honest control-by-control assessment in `docs/R143-KONFORMITAET.md` (8 met, 17 partly, 2 open of 28) — an assessment, not a certification |
+| EBU R 143 v3.0 | Cybersecurity requirements for media vendors' products | Honest control-by-control assessment in `docs/berichte/R143-KONFORMITAET.md` (8 met, 17 partly, 2 open of 28) — an assessment, not a certification |
 
 > **Reading this table:** "verified" means the check named in the right-hand column was run. Except where the official
 > AMWA test tool is named, no row is a certification or a third-party conformance statement, and OpenMediaPlatform is
@@ -74,7 +74,7 @@ Cluster setup wizards, workflows). Anyone is welcome to build their own
 nodes against the same NMOS-based contract; the orchestrator doesn't
 need to know or care what they do.
 
-Domain functions such as playout (channels, triggers, as-run), audio output rules and cloud capacity are **modules** of the orchestrator rather than core features: each registers its routes, background jobs, metrics and UI tab through a small interface, can be switched off with `OMP_MODULES_DISABLE`, and the core does not import any of them (`docs/MODULE-SCHREIBEN.md`).
+Domain functions such as playout (channels, triggers, as-run), audio output rules and cloud capacity are **modules** of the orchestrator rather than core features: each registers its routes, background jobs, metrics and UI tab through a small interface, can be switched off with `OMP_MODULES_DISABLE`, and the core does not import any of them (`docs/entwicklung/MODULE-SCHREIBEN.md`).
 
 An essential part of the architecture is also the NMOS Control Framework (IS-12/IS-14). Each service describes its own parameters and capabilities. Therefore, the orchestrator doesn't need to know whether it's a video mixer, audio mixer, or a future node type. New components can be integrated without requiring any modifications to the orchestrator. This self-description capability is precisely what makes the platform scalable in the long term.
 
@@ -112,7 +112,7 @@ a single machine), who talks to whom, and manual installation:
 [`docs/INSTALLATION.md`](docs/INSTALLATION.md) (German). Machines **without
 internet access**: build a ready-made offline package (binaries, container
 images, system packages, plugin) on a connected machine and install it with one
-script — [`docs/OFFLINE-INSTALLATION.md`](docs/OFFLINE-INSTALLATION.md)
+script — [`docs/betrieb/OFFLINE-INSTALLATION.md`](docs/betrieb/OFFLINE-INSTALLATION.md)
 (`deploy/offline/`). Troubleshooting:
 [`docs/HANDBUCH.md`](docs/HANDBUCH.md). User guide for the UI (with
 screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
@@ -529,7 +529,7 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   master limiter, solo/PFL, audio-follow-video with a choice of which video
   mixers/tally givers it follows (global, overridable per video source);
   global “Scenes & automation” dialog for everything not tied to a channel
-  (see docs/AUDIOMIXER-PLAN.md)
+  (see docs/entwuerfe/AUDIOMIXER-PLAN.md)
 - **omp-mxf-player** — MXF file player with program-group audio shuffle
   and MXF MCA label reading (SMPTE ST 377-4/-41; labels drive the audio rules)
   (cued playback, plus live-MXL-source and real-file playlist items)
@@ -599,7 +599,7 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   selection persists, a re-plugged device keeps its sender ID); audio
   outputs (sound-card playback) become an NMOS receiver that plays once
   connected
-- **Cloud resources (orchestrator service)** — rent cloud hosts through a provider adapter (simulation provider and AWS, no cloud SDK), reserve capacity from–to, rule-based autoscaling (off by default; suggest or automatic) behind a hard daily/monthly budget cap, pre-calculated and accrued cost estimates; AWS launching is dry-run only until explicitly enabled (`docs/CLOUD-AWS.md`)
+- **Cloud resources (orchestrator service)** — rent cloud hosts through a provider adapter (simulation provider and AWS, no cloud SDK), reserve capacity from–to, rule-based autoscaling (off by default; suggest or automatic) behind a hard daily/monthly budget cap, pre-calculated and accrued cost estimates; AWS launching is dry-run only until explicitly enabled (`docs/betrieb/CLOUD-AWS.md`)
 - **omp-scaler** — scales/converts a connected MXL video source to a
   fixed target format (frame-rate conversion by `videorate`, or optionally
   by blending via the `avvideofilter` GStreamer plugin —
@@ -625,7 +625,7 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   gets an automatic grid from its descriptor. A key press calls exactly what the on-screen button calls; key colours follow the same state. Key text wraps
   and auto-sizes. A browser simulator (`/streamdeck-sim`, screenshots in the user manual §10g) works without hardware; Linux needs a udev rule on the operator PC
   (`make streamdeck-udev`). Own nodes (also AI-built microservices) get a Stream Deck layout by a descriptor-only grid or by a `streamDeck` property on their UI element
-  (`docs/NODE-TUTORIAL.md`, "Stream-Deck-Belegung"). Verified against the simulator and the real stack; not yet tried on the physical device
+  (`docs/entwicklung/NODE-TUTORIAL.md`, "Stream-Deck-Belegung"). Verified against the simulator and the real stack; not yet tried on the physical device
 
   ![Stream Deck XL (simulator): OGraf page with one graphic on air](docs/screenshots/streamdeck-xl-ograf-onair.png)
 - **MIDI control surfaces (Mackie Control, browser and gateway node)** — motorised-fader surfaces such as the iCON P1-M/V1-M with their P1-X/V1-X extenders
@@ -636,7 +636,7 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   **browser** (Web MIDI, USB, button "MIDI" in the app bar) and the **`omp-midi-gateway` node** (kernel USB raw devices, **RTP-MIDI** per RFC 6295 with an AppleMIDI session,
   runs without a browser on any host; unmapped keys become NATS events that can trigger workflows). A generic **profile mode** maps any MIDI controller (CC/note/pitch bend,
   absolute/toggle/relative) to node methods. Both paths have a **simulator surface**; TypeScript and Rust share their test vectors (`docs/midi/`). The Mackie protocol
-  is unpublished (sources and gaps in `docs/CONTRACT-MIDI.md`) and **everything is verified with the simulator only — not yet on a physical surface**
+  is unpublished (sources and gaps in `docs/contracts/CONTRACT-MIDI.md`) and **everything is verified with the simulator only — not yet on a physical surface**
 - **omp-scope** — a passive measurement tap (taps a video and/or an
   audio flow, sends nothing itself): waveform/vectorscope, EBU R 128
   loudness with ITU-R BS.1770 true peak, held black/freeze/silence
@@ -898,7 +898,7 @@ graphical audio matrix, timed overlays, lossless-capable concatenation,
 generic multi-track output mapping, and a fully searchable/validated
 expert mode) — both described in full under "What's in the box".
 
-**Local devices and cloud capacity** — Kapitel 34/35: the device hub offers a host's cameras, microphones and sound-card outputs to the MXL/NMOS world per device; the orchestrator can rent cloud hosts on demand (reservations from the scheduler, rule-based autoscaling behind a hard budget cap, cost pre-calculation). The cloud side is verified end to end with the simulation provider; the AWS adapter is built without an SDK and **has not been run against a real AWS account** (launching is dry-run only until explicitly enabled, see `docs/CLOUD-AWS.md`). Video capture from a real camera is likewise only covered by fixtures so far.
+**Local devices and cloud capacity** — Kapitel 34/35: the device hub offers a host's cameras, microphones and sound-card outputs to the MXL/NMOS world per device; the orchestrator can rent cloud hosts on demand (reservations from the scheduler, rule-based autoscaling behind a hard budget cap, cost pre-calculation). The cloud side is verified end to end with the simulation provider; the AWS adapter is built without an SDK and **has not been run against a real AWS account** (launching is dry-run only until explicitly enabled, see `docs/betrieb/CLOUD-AWS.md`). Video capture from a real camera is likewise only covered by fixtures so far.
 
 **Control-plane load behaviour** — measured with `tools/loadtest/`: 150
 stored workflows, 20 concurrent operators changing parameters through the

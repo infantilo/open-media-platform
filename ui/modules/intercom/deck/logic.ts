@@ -1,5 +1,5 @@
 // Intercom-Layout fürs Stream Deck (Kapitel 47.10): reine Funktion Zustand → Tasten. Die Tasten steuern die eigene
-// Sprechstelle des Nutzers über die Vertragsrolle `deck.command` des Intercom-Dienstes (docs/CONTRACT-INTERCOM.md); das Mikrofon bleibt im Browser-Panel (Tab).
+// Sprechstelle des Nutzers über die Vertragsrolle `deck.command` des Intercom-Dienstes (docs/contracts/CONTRACT-INTERCOM.md); das Mikrofon bleibt im Browser-Panel (Tab).
 
 import type { DialDef, KeyDef } from "../../../shell/streamdeck/render-logic.ts";
 

@@ -1,4 +1,4 @@
-//! Dynamische Audio-Ausgabe (docs/ENTWURF-AUDIO-REGELN.md, A3): statt eines
+//! Dynamische Audio-Ausgabe (docs/entwuerfe/ENTWURF-AUDIO-REGELN.md, A3): statt eines
 //! festen Stereo-Ausgangs erzeugt dieser Node je Zielgruppe des Ausgabeprofils
 //! einen eigenen MXL-Audio-Flow. Quelle → [`Distributor`] → je Gruppe
 //! `audiomixmatrix` mit den Koeffizienten des aufgelösten [`AudioPlan`]s.

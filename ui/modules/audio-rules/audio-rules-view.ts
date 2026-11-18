@@ -1,4 +1,4 @@
-// Admin → Audio-Ausgabe (Kapitel 27 / A5, docs/ENTWURF-AUDIO-REGELN.md): ein Editor für das Dokument
+// Admin → Audio-Ausgabe (Kapitel 27 / A5, docs/entwuerfe/ENTWURF-AUDIO-REGELN.md): ein Editor für das Dokument
 // `audio-rules` — Ausgabegruppen, Spurschemata, Zuordnungsvorlagen (Klick-Matrix) und Ersatzregeln.
 //
 // Bewusst Ganz-Speichern (Nutzerregel „Editoren brauchen ein explizites Speichern“) statt PUT je Klick;

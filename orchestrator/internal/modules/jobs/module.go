@@ -1,4 +1,4 @@
-// Package jobs ist das Modul „ffmpeg-Jobs“ (UMSETZUNG.md Kapitel 52, docs/ENTWURF-FFMPEG-HOSTWAHL.md): Anbindung des
+// Package jobs ist das Modul „ffmpeg-Jobs“ (UMSETZUNG.md Kapitel 52, docs/entwuerfe/ENTWURF-FFMPEG-HOSTWAHL.md): Anbindung des
 // Dispatchers (internal/jobrun) an den Orchestrator-Kern — Konfiguration, Routen, Verlauf, Oberfläche, Metriken. Aufrufer
 // (script-Schritt, File-QC, Review-Proxy, Ingest-Convert) reichen ihre Jobs über [Module.Dispatcher] ein.
 package jobs

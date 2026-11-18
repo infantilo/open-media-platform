@@ -1,4 +1,4 @@
-// Package main: Konformitätsprüfung für den Vertrag „Segue-Player“ (docs/CONTRACT-SEGUE-PLAYER.md, Kapitel 89/RB2).
+// Package main: Konformitätsprüfung für den Vertrag „Segue-Player“ (docs/contracts/CONTRACT-SEGUE-PLAYER.md, Kapitel 89/RB2).
 // Prüft einen laufenden Node gegen den Vertrag: (1) Aufbau (Methoden, Argumente, Parameter im Descriptor), (2) Verhalten
 // (Idempotenz der voiceId, Ablehnung ungültiger Eingaben, Zustandsfolge einer Stimme, `stop` vor dem Ende des Ladens).
 // Kein Wissen über einen bestimmten Hersteller: nur der Vertrag.

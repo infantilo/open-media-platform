@@ -1,4 +1,4 @@
-// <omp-files-view> — Dateien (Kapitel 86, docs/ENTWURF-DATEIVERWALTUNG.md): Explorer je Ort/Host mit Dateifamilien (Rolle, „Gehört zu“),
+// <omp-files-view> — Dateien (Kapitel 86, docs/entwuerfe/ENTWURF-DATEIVERWALTUNG.md): Explorer je Ort/Host mit Dateifamilien (Rolle, „Gehört zu“),
 // Dateizustand je Asset („Datei fehlt“), Papierkorb mit Wiederherstellen, Löschen mit Verwendungsprüfung und Einstellungen.
 import { apiFetch, confirmDialog, features, showToast, t } from "../host.ts";
 import { hasFeature } from "../../kit/features.ts";

@@ -1,5 +1,5 @@
 //! omp-failover (Kapitel 89, Radio/Fernsehen): Modulationswächter und Havarieumschalter vor dem letzten Signalpunkt
-//! (`docs/ENTWURF-HAVARIEUMSCHALTER.md`). Diese Stufe: Audio (Radio). Hauptsignal und drei Notquellen kommen als MXL-Flows, dazu ein eingebauter
+//! (`docs/entwuerfe/ENTWURF-HAVARIEUMSCHALTER.md`). Diese Stufe: Audio (Radio). Hauptsignal und drei Notquellen kommen als MXL-Flows, dazu ein eingebauter
 //! Notclip (Datei in Schleife); fällt das Hauptsignal aus (kein Signal, Stille), schlägt der Node Alarm (`omp.alert.<node>`) und schaltet die
 //! erste gesunde Quelle der einstellbaren Reihenfolge; Rückkehr automatisch oder manuell, Umschaltung auch von Hand.
 

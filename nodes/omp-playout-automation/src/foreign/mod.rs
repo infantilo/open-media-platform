@@ -1,4 +1,4 @@
-//! Kapitel 74: Fremdplaylist-Adapter (`docs/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md`).
+//! Kapitel 74: Fremdplaylist-Adapter (`docs/entwuerfe/ENTWURF-FREMDPLAYLIST-UND-DURCHLAUF.md`).
 //!
 //! Zwei Schichten: ein **Adapter** je Fremdformat (dieses Modul definiert die Schnittstelle [`ForeignFormat`]
 //! und das neutrale Zwischenmodell [`ForeignList`]) und ein formatunabhängiger **Kern** (Abbildung auf

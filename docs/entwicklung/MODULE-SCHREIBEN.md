@@ -1,7 +1,7 @@
 # Ein Orchestrator-Modul schreiben
 
 Domänenfunktionen (Playout, Audio-Ausgabe, Cloud, …) sind **Module**: Sie melden sich bei einer Registry im Orchestrator an, statt
-dass der Kern sie beim Namen kennt (`ARCHITECTURE.md` §28, `docs/ENTWURF-MODULE.md`). Dieses Dokument zeigt, wie man eines schreibt.
+dass der Kern sie beim Namen kennt (`ARCHITECTURE.md` §28, `docs/entwuerfe/ENTWURF-MODULE.md`). Dieses Dokument zeigt, wie man eines schreibt.
 Vorbilder im Repo: `internal/modules/cloud` (Routen, Hintergrundjob, Konfiguration), `internal/modules/audiorules` (kleines Modul mit
 Admin-Untertab), `internal/modules/playout` (großes Modul mit eigenen Stores, Metriken und Beobachter).
 

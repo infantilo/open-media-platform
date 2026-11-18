@@ -6,7 +6,7 @@ import (
 	"github.com/infantilo/openmediaplatform/podmanrun"
 )
 
-// Getrennte MXL-Domains (Kap. 103, docs/ENTWURF-MXL-DOMAIN-TRENNUNG.md D3): Settings.Domain gilt für alle Rollen des
+// Getrennte MXL-Domains (Kap. 103, docs/entwuerfe/ENTWURF-MXL-DOMAIN-TRENNUNG.md D3): Settings.Domain gilt für alle Rollen des
 // Workflows, Role.Domain überschreibt sie je Rolle. Leer/"default" = Standarddomain (unverändertes Verhalten). Der
 // Domainname reist als extraEnv (podmanrun.DomainNameKey); den Pfad leitet der Ort ab, an dem die Instanz läuft
 // (Orchestrator-Rechner, Host-Agent, Container) — Umzug, Hot-Standby und Host-Ausfall behalten die Domain, weil sie

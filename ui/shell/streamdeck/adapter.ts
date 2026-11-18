@@ -1,4 +1,4 @@
-// Adapter-Schnittstelle (Kap. 40.1/40.4, docs/ENTWURF-STREAMDECK.md §3).
+// Adapter-Schnittstelle (Kap. 40.1/40.4, docs/entwuerfe/ENTWURF-STREAMDECK.md §3).
 // Ein Node-UI-Element darf eine Eigenschaft `streamDeck` bereitstellen.
 
 import type { DialDef, KeyDef } from "./render-logic.ts";

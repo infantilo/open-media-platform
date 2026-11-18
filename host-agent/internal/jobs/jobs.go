@@ -1,5 +1,5 @@
 // Package jobs führt allow-gelistete Programme (ffmpeg/ffprobe) im Auftrag des Orchestrators aus
-// (docs/ENTWURF-FFMPEG-HOSTWAHL.md §3.1). Der Agent entscheidet selbst, was läuft: ohne `tools.json` lehnt er jede
+// (docs/entwuerfe/ENTWURF-FFMPEG-HOSTWAHL.md §3.1). Der Agent entscheidet selbst, was läuft: ohne `tools.json` lehnt er jede
 // Anfrage ab, Pfade müssen unter den dort genannten Wurzeln liegen, Netzprotokolle sind gesperrt, solange `allowNet` fehlt.
 // Ergebnisse kommen nicht als Antwort (Jobs dauern länger als ein NATS-Request), sondern als Ereignisse auf
 // `omp-job.<hostId>.<jobId>` — bewusst außerhalb von `omp.>`, damit sie nicht als SSE an Browser gehen.

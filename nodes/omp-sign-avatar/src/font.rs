@@ -1,4 +1,4 @@
-//! Kleine eingebaute Bitmap-Schrift (5×7) für den Text-Rückfall im Bild (docs/GEBAERDENSPRACHE.md §3 Punkt 5): ist ein Satz nicht
+//! Kleine eingebaute Bitmap-Schrift (5×7) für den Text-Rückfall im Bild (docs/funktionen/GEBAERDENSPRACHE.md §3 Punkt 5): ist ein Satz nicht
 //! gebärdbar, erscheint er als Text. Nur Großbuchstaben, Ziffern und Satzzeichen; Umlaute werden zu AE/OE/UE, ß zu SS.
 
 /// Zeilen von oben nach unten, Bit 4 = linke Spalte.

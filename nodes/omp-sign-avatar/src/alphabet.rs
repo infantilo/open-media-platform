@@ -2,7 +2,7 @@
 //!
 //! **Näherung:** Die Handformen sind aus der Beschreibung des deutschen Fingeralphabets nachgebaut
 //! und nicht von Gebärdenden abgenommen; vor jedem produktiven Einsatz müssen sie von Gehörlosen
-//! geprüft werden (docs/GEBAERDENSPRACHE.md §6). Bewegte Buchstaben (J, Z) und Umlaute sind in
+//! geprüft werden (docs/funktionen/GEBAERDENSPRACHE.md §6). Bewegte Buchstaben (J, Z) und Umlaute sind in
 //! Phase 1 stark vereinfacht (Z, J: Handform mit Handgelenk-Schwung; Ä/Ö/Ü: Grundbuchstabe, zweimal).
 
 use crate::avatar::{ArmPose, Pose};

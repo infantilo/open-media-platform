@@ -1,5 +1,5 @@
 // <omp-toast> + showToast() — Ersatz für alert() bei Fehlermeldungen/
-// Statushinweisen (S10, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md):
+// Statushinweisen (S10, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md):
 // Stil 1:1 aus dem bisherigen `#showToast()` in `ui/graph/flow-canvas.ts`
 // extrahiert (fixed unten mittig, Fehlerfarbe, 4s Auto-Dismiss), hier als
 // wiederverwendbarer ui/kit-Baustein statt einer pro-View duplizierten

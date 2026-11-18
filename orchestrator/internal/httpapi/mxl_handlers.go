@@ -110,7 +110,7 @@ func handleMXLFlows(ls LauncherService, ds MXLDomainStore) http.HandlerFunc {
 	}
 }
 
-// ---- Getrennte MXL-Domains (Kap. 103, Entwurf docs/ENTWURF-MXL-DOMAIN-TRENNUNG.md, D1/D2) ----
+// ---- Getrennte MXL-Domains (Kap. 103, Entwurf docs/entwuerfe/ENTWURF-MXL-DOMAIN-TRENNUNG.md, D1/D2) ----
 
 // MXLDomainStore ist die Domain-Verwaltung (implementiert von *mxldomains.Store).
 type MXLDomainStore interface {

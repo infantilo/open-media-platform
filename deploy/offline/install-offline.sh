@@ -221,6 +221,6 @@ Installation complete. Next steps:
   cd $TARGET && make start        # then in the browser: http://localhost:8000
   $TARGET/deploy/offline/import-node-packages.sh    # once after the first start: registers Auto-Untertitel etc. (models included)
   First start: create an admin right away (Administration → Users) — docs/INSTALLATION.md §2.
-  Guide/troubleshooting: docs/OFFLINE-INSTALLATION.md
+  Guide/troubleshooting: docs/betrieb/OFFLINE-INSTALLATION.md
 EOM
 fi

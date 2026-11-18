@@ -1,4 +1,4 @@
-//! Phase 2: Untertitel → Sätze → Glossen → Schlüsselfolgen, mit Warteschlange, Verzug und Rückfall (docs/GEBAERDENSPRACHE.md §3).
+//! Phase 2: Untertitel → Sätze → Glossen → Schlüsselfolgen, mit Warteschlange, Verzug und Rückfall (docs/funktionen/GEBAERDENSPRACHE.md §3).
 //! Zeit kommt von außen (`now_ms`), damit alles ohne Uhr testbar ist.
 
 use std::collections::VecDeque;

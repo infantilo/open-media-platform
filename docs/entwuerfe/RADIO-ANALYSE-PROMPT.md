@@ -2,7 +2,7 @@
 
 ## Kontext
 
-Lies zuerst `CLAUDE.md`, `ARCHITECTURE.md`, `UMSETZUNG.md` (besonders §0, Kap. 27 Playout-Automation und Kap. 39 Playout-Buffer), `docs/PLAYOUT-AUTOMATION.md`, `docs/HANDBUCH.md` §9, `deploy/catalog.json` und `nodes/`. Die Plattform bildet TV-Playout aus kleinen, unabhängigen Nodes. Die Nodes sind über MXL und NMOS verkabelt. Dazu gehören Quellen, Mixer, Buffer, Recorder, Scheduler und Automation. Radio soll nach demselben Prinzip entstehen. Es soll weder ein Radio-Monolith werden noch ein TV-Node mit Radio-Schalter. Lies die Architektur selbst und stütze dich nicht auf diese Kurzfassung.
+Lies zuerst `CLAUDE.md`, `ARCHITECTURE.md`, `UMSETZUNG.md` (besonders §0, Kap. 27 Playout-Automation und Kap. 39 Playout-Buffer), `docs/funktionen/PLAYOUT-AUTOMATION.md`, `docs/HANDBUCH.md` §9, `deploy/catalog.json` und `nodes/`. Die Plattform bildet TV-Playout aus kleinen, unabhängigen Nodes. Die Nodes sind über MXL und NMOS verkabelt. Dazu gehören Quellen, Mixer, Buffer, Recorder, Scheduler und Automation. Radio soll nach demselben Prinzip entstehen. Es soll weder ein Radio-Monolith werden noch ein TV-Node mit Radio-Schalter. Lies die Architektur selbst und stütze dich nicht auf diese Kurzfassung.
 
 ## Ziel
 
@@ -34,4 +34,4 @@ Eine Analyse und ein Plan für das, was bis zu einem professionellen, kreativen 
 - Danach ein Zielbild mit Node-Zuschnitt und Datenflüssen.
 - Dann ein Phasenplan im Stil von `UMSETZUNG.md` (ein Schritt pro Sitzung, mit Verifikationskriterien), geordnet nach Nutzen und Risiko.
 - Zum Schluss eine Liste der Rückfragen an mich.
-- Ändere keinen Code. Schreibe das Ergebnis als Vorschlag in eine neue Datei `docs/RADIO-PLAN.md` und übernimm nichts in `UMSETZUNG.md`, bis ich zugestimmt habe.
+- Ändere keinen Code. Schreibe das Ergebnis als Vorschlag in eine neue Datei `docs/entwuerfe/RADIO-PLAN.md` und übernimm nichts in `UMSETZUNG.md`, bis ich zugestimmt habe.

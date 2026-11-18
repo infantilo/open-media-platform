@@ -586,7 +586,7 @@ func handleDeleteRoleBinding(store AuthzChecker, groupSvc GroupService) http.Han
 }
 
 // defaultAuditLogLimit/maxAuditLogLimit begrenzen ?limit= (S5,
-// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — maxAuditLogLimit
+// docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — maxAuditLogLimit
 // entspricht dem bisherigen festen Fenster, jetzt als Obergrenze statt
 // als einzige Option.
 const (

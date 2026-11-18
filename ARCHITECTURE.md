@@ -799,7 +799,7 @@ Teil 4/5) — Katalog-Import/-Entfernen über die UI (Administration-Tab)
 mit Admission-Check (`tools/contract-check` als Aufnahme-Gate) und
 Mehrfachversionen desselben Typs, aber **nur für `runner:"podman"`**
 (Container-Images) — `deploy/catalog.json` bleibt für lokal gebaute
-Prozess-Binaries der einzige Weg (`docs/NODE-TUTORIAL.md` Schritt 5).
+Prozess-Binaries der einzige Weg (`docs/entwicklung/NODE-TUTORIAL.md` Schritt 5).
 **Weiterhin offen:** Digest-Pinning, Signaturprüfung
 (Publisher-Vertrauensanker), Registry-Föderation (§6.2-Status oben).
 
@@ -1116,7 +1116,7 @@ Fertigstellung zum wichtigsten Gate**, nicht das Ende der Roadmap. Deshalb P5
 | **P0 – Fundament** | Repo, Go-Orchestrator-Skeleton, NMOS-Registry (fork/embed statt Neubau), NATS, Podman-Quadlet-Dev-Setup, UI-Shell-Skeleton **+ Flow-Editor v1 (§4.5a)**, `omp-mediaio`-Adapter-SDK (§10.1) | Du |
 | **P1 – Erster Node + SDK v1** | Playout-Referenz-Node aus PIPELINE-CONTROLLER portiert (IS-12/14, MXL/2110-I/O, UI-Bundle, C1–C3 **erledigt**) **+ Node-Contract/SDK inkl. Doku** (D5 offen) — Community-Onboarding startet ab hier. **Resequenziert (§7.4, 2026-07-11):** direkt danach zuerst der kleine manuell bedienbare Regieplatz (§13 Bildmischer/Audiomischer/Player-Minimalausbau + §14 Operator-Console + OGraf §11.2 = „Demo 3"), **erst danach** die Playout-Automation-Vertiefung (ehemals C10/C11) | Du |
 | **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1 — Kern inkl. I/O-Karten-Claim/Release bereits als D13 vorgezogen umgesetzt, s. §6.1), Workflow-Bereitstellung & -Verteilung (§6.2, inkl. Scheduler/Stop-Bestätigung/Ressourcen-Vorprüfung), Reaktives Failover (§6.3), Microservice-Distribution über die UI (§6.4), Nutzer-/Rollenmodell (§12, zusammen mit IS-10-Auth/D3), Rollen-gescoptes Operator-Console-UI (§14), Latenz-Budget-Rechner/Delay-Ausgleich (§15), Monitoring-Vertiefung/konfigurierbare Erkennungsgeschwindigkeit (§17), Remote-Host-Erkennung/Host-Agent (§18, Grundlage von §6.1/§6.2 auf echten Mehr-Host-Setups), NDI/RTSP-Gateways (§6.5), RDMA-Aktivierungspfad (§6.6), Registry-Föderation & automatisierte Migrationsstufen (§6.1-/§6.4-Erweiterungen), Host-Klassen-Mix Bare-Metal/VM/AWS (§18.8/§18.9), Ausfallsicherheits-Konsolidierung inkl. Standortredundanz (§21), professionelles UI/Workflow-Katalog mit Thumbnails/Suche (§22), Asset-Metadatenebene (§23) | Community + Du |
-| **P3 – Radio & MAM** | **Radio vorgezogen (Nutzerentscheidung 2026-11-05, `UMSETZUNG.md` Kap. 89, `docs/RADIO-PLAN.md`); MAM bleibt Zukunft.** Ursprünglich: bewusst nach 2029 verschoben — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue. **Ausnahme (Nutzerauftrag 2026-08-18):** Orchestrator-Redundanz/Control-Plane-HA (§19) vorgezogen als `UMSETZUNG.md` D12 (Phase D), nicht mehr P3-gebunden — s. §19 für Begründung des Vorziehens | Später |
+| **P3 – Radio & MAM** | **Radio vorgezogen (Nutzerentscheidung 2026-11-05, `UMSETZUNG.md` Kap. 89, `docs/entwuerfe/RADIO-PLAN.md`); MAM bleibt Zukunft.** Ursprünglich: bewusst nach 2029 verschoben — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue. **Ausnahme (Nutzerauftrag 2026-08-18):** Orchestrator-Redundanz/Control-Plane-HA (§19) vorgezogen als `UMSETZUNG.md` D12 (Phase D), nicht mehr P3-gebunden — s. §19 für Begründung des Vorziehens | Später |
 | **P4 – Demo-Vorbereitung** | **OGraf-Grafik-Node, vollwertig (§11.2)** — bewusste Aufwertung gegenüber dem früheren Scope „Minimal-Grafik-Node (kein volles OGraf/AI nötig)" per Nutzeranforderung 2026-07-10; größtenteils Know-how-Transfer aus PIPELINE CONTROLLER statt Neuland, siehe §11.2 — **Kompositing über MXL Zero-Copy**, das dank der vorgezogenen MXL-Fundament-Arbeit (`UMSETZUNG.md` C4, docs/decisions.md 2026-07-09 „MXL-Timing per Nutzer-Machtwort vorgezogen") schon aus der Source/Switcher/Viewer-Demo-Trias (Phase C, „Demo 2") vorhanden ist, statt hier erstmals gebaut zu werden, Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal, DVE/Keyer/Kompressor/Limiter/Expander-**Vertiefung** der in Phase C bereits vorgezogenen §13-Minimalknoten (Grundgerüst siehe P1-Zeile/§7.4), **Ressourcen-Kapazitätsplanung/Kalender (§16)** nach D7, **Remote-Host-Erkennung (§18)** sobald eine zweite Maschine real verfügbar ist | Du + Community |
 | **P5 – IBC 2029 Demo** | Fernsehregieplatz: Playout + community-gebaute Nodes + UI-Shell live | Alle |
 
@@ -3115,7 +3115,7 @@ Vergleiche bleiben außerhalb der öffentlichen Dokumentation.
 
 MAM/Traffic/Sendeplanungs-Systeme bleiben bewusst „nach 2029" verschoben
 (§7-Phasenplan, P3). **Radio-Automation ist seit 2026-11-05 vorgezogen**
-(Nutzerentscheidung, `UMSETZUNG.md` Kap. 89, `docs/RADIO-PLAN.md`) — dieser Abschnitt ändert das
+(Nutzerentscheidung, `UMSETZUNG.md` Kap. 89, `docs/entwuerfe/RADIO-PLAN.md`) — dieser Abschnitt ändert das
 für MAM nicht, auch wenn eine vollständige Sendeanstalt in der Praxis meist auch
 das braucht.
 
@@ -4354,7 +4354,7 @@ CloudProvider
 
 - **Kern ohne Cloud-SDK** (§10 Punkt 4, §18.9): Mock- und AWS-Adapter sind reiner Go-Code der
   Standardbibliothek (der AWS-Adapter spricht EC2-/Pricing-/Cost-Explorer-HTTP direkt und
-  signiert selbst nach SigV4, `docs/CLOUD-AWS.md`) — **kein SDK, kein Build-Tag** nötig
+  signiert selbst nach SigV4, `docs/betrieb/CLOUD-AWS.md`) — **kein SDK, kein Build-Tag** nötig
   (Entscheidung 2026-10-08, ersetzt die frühere Idee eines `cloud_aws`-Tags). Ohne
   `OMP_CLOUD_PROVIDER` bleibt alles lauffähig (Cloud-Ansicht zeigt „kein Anbieter
   konfiguriert“). Echte Starts sind zusätzlich durch `OMP_CLOUD_AWS_ALLOW_LAUNCH=1` gesichert
@@ -4453,7 +4453,7 @@ Der Kern soll Nodes, Graph, Hosts, Placement, Workflows, Auth/Rechte und Betrieb
   `materialize` (dieser ist bereits über `processEngine.Register` registriert — das Muster, das wir verallgemeinern).
   **Korrektur (36.1):** Die Autorisierung selbst kennt kein Playout; die Migration `0033` bindet nur einen Channel an eine
   Workflow-Rolle. Eine generische Rechtebindung ist deshalb nicht nötig, die Rechte-Helfer des Kerns gehören zu den
-  Modul-Abhängigkeiten. Vollständige Inventur: `docs/ENTWURF-MODULE.md`.
+  Modul-Abhängigkeiten. Vollständige Inventur: `docs/entwuerfe/ENTWURF-MODULE.md`.
 
 ### 28.2 Zwei Wege, und die Entscheidung dazwischen
 
@@ -4475,7 +4475,7 @@ Go kann Plugins nicht brauchbar zur Laufzeit laden (das Standard-`plugin`-Paket 
 | Modul-Registry | jede Route/jeder Store einzeln in `server.go`/`main.go` | `Module`-Schnittstelle: `Name`, `Migrations`, `Mount(routes, deps)`, `Start(ctx)`, Quellen für Metriken/Alarme, UI-Manifest |
 | Migrationen | eine globale Nummernfolge im Kern | Kernmigrationen bleiben **unverändert** (bereits angewendet, nie umnummerieren); neue Modulmigrationen je Modul, Stand in `module_migrations` |
 | Rechte | die Handler nutzen die Rechte-Helfer des Kerns | Teil der Modul-Abhängigkeiten (`Deps`), keine neue Bindung nötig (Korrektur 36.1) |
-| Automations-Ziele | Node-Typ `omp-playout-automation` und Player-/Mischer-Typen hartkodiert | Hook „Start-Umgebung einer Rolle ergänzen“, den das Playout-Modul bedient (oder Katalog-Hinweise) — Entscheidung in `docs/ENTWURF-MODULE.md` §5 |
+| Automations-Ziele | Node-Typ `omp-playout-automation` und Player-/Mischer-Typen hartkodiert | Hook „Start-Umgebung einer Rolle ergänzen“, den das Playout-Modul bedient (oder Katalog-Hinweise) — Entscheidung in `docs/entwuerfe/ENTWURF-MODULE.md` §5 |
 | Metriken/Alarme | Kern importiert `asrun` | Module liefern Quellen über eine Schnittstelle |
 | Shell | statische Importe von `playout-admin-view`/`cloud-view` | `GET /api/v1/modules` liefert Tabs/Bundles; die Shell lädt sie dynamisch |
 | Process-Schritte | `processEngine.Register(...)` | bleibt, wird Teil der Modulschnittstelle |
@@ -4492,7 +4492,7 @@ nach dem anderen und kein Umbau „in einem Zug“.
 
 **Umgesetzt (Stufe 1):** Cloud, Audio-Ausgabe und Playout sind Module (`internal/modules/*`, UI in `ui/modules/*`); `httpapi` und `workflows`
 hängen von keinem Domänen- oder Modulpaket mehr ab (`go list -deps`), die Routentabelle (240 Routen mit Rechtepflicht) ist nach allen
-drei Umzügen unverändert. Anleitung: `docs/MODULE-SCHREIBEN.md`.
+drei Umzügen unverändert. Anleitung: `docs/entwicklung/MODULE-SCHREIBEN.md`.
 
 **Stufe 2 (eigenständige Dienste) — Empfehlung: jetzt nicht bauen.** Einen konkreten Grund gibt es bisher nicht: Die Module laufen sauber im
 selben Prozess, ein Ausfall bleibt dank Fehlerisolation auf das Modul beschränkt, und Stufe 2 kostete Identitätsweitergabe, HA/Leader-Gating,
@@ -4502,7 +4502,7 @@ sollen (Kandidat: Cloud mit Zugangsdaten und Anbieter-Adapter), (c) ein **Abstur
 Orchestrator nicht beeinflussen. Die Modulschnittstelle ist so geschnitten (schmale `Deps`/`Services`, Hooks statt Kernsonderfälle, eigene
 Stores), dass ein Modul später hinter einem `ext`-Proxy herausgelöst werden könnte, ohne den Kern erneut umzubauen. **Entscheidung beim Nutzer.**
 
-**Nachtrag 2026-10-22 (Kapitel 48): Stufe 2 für Intercom gebaut — als schmales, generisches Dienst-Gateway.** Der Fachdienst läuft im eigenen Node (`omp-intercom`) und meldet ein Manifest (`GET /service.json`: Name, Funktionsrechte, erlaubte Routen mit nötigem Recht, UI-Tabs/Kacheln, Metrikpfad, Sicherung/Import). Das Modul `extsvc` im Orchestrator stellt `/api/v1/ext/<dienst>/…` bereit (hinter der normalen Anmeldung), prüft das Funktionsrecht je Route (alles ohne Manifest-Eintrag: 404), reicht die Identität als Header weiter (`X-OMP-User/-Groups/-Features`, Client-Header gleichen Namens werden nie übernommen), schreibt das Audit aus dem Antwort-Header `X-OMP-Audit` und bringt Rechte, Tabs, Kacheln und Metriken des Dienstes wie ein Modul in die Plattform; das letzte Manifest wird im Einstellungsspeicher gehalten, damit Rechte und Tabs auch ohne laufenden Dienst bestehen. **Vertrauen:** der Orchestrator erzeugt einmal ein Dienst-Token (`OMP_SERVICE_TOKEN` oder Datei `service-token` neben dem JWT-Geheimnis), gibt es **nur** an vom Launcher gestartete Nodes (Umgebung) und schickt es nur an diese; ohne Token sind die Dienst-Routen des Nodes gesperrt. (`LaunchSecret` taugt dafür nicht: es überlebt keinen Orchestrator-Neustart.) Auf Hosts mit Host-Agent muss dasselbe Token in der Umgebung des Agents stehen (Allowlist des Agents, kein Versand übers Netz). Siehe `docs/MODULE-SCHREIBEN.md` §7. **Kapitel 49 (Austauschbarkeit):** Plattform-Code kennt keine Produkte, nur **Diensttypen mit Rollen** (Vertrag, `extsvc/contracts.go`, `docs/CONTRACT-INTERCOM.md`); Clients (Stream Deck) finden Dienste über `GET /api/v1/ext`, die Oberfläche kommt vom Dienst (`/api/v1/ext/<name>/_ui/…`), `cmd/serviceconformance` prüft jede Implementierung.
+**Nachtrag 2026-10-22 (Kapitel 48): Stufe 2 für Intercom gebaut — als schmales, generisches Dienst-Gateway.** Der Fachdienst läuft im eigenen Node (`omp-intercom`) und meldet ein Manifest (`GET /service.json`: Name, Funktionsrechte, erlaubte Routen mit nötigem Recht, UI-Tabs/Kacheln, Metrikpfad, Sicherung/Import). Das Modul `extsvc` im Orchestrator stellt `/api/v1/ext/<dienst>/…` bereit (hinter der normalen Anmeldung), prüft das Funktionsrecht je Route (alles ohne Manifest-Eintrag: 404), reicht die Identität als Header weiter (`X-OMP-User/-Groups/-Features`, Client-Header gleichen Namens werden nie übernommen), schreibt das Audit aus dem Antwort-Header `X-OMP-Audit` und bringt Rechte, Tabs, Kacheln und Metriken des Dienstes wie ein Modul in die Plattform; das letzte Manifest wird im Einstellungsspeicher gehalten, damit Rechte und Tabs auch ohne laufenden Dienst bestehen. **Vertrauen:** der Orchestrator erzeugt einmal ein Dienst-Token (`OMP_SERVICE_TOKEN` oder Datei `service-token` neben dem JWT-Geheimnis), gibt es **nur** an vom Launcher gestartete Nodes (Umgebung) und schickt es nur an diese; ohne Token sind die Dienst-Routen des Nodes gesperrt. (`LaunchSecret` taugt dafür nicht: es überlebt keinen Orchestrator-Neustart.) Auf Hosts mit Host-Agent muss dasselbe Token in der Umgebung des Agents stehen (Allowlist des Agents, kein Versand übers Netz). Siehe `docs/entwicklung/MODULE-SCHREIBEN.md` §7. **Kapitel 49 (Austauschbarkeit):** Plattform-Code kennt keine Produkte, nur **Diensttypen mit Rollen** (Vertrag, `extsvc/contracts.go`, `docs/contracts/CONTRACT-INTERCOM.md`); Clients (Stream Deck) finden Dienste über `GET /api/v1/ext`, die Oberfläche kommt vom Dienst (`/api/v1/ext/<name>/_ui/…`), `cmd/serviceconformance` prüft jede Implementierung.
 
 
 ## 29. SCTE-104/-35: Werbeblöcke kennzeichnen und ins Signal einbetten (Design 2026-10-08, UMSETZUNG.md Kapitel 37)
@@ -4645,4 +4645,4 @@ Kein LLM; keine automatische Verlagerung von Sendewegen; kein Ersatz für Gatewa
 - **Grenzen:** Kanten über Domains werden vom Graphen (409) und von der Workflow-Prüfung abgelehnt; einzige Verbindung ist die Brücke `omp-mxl-bridge` (kopiert Grains/Samples direkt, wandelt nicht, blockierendes Lesen + inotify für noch nicht vorhandene Flows).
 - **Abschottung (D7):** `unshare --user --map-root-user --mount` mit privatem tmpfs-`/dev/shm`, in das nur die Domain(en) des Nodes per Bind-Mount hineingereicht werden; fail closed. Entscheidung gegen UID/Gruppe je Domain: braucht Root und getrennte Benutzer.
 - **Lesemodus:** `omp-mediaio` liest MXL blockierend (`READ_WAIT` 100 ms), Rückfall `OMP_MXL_READ_MODE=poll`; `omp-lowlat-mixer` fragt bewusst ab.
-- **Betrieb/Best Practice:** `docs/HANDBUCH.md` §9.3a; Entwurf und Entscheidungen: `docs/ENTWURF-MXL-DOMAIN-TRENNUNG.md`.
+- **Betrieb/Best Practice:** `docs/HANDBUCH.md` §9.3a; Entwurf und Entscheidungen: `docs/entwuerfe/ENTWURF-MXL-DOMAIN-TRENNUNG.md`.

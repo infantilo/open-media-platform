@@ -1,5 +1,5 @@
 //! omp-gpio (Radio, Kapitel 89/RC1): generische Ein-/Ausgänge (Kontakte) als Node. GPI → NATS-Ereignis `omp.gpio.<node>.in.<pin>`,
-//! GPO ← Methode `setOutput`, Entprellung, Haltezeit und Fail-Safe-Pegel bei Verbindungsverlust (`docs/CONTRACT-GPIO.md`).
+//! GPO ← Methode `setOutput`, Entprellung, Haltezeit und Fail-Safe-Pegel bei Verbindungsverlust (`docs/contracts/CONTRACT-GPIO.md`).
 //! Das einzige Gerät dieser Stufe ist der Simulator (Methoden `simulateInput`/`simulateLink`); echte Geräte kommen als weitere
 //! Gerätetreiber hinter dieselbe Zustandsmaschine (`gpio.rs`).
 

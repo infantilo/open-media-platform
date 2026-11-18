@@ -936,7 +936,7 @@ function kvObjectEditor(obj, onChange, opts = {}) {
 // ---------------------------------------------------------------------------
 // Variablen-Assistent: Werte aus Playlist-Events (Titel, Zeiten, Metadaten von Vorgänger/Nachfolger/gesuchtem Event)
 // in Textfelder von Child Events einsetzen. Alle Bezüge, Felder und Formate liefert der Node (GET /variables/catalog) —
-// diese Oberfläche kennt keine eigene Liste. Schreibweise des Platzhalters: {{bezug.feld|format}} (s. docs/PLAYOUT-AUTOMATION.md §4a).
+// diese Oberfläche kennt keine eigene Liste. Schreibweise des Platzhalters: {{bezug.feld|format}} (s. docs/funktionen/PLAYOUT-AUTOMATION.md §4a).
 // ---------------------------------------------------------------------------
 let varAssistHook = null; // (input) => Element; vom Event-Editor gesetzt (kennt nodeId, Event, Zeitpunkt des Childs)
 const decorateVarInput = (input) => (varAssistHook ? varAssistHook(input) : input);

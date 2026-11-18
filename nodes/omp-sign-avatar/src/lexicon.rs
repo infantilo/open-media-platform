@@ -1,4 +1,4 @@
-//! Lexikon: Gebärden als Daten (JSON), damit Fachleute sie ohne Code ändern können (docs/GEBAERDENSPRACHE.md §4).
+//! Lexikon: Gebärden als Daten (JSON), damit Fachleute sie ohne Code ändern können (docs/funktionen/GEBAERDENSPRACHE.md §4).
 //!
 //! ```json
 //! { "version": 1,

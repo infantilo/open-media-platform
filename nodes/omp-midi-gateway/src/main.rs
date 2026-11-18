@@ -1,7 +1,7 @@
 //! omp-midi-gateway (Kapitel 93, Weg B): MIDI-Pulte am Server — USB (ALSA-Rohgeräte), Netzwerk (RTP-MIDI/AppleMIDI) und Simulator.
 //! Mackie-Control-Pulte (Hauptpult + Erweiterungen, z. B. iCON V1-M/V1-X, P1-M/P1-X) steuern den Audiomischer; andere MIDI-Geräte
 //! laufen über ein generisches Profil. Nicht verbrauchte Tasten und Reglerbewegungen gehen als NATS-Ereignis `omp.midi.<node>.…`
-//! hinaus (Auslöser für Workflows). Vertrag: `docs/CONTRACT-MIDI.md`.
+//! hinaus (Auslöser für Workflows). Vertrag: `docs/contracts/CONTRACT-MIDI.md`.
 
 mod config;
 #[cfg(test)]

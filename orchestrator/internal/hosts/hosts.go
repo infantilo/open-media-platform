@@ -66,7 +66,7 @@ type Metrics struct {
 	Sensors *SensorMetrics `json:"sensors,omitempty"`
 	// Nics: physische Netzwerkkarten (Spiegel von host-agent telemetry.NicInfo); leer bei älterem Agent.
 	Nics []NicMetrics `json:"nics,omitempty"`
-	// Jobs: Fähigkeiten/Auslastung der Job-Ausführung (ffmpeg-Jobs, docs/ENTWURF-FFMPEG-HOSTWAHL.md); nil = auf dem
+	// Jobs: Fähigkeiten/Auslastung der Job-Ausführung (ffmpeg-Jobs, docs/entwuerfe/ENTWURF-FFMPEG-HOSTWAHL.md); nil = auf dem
 	// Host nicht freigegeben (keine tools.json).
 	Jobs *JobsMetrics `json:"jobs,omitempty"`
 	// Clock: Zustand der Systemuhr des Hosts (Spiegelbild von host-agent/internal/telemetry.ClockSample, Audit 2026-10-23 M1);

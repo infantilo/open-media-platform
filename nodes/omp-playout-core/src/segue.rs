@@ -1,6 +1,6 @@
 //! Segue-Planung (Radio-Plan §4, RB4): aus den Markern zweier Nachbarn entstehen Startzeitpunkt des Nächsten und Kurven.
 //! Reine Rechnung in Millisekunden relativ zum Start des Logs; die Automation übersetzt in `play`-Aufrufe des Segue-Players
-//! (`docs/CONTRACT-SEGUE-PLAYER.md`).
+//! (`docs/contracts/CONTRACT-SEGUE-PLAYER.md`).
 
 use serde::{Deserialize, Serialize};
 

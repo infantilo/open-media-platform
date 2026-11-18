@@ -260,7 +260,7 @@ Handeingriff am Kanal pinnt ihn (Parameter `routing`/`mixState.routing`).
 Der `omp-channel-player` hat nicht mehr einen festen Stereo-Ausgang, sondern **einen
 MXL-Audio-Sender je Zielgruppe** des Ausgabeprofils (Standard: Programmton, Hörfilm/AD,
 Originalton, Dolby E, 5.1 diskret). Konfiguration, Regeln und Vorlagen siehe
-`docs/ENTWURF-AUDIO-REGELN.md`; sie liegen als ein Dokument im Orchestrator
+`docs/entwuerfe/ENTWURF-AUDIO-REGELN.md`; sie liegen als ein Dokument im Orchestrator
 (`GET/PUT /api/v1/audio-rules`, `GET /api/v1/audio-rules/default`). Der Node lädt es beim
 Start und fällt ohne erreichbaren Orchestrator auf die eingebauten Standardwerte zurück.
 

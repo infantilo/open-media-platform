@@ -1,6 +1,6 @@
 import { t } from "../shell/i18n.ts";
 // <omp-confirm> + confirmDialog() — Ersatz für window.confirm() (S10,
-// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): synchrones confirm()
+// docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): synchrones confirm()
 // blockiert den ganzen Tab (inkl. der SSE-Verbindung im Hintergrund) und
 // sieht je nach Browser wie eine Fremdkörper-Systemmeldung aus statt Teil
 // der Shell — hier ein modales, per Promise<boolean> auswertbares Overlay

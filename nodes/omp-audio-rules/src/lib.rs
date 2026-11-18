@@ -1,4 +1,4 @@
-//! Dynamische Audio-Zuordnung und Regel-Engine (docs/ENTWURF-AUDIO-REGELN.md).
+//! Dynamische Audio-Zuordnung und Regel-Engine (docs/entwuerfe/ENTWURF-AUDIO-REGELN.md).
 //!
 //! Ein Event beschreibt, welche Quellspuren in welche Zielgruppe gehen
 //! ([`Mapping`]); fehlt etwas, greifen die [`Rule`]s (Ersatzspur, Up-/Downmix,

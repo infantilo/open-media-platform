@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// segue-check prüft einen laufenden Segue-Player gegen docs/CONTRACT-SEGUE-PLAYER.md.
+// segue-check prüft einen laufenden Segue-Player gegen docs/contracts/CONTRACT-SEGUE-PLAYER.md.
 //
 //	NODE_URL=http://127.0.0.1:PORT [OMP_NODE_TOKEN=…] [FILE=/pfad/zur/datei.wav] go run ./tools/segue-check
 //

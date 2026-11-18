@@ -1,5 +1,5 @@
 # Lokaler Reverse-Proxy mit TLS-Terminierung für OMP (S7,
-# docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Remote-Zugriff dokumentiert
+# docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Remote-Zugriff dokumentiert
 # absichern" — Bearer-Token + ?access_token= setzen HTTPS voraus, s.
 # docs/HANDBUCH.md Abschnitt 6). Der Orchestrator selbst bleibt dahinter
 # Klartext-HTTP — kein TLS-Handling/keine Zertifikatsverwaltung im

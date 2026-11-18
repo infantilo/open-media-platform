@@ -1,4 +1,4 @@
-// Node-UI-Bundle des Audiomischers (Kapitel 26, docs/AUDIOMIXER-PLAN.md).
+// Node-UI-Bundle des Audiomischers (Kapitel 26, docs/entwuerfe/AUDIOMIXER-PLAN.md).
 // Quelldateien (werden in src/uibundle.rs zu EINEM Bundle zusammengefügt):
 //   00-core.js     Helfer, Fader, Slider, Meter
 //   10-channel.js  ChannelView (eine Logik, Darstellungsvarianten per data-variant)

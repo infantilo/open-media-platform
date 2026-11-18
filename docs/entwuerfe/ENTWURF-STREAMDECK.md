@@ -103,4 +103,4 @@ Die Adapter-Auflösung hat jetzt drei Stufen (`ui/shell/streamdeck/adapters/inde
 - **Takt:** `refresh()` des aktiven Tabs alle 1,5 s, nicht gestapelt, 8-s-Limit; Änderungen über `onChange`/`omp-streamdeck-relayout`.
 - **Simulator** (`/streamdeck-sim`, im Konsolen-Panel) skaliert auf die Fensterbreite; Screenshots in `docs/screenshots/streamdeck-*.png`.
 - **Offen am Gerät:** Drehung „+“/„+ XL“ (Pfeil im Testraster oben?), USB-Dauer, Wiederverbinden, Dial-Drehsinn, Reset/Logo, udev auf dem Bedienrechner.
-- **Eigene Nodes:** Belegung per Descriptor (Auto-Raster) oder `streamDeck`-Eigenschaft — Anleitung samt KI-Prompt in `docs/NODE-TUTORIAL.md`.
+- **Eigene Nodes:** Belegung per Descriptor (Auto-Raster) oder `streamDeck`-Eigenschaft — Anleitung samt KI-Prompt in `docs/entwicklung/NODE-TUTORIAL.md`.

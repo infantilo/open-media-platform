@@ -13,7 +13,7 @@ type Store struct {
 	mu    sync.RWMutex
 	nodes []NodeView
 	// pollDuration ist die Dauer des zuletzt abgeschlossenen Polls (S8,
-	// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Registry- (Nodes
+	// docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Registry- (Nodes
 	// online/gesamt, Poll-Dauer)" für /metrics) — hier statt auf *Poller
 	// gehalten, weil der Store (nicht der Poller selbst) bereits als
 	// NodeLister in httpapi.NewHandler injiziert wird; ein zusätzlicher

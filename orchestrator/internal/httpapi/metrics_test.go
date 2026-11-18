@@ -15,7 +15,7 @@ import (
 
 // metricLineRE prüft die Prometheus-Text-Exposition-Grundform einer
 // Nicht-Kommentar-Zeile: "name{label=\"value\",...}? value" (S8,
-// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "curl /metrics well-formed
+// docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "curl /metrics well-formed
 // … sonst Formatprüfung im Test" — kein promtool auf dieser Dev-Maschine
 // installiert, s. docs/decisions.md).
 var metricLineRE = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*(\{[a-zA-Z_][a-zA-Z0-9_]*="[^"]*"(,[a-zA-Z_][a-zA-Z0-9_]*="[^"]*")*\})? -?[0-9]+(\.[0-9]+)?$`)

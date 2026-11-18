@@ -72,7 +72,7 @@ nodes:
 preflight doctor:
 	@./deploy/dev/preflight.sh $(PREFLIGHT_ARGS)
 
-# ---- System-Update-Pakete (docs/ENTWURF-SYSTEM-UPDATE.md) ----------------
+# ---- System-Update-Pakete (docs/entwuerfe/ENTWURF-SYSTEM-UPDATE.md) ----------------
 # `make update-keygen` einmalig: erzeugt das Ed25519-Schlüsselpaar. Den
 # PRIVATEN Schlüssel (UPDATE_KEY) geheim halten und nicht auf den Server
 # legen; die Datei update-trusted.pub kommt auf jeden Server nach
@@ -128,7 +128,7 @@ sbom:
 contract:
 	cd tools/contract-check && NODE_URL=$(NODE_URL) go run .
 
-# Konformität eines laufenden Segue-Players (docs/CONTRACT-SEGUE-PLAYER.md); mit FILE=… auch das Verhalten
+# Konformität eines laufenden Segue-Players (docs/contracts/CONTRACT-SEGUE-PLAYER.md); mit FILE=… auch das Verhalten
 segue-check:
 	cd tools/segue-check && NODE_URL=$(NODE_URL) FILE=$(FILE) go run .
 
@@ -401,7 +401,7 @@ status:
 		echo "Host-Agent Regie-Host-B: nicht gestartet (optional, siehe 'make hosts')"; \
 	fi
 
-# Backup/Restore (S9, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) —
+# Backup/Restore (S9, docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) —
 # .backups/omp-<timestamp>.sql.gz, Rotation N=14. `make restore
 # ARGS=.backups/omp-<timestamp>.sql.gz` (verlangt gestoppten
 # Orchestrator + interaktive Bestätigung, s. restore-omp.sh).
@@ -594,7 +594,7 @@ s3-down:
 minio-up: s3-up
 minio-down: s3-down
 
-# S8 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — startet den Stack
+# S8 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — startet den Stack
 # (falls nicht bereits gestartet) + 2 Test-Nodes, sammelt /metrics alle
 # 60s über 1h in eine CSV (.run/soak/). `make soak ARGS="1800 30"` für
 # abweichende Dauer/Intervall (Sekunden). Strg+C bricht früher ab, die

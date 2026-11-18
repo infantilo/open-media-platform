@@ -1,5 +1,5 @@
 // Stream-Deck-Modelltabelle (Kap. 40.2). Reine Daten, Quelle: offizielle
-// HID-Beschreibung des Herstellers (docs/ENTWURF-STREAMDECK.md §1).
+// HID-Beschreibung des Herstellers (docs/entwuerfe/ENTWURF-STREAMDECK.md §1).
 // v1: XL, XL 2022, 15-Tasten-Familie, „+“. Neo/Mini/MK.1 bewusst nicht
 // (Protokoll nicht verifiziert).
 

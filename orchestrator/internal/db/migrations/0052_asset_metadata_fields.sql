@@ -1,4 +1,4 @@
--- Feld-Registry für Asset-Metadaten (Kapitel 78.1, docs/ENTWURF-NORMEN-EBUCORE-R103-R143.md).
+-- Feld-Registry für Asset-Metadaten (Kapitel 78.1, docs/entwuerfe/ENTWURF-NORMEN-EBUCORE-R103-R143.md).
 --
 -- Das Speichermodell bleibt: assets.metadata ist weiterhin ein JSONB-Blob mit den
 -- sechs Blöcken. Diese Tabelle beschreibt nur, WELCHE Felder es gibt (Typ,

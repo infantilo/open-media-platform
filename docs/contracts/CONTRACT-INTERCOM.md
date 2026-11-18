@@ -7,7 +7,7 @@ geändert werden. Dasselbe Muster gilt für jede weitere Fachfunktion (Bildmisch
 
 ## 1. Aufbau
 
-Ein Intercom ist ein **Dienst in einem Node** (ARCHITECTURE §28.5, `docs/MODULE-SCHREIBEN.md` §7). Der Node meldet sich wie jeder
+Ein Intercom ist ein **Dienst in einem Node** (ARCHITECTURE §28.5, `docs/entwicklung/MODULE-SCHREIBEN.md` §7). Der Node meldet sich wie jeder
 Node bei der NMOS-Registry und bietet zusätzlich ein **Dienst-Manifest** (`GET /service.json`, ohne Anmeldung) an. Das
 Dienst-Gateway des Orchestrators (`/api/v1/ext/<dienst>/…`) prüft Anmeldung und Funktionsrecht und leitet an den Node weiter.
 

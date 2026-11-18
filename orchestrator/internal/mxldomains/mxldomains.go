@@ -1,5 +1,5 @@
 // Package mxldomains verwaltet benannte MXL-Domains neben der Standarddomain (Kap. 103, Entwurf
-// docs/ENTWURF-MXL-DOMAIN-TRENNUNG.md, Schritte D1/D2).
+// docs/entwuerfe/ENTWURF-MXL-DOMAIN-TRENNUNG.md, Schritte D1/D2).
 //
 // Eine Domain ist ein Verzeichnis im Arbeitsspeicher (tmpfs). Flows sind nur innerhalb einer Domain sichtbar; die
 // Trennung ist eine Trennung nach Pfad, keine Kernel-Abschottung (gleiche UID, gleiches /dev/shm).

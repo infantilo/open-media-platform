@@ -131,7 +131,7 @@ SC (Lieferkette), AA (Authentisierung/Autorisierung), DO (Doku), NE
 MR (Überwachung), DI (Daten/Rechte), NI (Netzinfrastruktur). Prioritäten
 P1 (kritisch) / P2 (wichtig) / P3 (Best Practice).
 
-Ergebnis 78.5: `docs/R143-KONFORMITAET.md` — je Kontrolle: Stand in OMP
+Ergebnis 78.5: `docs/berichte/R143-KONFORMITAET.md` — je Kontrolle: Stand in OMP
 (erfüllt / teilweise / offen / nicht zutreffend, weil Organisations- statt
 Produktthema), Fundstelle im Code/Handbuch, Lücke. **Keine Selbsterklärung
 ohne Beleg**; offene P1-Punkte werden mit den Audit-Funden
