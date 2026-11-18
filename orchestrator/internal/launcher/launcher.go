@@ -1513,6 +1513,22 @@ func (l *Launcher) CardsOnHost(hostID string) ([]CardConnector, error) {
 	return out, nil
 }
 
+// MXLFlowsOnHost fragt den Host-Agent nach den Flows einer MXL-Domain dieses Hosts (Aktion mxl-flows): Schreiber und
+// Rest-Erkennung, der Agent scannt sein eigenes /dev/shm. Antwort: {"domain": Pfad, "flows": [...]}.
+func (l *Launcher) MXLFlowsOnHost(hostID, domain string) (json.RawMessage, error) {
+	if l.nc == nil {
+		return nil, ErrRemoteUnavailable
+	}
+	resp, err := l.sendCommand(hostID, remoteCommand{Action: "mxl-flows", Domain: domain})
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, fmt.Errorf("host %s: %s", hostID, resp.Error)
+	}
+	return json.RawMessage(resp.Detail), nil
+}
+
 // SysinfoOnHost holt den Rechnerzustand eines Remote-Hosts (Host-Agent, Aktion sysinfo; Support, Kap. 72). Ein älterer
 // Agent kennt die Aktion nicht und antwortet mit einem Fehler.
 func (l *Launcher) SysinfoOnHost(hostID string) (jobwire.Sysinfo, error) {
@@ -2063,6 +2079,8 @@ func (l *Launcher) startRemotePre(nodeType, version, hostID, customLabel string,
 // eigenständiges Go-Modul (analog nodes/mock), kein gemeinsames
 // drittes Paket für ein derart schmales Format.
 type remoteCommand struct {
+	// Domain: MXL-Domainname für die Aktion "mxl-flows" (Kap. 103).
+	Domain string `json:"domain,omitempty"`
 	Action string `json:"action"`
 	Type   string `json:"type,omitempty"`
 	// Version: Version eines importierten Microservice (Kap. 85); leer = neueste auf dem Host.

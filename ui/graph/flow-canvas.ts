@@ -4718,7 +4718,7 @@ export class FlowCanvas extends HTMLElement {
       migBtn.setAttribute("data-role", "migrate-instance");
       migBtn.textContent = "⇄";
       const migTitle = document.createElementNS(SVG_NS, "title");
-      migTitle.textContent = tt("flow.migrateButton");
+      migTitle.textContent = this.#zoneMode === "domain" ? tt("flow.domainView.moveButton") : tt("flow.migrateButton");
       migBtn.appendChild(migTitle);
       migBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
       migBtn.addEventListener("click", (ev) => {
@@ -5570,11 +5570,18 @@ export class FlowCanvas extends HTMLElement {
     const roleBinding = this.#workflowRoleForNodeId(tileId);
 
     const currentZone = this.#zoneIdForNodeId(tileId);
+    const domainMode = this.#zoneMode === "domain";
+    // Domain-Ansicht: ⇄ verschiebt in eine andere MXL-Domain (nicht auf einen anderen Host); Workflow-Rollen ändern ihre
+    // Domain in der Workflow-Definition.
+    if (domainMode && roleBinding) {
+      this.#showToast(tt("flow.domainView.moveWorkflow"));
+      return;
+    }
     const targets = this.#hostZones(this.#rootZoneTiles()).filter(
       (z) => z.id !== currentZone && z.id !== "unassigned" && z.id !== "mixed",
     );
     if (targets.length === 0) {
-      this.#showToast(tt("flow.7cfa62"));
+      this.#showToast(domainMode ? tt("flow.domainView.moveNone") : tt("flow.7cfa62"));
       return;
     }
 
@@ -5590,7 +5597,9 @@ export class FlowCanvas extends HTMLElement {
       item.addEventListener("mouseleave", () => (item.style.background = "none"));
       item.addEventListener("click", () => {
         this.#closeHostMigrateMenu();
-        if (roleBinding) {
+        if (domainMode) {
+          void this.#confirmAndChangeDomain(instanceId, node.label, zone.id);
+        } else if (roleBinding) {
           void this.#confirmAndMigrateWorkflowRole(roleBinding.workflowId, roleBinding.role, node.label, zone.id);
         } else {
           void this.#confirmAndMigrateInstance(instanceId, node.label, zone.id);
@@ -5634,6 +5643,30 @@ export class FlowCanvas extends HTMLElement {
       }
     }
     return null;
+  }
+
+  // Domain-Ansicht: eine freistehende Instanz in eine andere MXL-Domain legen (Stop + Start, neue Instanz-ID). Die API lehnt
+  // Workflow-Rollen und Instanzen mit Verbindungen ab und sagt warum.
+  async #confirmAndChangeDomain(instanceId: string, nodeLabel: string, targetDomain: string) {
+    const inst = this.#paletteInstances.find((i) => i.id === instanceId);
+    const confirmed = await confirmDialog(tt("flow.domainView.moveConfirm", { node: nodeLabel, domain: targetDomain }), {
+      confirmLabel: tt("flow.domainView.moveDo"),
+    });
+    if (!confirmed) return;
+    try {
+      const body: Record<string, string> = { domain: targetDomain };
+      // Eine Brücke behält ihre Zieldomain.
+      const target = instanceTargetDomain(inst);
+      if (target) body.targetDomain = target;
+      const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(instanceId)}/domain`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) this.#showToast(tt("flow.domainView.moveFail", { msg: (await res.text()).trim() || String(res.status) }));
+    } catch (err) {
+      this.#showToast(tt("flow.domainView.moveFail", { msg: String(err) }));
+    }
   }
 
   async #confirmAndMigrateInstance(instanceId: string, nodeLabel: string, targetZoneId: string) {

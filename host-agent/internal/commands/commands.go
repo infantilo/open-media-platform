@@ -32,6 +32,7 @@ import (
 	"github.com/infantilo/openmediaplatform/host-agent/internal/catalog"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/jobs"
 	"github.com/infantilo/openmediaplatform/host-agent/internal/microsvc"
+	"github.com/infantilo/openmediaplatform/host-agent/internal/mxlflows"
 	"github.com/infantilo/openmediaplatform/jobwire"
 	"github.com/infantilo/openmediaplatform/nodeoptions"
 	"github.com/infantilo/openmediaplatform/podmanrun"
@@ -111,6 +112,8 @@ var allowedExtraEnvKeys = map[string]bool{
 
 // Request ist die auf omp.host.<hostId>.cmd empfangene Nachricht.
 type Request struct {
+	// Domain: Name einer getrennten MXL-Domain für die Aktion "mxl-flows" (leer/"default" = Standarddomain), Kap. 103.
+	Domain     string `json:"domain,omitempty"`
 	Action     string `json:"action"` // "start" | "stop" | "update"
 	Type       string `json:"type,omitempty"`
 	InstanceID string `json:"instanceId"`
@@ -344,6 +347,22 @@ func (e *Executor) Handle(req Request) Response {
 		return e.software()
 	case "catalog-trust", "catalog-install", "catalog-remove", "catalog-list":
 		return e.handleMicroservice(req)
+	case "mxl-flows":
+		// Flows einer MXL-Domain dieses Hosts mit Schreiber und Rest-Erkennung (Admin → MXL-Flows für entfernte Hosts).
+		dir := podmanrun.MxlDomainPath()
+		if req.Domain != "" && req.Domain != "default" {
+			dp, ok := podmanrun.DomainPath(req.Domain)
+			if !ok {
+				return Response{OK: false, Error: "invalid domain name"}
+			}
+			dir = dp
+		}
+		flows, err := mxlflows.Scan(dir, mxlflows.Options{})
+		if err != nil {
+			return Response{OK: false, Error: err.Error()}
+		}
+		data, _ := json.Marshal(map[string]any{"domain": dir, "flows": flows})
+		return Response{OK: true, Detail: string(data)}
 	case "check-path":
 		if req.Path == "" {
 			return Response{OK: false, Error: "path required"}

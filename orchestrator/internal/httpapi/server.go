@@ -561,6 +561,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
 	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, blockMaintenanceHost(options.maintenance, "hostId", handlePostInstance(launcherSvc, authzStore, ioPortStore, controlPlaneCheck(workflowSvc), options.mxlDomains))))
 	mux.HandleFunc("PATCH /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handlePatchInstance(launcherSvc, nodes, nodeClient)))
+	if options.mxlDomains != nil {
+		mux.HandleFunc("POST /api/v1/instances/{id}/domain", g.requireVerbGlobal(authz.VerbAdmin, handleChangeInstanceDomain(launcherSvc, graphSvc, options.mxlDomains, options.nodeValues, options.domainAudit)))
+	}
 	mux.HandleFunc("POST /api/v1/instances/{id}/restart", g.requireVerbGlobal(authz.VerbAdmin, handleRestartInstance(launcherSvc, workflowSvc, options.nodeValues, instanceMigrateSvc)))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc, ioPortStore)))
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — Drag-Umzug

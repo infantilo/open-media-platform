@@ -33,6 +33,7 @@ pub mod group;
 pub mod mxl;
 #[cfg(feature = "mxl")]
 pub mod rawcopy;
+pub mod domainwatch;
 #[cfg(feature = "mxl")]
 pub mod diag;
 pub mod timebase;

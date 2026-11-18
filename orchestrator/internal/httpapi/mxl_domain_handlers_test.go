@@ -234,3 +234,72 @@ func TestBridgeStartAndEdges(t *testing.T) {
 		t.Error("Brücken-Ausgang(b) -> Brücken-Eingang(a) muss abgelehnt werden")
 	}
 }
+
+// stopRecordingLauncher merkt sich Stop und den neuen Start.
+type stopRecordingLauncher struct {
+	fakeLauncherService
+	stopped string
+	env     map[string]string
+}
+
+func (s *stopRecordingLauncher) Stop(id string) error { s.stopped = id; return nil }
+func (s *stopRecordingLauncher) StartLabeled(nodeType, version, hostID, customLabel string, extraEnv map[string]string) (launcher.Instance, error) {
+	s.env = extraEnv
+	return launcher.Instance{ID: "neu", Type: nodeType}, nil
+}
+
+func TestChangeInstanceDomain(t *testing.T) {
+	ds := newMemDomains(t, "a", "b")
+	mk := func(env map[string]string, typ string) *stopRecordingLauncher {
+		return &stopRecordingLauncher{fakeLauncherService: fakeLauncherService{instances: []launcher.Instance{{ID: "i1", Type: typ, Label: "X", ExtraEnv: env}}}}
+	}
+	post := func(l LauncherService, g GraphService, body string) (*httptest.ResponseRecorder, string) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/instances/i1/domain", strings.NewReader(body))
+		req.SetPathValue("id", "i1")
+		rec := httptest.NewRecorder()
+		handleChangeInstanceDomain(l, g, ds, nil, nil)(rec, req)
+		return rec, rec.Body.String()
+	}
+	noEdges := &fakeGraphService{g: graph.Graph{Nodes: []graph.Node{{ID: "n", InstanceID: "i1", Inputs: []graph.Port{{ID: "r"}}, Outputs: []graph.Port{{ID: "s"}}}}}}
+
+	// freistehend ohne Verbindungen: Stop + Neustart mit der neuen Domain, alte Domainschlüssel ersetzt, Rest bleibt
+	l := mk(map[string]string{"OMP_MXL_DOMAIN_NAME": "a", "OMP_STATE_KEY": "k"}, "omp-source")
+	if rec, body := post(l, noEdges, `{"domain":"b"}`); rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, body)
+	}
+	if l.stopped != "i1" || l.env["OMP_MXL_DOMAIN_NAME"] != "b" || l.env["OMP_STATE_KEY"] != "k" {
+		t.Fatalf("stopped=%q env=%v", l.stopped, l.env)
+	}
+	// zurück in die Standarddomain: der Domainschlüssel entfällt
+	l = mk(map[string]string{"OMP_MXL_DOMAIN_NAME": "a"}, "omp-source")
+	if rec, _ := post(l, noEdges, `{"domain":"default"}`); rec.Code != http.StatusOK || l.env["OMP_MXL_DOMAIN_NAME"] != "" {
+		t.Fatalf("%d env=%v", rec.Code, l.env)
+	}
+	// Workflow-Rolle: abgelehnt
+	l = mk(map[string]string{"OMP_WORKFLOW_ID": "wf1"}, "omp-source")
+	if rec, _ := post(l, noEdges, `{"domain":"b"}`); rec.Code != http.StatusConflict || l.stopped != "" {
+		t.Errorf("Workflow-Rolle: %d stopped=%q", rec.Code, l.stopped)
+	}
+	// mit Verbindung: abgelehnt, nichts gestoppt
+	l = mk(nil, "omp-source")
+	withEdge := &fakeGraphService{g: graph.Graph{Nodes: noEdges.g.Nodes, Edges: []graph.Edge{{ID: "r", FromSender: "x", ToReceiver: "r"}}}}
+	if rec, _ := post(l, withEdge, `{"domain":"b"}`); rec.Code != http.StatusConflict || l.stopped != "" {
+		t.Errorf("mit Verbindung: %d stopped=%q", rec.Code, l.stopped)
+	}
+	// unbekannte Domain / Ziel nur für Brücken
+	l = mk(nil, "omp-source")
+	if rec, _ := post(l, noEdges, `{"domain":"nope"}`); rec.Code != http.StatusNotFound {
+		t.Errorf("unbekannt: %d", rec.Code)
+	}
+	if rec, _ := post(l, noEdges, `{"domain":"a","targetDomain":"b"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("Ziel bei Nicht-Brücke: %d", rec.Code)
+	}
+	// Brücke braucht ein abweichendes Ziel
+	l = mk(map[string]string{"OMP_MXL_DOMAIN_NAME": "a", "OMP_MXL_TARGET_DOMAIN_NAME": "b"}, "omp-mxl-bridge")
+	if rec, _ := post(l, noEdges, `{"domain":"a","targetDomain":"a"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("Brücke gleiches Ziel: %d", rec.Code)
+	}
+	if rec, _ := post(l, noEdges, `{"domain":"b","targetDomain":"a"}`); rec.Code != http.StatusOK || l.env["OMP_MXL_TARGET_DOMAIN_NAME"] != "a" || l.env["OMP_MXL_DOMAIN_NAME"] != "b" {
+		t.Errorf("Brücke umdrehen: %d env=%v", rec.Code, l.env)
+	}
+}

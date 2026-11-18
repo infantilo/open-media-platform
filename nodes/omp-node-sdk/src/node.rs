@@ -510,6 +510,7 @@ impl NodeHandle {
             let mut shared = self.shared_receivers.lock().expect("lock poisoned");
             let index = shared.device.senders.len();
             let (sender, source, flow) = build_sender_parts(&id, index, index, &spec, &shared.device.id, &self.label);
+            crate::connection::register_default_sender(&id, spec.transport.as_deref());
             shared.device.senders.push(id.clone());
             shared.device.version = is04::now_version();
             shared.extra_senders.push(ExtraSender { sender: sender.clone(), source: source.clone(), flow: flow.clone() });
@@ -543,6 +544,7 @@ impl NodeHandle {
                 .position(|e| e.sender.id == sender_id)
                 .map(|pos| shared.extra_senders.remove(pos));
             shared.device.senders.retain(|id| id != sender_id);
+            crate::connection::unregister_default_sender(sender_id);
             shared.device.version = is04::now_version();
             (removed, shared.device.clone())
         };
@@ -746,6 +748,10 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
             sender
         })
         .collect();
+    // Standard-IS-05-Sender-Endpunkte (connection.rs) für alle MXL-Sender, die der Node nicht selbst bedient.
+    for (id, spec) in sender_ids.iter().zip(&config.senders) {
+        crate::connection::register_default_sender(id, spec.transport.as_deref());
+    }
     let receivers: Vec<Receiver> = receiver_ids
         .iter()
         .zip(&config.receivers)

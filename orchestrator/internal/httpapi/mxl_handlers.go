@@ -36,8 +36,9 @@ func handleMXLFlows(ls LauncherService, ds MXLDomainStore) http.HandlerFunc {
 		if domain == "" {
 			domain = "/dev/shm/omp-mxl"
 		}
+		name := r.URL.Query().Get("domain")
 		// ?domain=<Name>: eine benannte Domain statt der Standarddomain (Kap. 103).
-		if name := r.URL.Query().Get("domain"); name != "" && name != mxldomains.DefaultName {
+		if name != "" && name != mxldomains.DefaultName {
 			if ds == nil {
 				http.Error(w, "MXL domains are not enabled", http.StatusNotFound)
 				return
@@ -49,21 +50,53 @@ func handleMXLFlows(ls LauncherService, ds MXLDomainStore) http.HandlerFunc {
 			}
 			domain = p
 		}
-		flows, err := mxlflows.Scan(domain, mxlflows.Options{})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		// ?host=<Host-ID>: die Domain eines entfernten Hosts (der Agent scannt sein eigenes /dev/shm).
+		hostID := r.URL.Query().Get("host")
+		var flows []mxlflows.Flow
+		if hostID != "" {
+			rf, ok := ls.(interface {
+				MXLFlowsOnHost(hostID, domain string) (json.RawMessage, error)
+			})
+			if !ok {
+				http.Error(w, "remote hosts not supported", http.StatusNotImplemented)
+				return
+			}
+			raw, err := rf.MXLFlowsOnHost(hostID, name)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			var resp struct {
+				Domain string          `json:"domain"`
+				Flows  []mxlflows.Flow `json:"flows"`
+			}
+			if err := json.Unmarshal(raw, &resp); err != nil {
+				http.Error(w, "unreadable host answer: "+err.Error(), http.StatusBadGateway)
+				return
+			}
+			domain, flows = resp.Domain, resp.Flows
+		} else {
+			var err error
+			flows, err = mxlflows.Scan(domain, mxlflows.Options{})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
+		// PID → Instanz derselben Maschine (lokal: HostID leer; entfernt: die Host-ID).
 		byPID := map[int]struct{ id, label, typ string }{}
 		if ls != nil {
 			for _, in := range ls.List() {
-				if in.PID > 0 && in.HostID == "" {
+				if in.PID > 0 && in.HostID == hostID {
 					byPID[in.PID] = struct{ id, label, typ string }{in.ID, in.Label, in.Type}
 				}
 			}
 		}
 		out := make([]mxlFlowView, 0, len(flows))
 		for _, f := range flows {
+			if f.Writers == nil {
+				f.Writers = []mxlflows.Writer{}
+			}
 			v := mxlFlowView{Flow: f}
 			for _, wr := range f.Writers {
 				if in, ok := byPID[wr.PID]; ok {
@@ -73,7 +106,7 @@ func handleMXLFlows(ls LauncherService, ds MXLDomainStore) http.HandlerFunc {
 			}
 			out = append(out, v)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"domain": domain, "flows": out})
+		writeJSON(w, http.StatusOK, map[string]any{"domain": domain, "host": hostID, "flows": out})
 	}
 }
 
@@ -274,4 +307,96 @@ func sameMXLDomain(g graph.Graph, ls LauncherService, fromSender, toReceiver str
 		return nil
 	}
 	return fmt.Errorf("sender and receiver are in different MXL domains (%s / %s); a bridge between the domains is needed", a, b)
+}
+
+// handleChangeInstanceDomain liefert POST /api/v1/instances/{id}/domain {"domain":"…","targetDomain":"…"}: legt eine
+// freistehende Instanz in eine andere MXL-Domain (Stop + Start mit demselben Typ, Label, Host und denselben
+// Instanz-Einstellungen; die Instanz-ID ändert sich). Bewusst eng:
+//   - nicht für Workflow-Rollen (dort die Domain im Workflow ändern, sonst läuft die Rolle gegen ihre Definition),
+//   - nur ohne Verbindungen (die Gegenstellen liegen in der alten Domain; die Plattform kann sie nicht mitnehmen) — 409
+//     mit der Aufforderung, vorher zu trennen.
+func handleChangeInstanceDomain(svc LauncherService, gs GraphService, ds MXLDomainStore, nodeValues NodeOptionValues, audit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Domain       string `json:"domain"`
+			TargetDomain string `json:"targetDomain"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		inst, ok := svc.Get(r.PathValue("id"))
+		if !ok {
+			http.Error(w, "unknown instance", http.StatusNotFound)
+			return
+		}
+		if inst.ExtraEnv["OMP_WORKFLOW_ID"] != "" {
+			http.Error(w, "instance belongs to a workflow: change the domain in the workflow settings or the role", http.StatusConflict)
+			return
+		}
+		if inst.Type == "omp-mxl-bridge" && (body.TargetDomain == "" || body.TargetDomain == body.Domain || (body.Domain == "" && body.TargetDomain == mxldomains.DefaultName)) {
+			http.Error(w, "omp-mxl-bridge needs a targetDomain different from its own domain", http.StatusBadRequest)
+			return
+		}
+		if inst.Type != "omp-mxl-bridge" && body.TargetDomain != "" {
+			http.Error(w, "targetDomain is only valid for omp-mxl-bridge", http.StatusBadRequest)
+			return
+		}
+		env, err := domainStartEnv(ds, body.Domain, body.TargetDomain)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, mxldomains.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		// Verbindungen? Dann nicht verschieben: die Gegenstellen bleiben in der alten Domain.
+		if gs != nil {
+			g := gs.Graph(r.Context())
+			ports := map[string]bool{}
+			for _, n := range g.Nodes {
+				if n.InstanceID != inst.ID {
+					continue
+				}
+				for _, p := range n.Inputs {
+					ports[p.ID] = true
+				}
+				for _, p := range n.Outputs {
+					ports[p.ID] = true
+				}
+			}
+			for _, e := range g.Edges {
+				if ports[e.FromSender] || ports[e.ToReceiver] {
+					http.Error(w, "instance still has connections: disconnect them first (the connected nodes stay in the old domain)", http.StatusConflict)
+					return
+				}
+			}
+		}
+		old := inst
+		next := make(map[string]string, len(inst.ExtraEnv)+2)
+		for k, v := range inst.ExtraEnv {
+			if k != podmanrun.DomainNameKey && k != podmanrun.TargetDomainNameKey {
+				next[k] = v
+			}
+		}
+		for k, v := range env {
+			next[k] = v
+		}
+		old.ExtraEnv = next
+		if err := svc.Stop(inst.ID); err != nil {
+			http.Error(w, "stop: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		started, err := startKeepingOptions(svc, old)
+		if err != nil {
+			http.Error(w, "start: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		if nodeValues != nil {
+			_ = nodeValues.MoveInstance(inst.ID, started.ID)
+		}
+		logDomainAudit(audit, actorFromRequest(r), "instance", started.ID, "change-mxl-domain", map[string]any{"from": instanceDomain(inst), "to": body.Domain, "target": body.TargetDomain})
+		writeJSON(w, http.StatusOK, map[string]string{"id": started.ID})
+	}
 }

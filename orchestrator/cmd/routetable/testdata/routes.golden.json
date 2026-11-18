@@ -1484,6 +1484,13 @@
   },
   {
     "method": "POST",
+    "path": "/api/v1/instances/{id}/domain",
+    "auth": "verb:Admin",
+    "when": "options.mxlDomains != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
     "path": "/api/v1/instances/{id}/migrate",
     "auth": "verb:Admin",
     "domain": "core"

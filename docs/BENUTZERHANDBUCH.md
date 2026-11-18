@@ -1291,6 +1291,10 @@ untereinander):
   für Instanzen auf dem Orchestrator-Rechner und nicht für Container-Nodes; die
   Trennung erfolgt nach Pfad, nicht als Sicherheitsgrenze.
 
+  **Rechner und Hosts:** Gibt es Host-Agents, erscheint über der Tabelle eine Auswahl „Rechner“:
+  jeder Host hat seine eigenen Domains in seinem Arbeitsspeicher; die Tabelle zeigt dann
+  die Flows dieses Hosts (der Agent liest sie selbst).
+
   ![Administration → MXL-Flows mit Domain-Auswahl, „Neue Domain“ und „Domain löschen“; Reste ohne Schreiber orange](screenshots/admin-mxl-domains.png)
 
   **Domains im Workflow:** In den Workflow-Einstellungen („MXL-Domain“) legen Sie fest,
@@ -1309,6 +1313,9 @@ untereinander):
   Host-Ansicht. Ein Klick auf die aktive Ansicht schaltet die Zonen aus, ein Klick auf
   die andere wechselt direkt. Unabhängig von der Ansicht trägt jede Kachel in einer
   benannten Domain einen farbigen **Domain-Reiter** über dem Kopf. In der Domain-Ansicht
+  verschiebt der Knopf **⇄** an der Kachel die Instanz in eine andere Domain (Neustart,
+  neue Instanz-ID); das geht nur für freistehende Instanzen ohne Verbindungen — Workflow-Rollen
+  ändern ihre Domain im Workflow. In der Domain-Ansicht
   zeigt zusätzlich ein **Host-Reiter** („@ Regie-Host-A“, „@ Orchestrator“), auf welchem
   Rechner der Node läuft; im Zonenkopf steht, auf wie vielen Hosts die Domain-Kacheln
   laufen (Tooltip: welche). Die Zonen sind in der Farbe der Domain getönt, die Kacheln
@@ -1322,7 +1329,8 @@ untereinander):
   **Domain-Brücke:** Der Node **„MXL Domain Bridge“** verbindet zwei Domains auf dem
   Orchestrator-Rechner. Er läuft in der Domain seiner Eingänge, die **Zieldomain** wählen
   Sie beim Start (Start-Dialog bzw. in der Workflow-Rolle neben der Domain: „→ Ziel“).
-  Verbinden Sie im Flow Editor Video und Ton der Quelle mit den Eingängen der Brücke und
+  Die Brücke läuft auch auf einem Host-Agent, dann aber zusammen mit ihrer Quelle auf
+  demselben Rechner. Verbinden Sie im Flow Editor Video und Ton der Quelle mit den Eingängen der Brücke und
   deren Ausgänge mit den Empfängern in der Zieldomain. **Die Brücke wandelt nicht:** sie
   kopiert Bild und Ton unverändert (kaum CPU, Bild/Ton-Bezug bleibt erhalten). Das Format
   der Brücke (Standard 640×480 bei 25 Bildern, 48 kHz, 2 Kanäle; einstellbar wie bei der

@@ -18,6 +18,7 @@ use gst::prelude::*;
 use gstreamer as gst;
 use omp_mediaio::Output;
 use omp_mediaio::mxl::{MxlAudioInput, MxlAudioOutput, MxlContext, MxlVideoInput, MxlVideoOutput};
+use omp_mediaio::domainwatch::DomainWatch;
 use omp_mediaio::rawcopy::{
     AudioFormat, RawAudioCopy, RawVideoCopy, VideoFormat, check_audio_passthrough, check_passthrough,
 };
@@ -49,6 +50,10 @@ pub enum Event {
 }
 
 enum Command {
+    /// Im Eingangs-Domain-Verzeichnis wurde ein Flow angelegt oder entfernt (inotify) — offene Verbindungen erneut versuchen.
+    DomainChanged,
+    /// Ein Kopierer hat seine Quelle verloren (kein Grain seit 3 s) — Zweig neu aufbauen.
+    SourceLost,
     ConnectVideo(String),
     DisconnectVideo,
     ConnectAudio(String),
@@ -133,6 +138,7 @@ fn connect_video(
     config: &Config,
     flowed: Arc<AtomicBool>,
     mode: &Arc<std::sync::Mutex<String>>,
+    wake: &Arc<dyn Fn() + Send + Sync>,
 ) -> Result<VideoBranch, String> {
     let target = VideoFormat {
         width: config.width,
@@ -151,6 +157,7 @@ fn connect_video(
             &config.label,
             target,
             flowed.clone(),
+            wake.clone(),
         ) {
             Ok(rc) => {
                 set_mode("direkt kopiert".to_string());
@@ -203,6 +210,7 @@ fn connect_audio(
     config: &Config,
     flowed: Arc<AtomicBool>,
     mode: &Arc<std::sync::Mutex<String>>,
+    wake: &Arc<dyn Fn() + Send + Sync>,
 ) -> Result<AudioBranch, String> {
     let target = AudioFormat { sample_rate: SAMPLE_RATE, channels: config.audio_channels };
     let set_mode = |m: String| *mode.lock().expect("lock poisoned") = m;
@@ -216,6 +224,7 @@ fn connect_audio(
             &config.label,
             target,
             flowed.clone(),
+            wake.clone(),
         ) {
             Ok(rc) => {
                 set_mode("direkt kopiert".to_string());
@@ -398,13 +407,42 @@ pub fn run(
     let video_mode = Arc::new(std::sync::Mutex::new(String::new()));
     let audio_mode = Arc::new(std::sync::Mutex::new(String::new()));
     let _ = ready.send(Ok(PipelineHandle {
-        commands: commands_tx,
+        commands: commands_tx.clone(),
         video_flowed: video_flowed.clone(),
         audio_flowed: audio_flowed.clone(),
         video_mode: video_mode.clone(),
         audio_mode: audio_mode.clone(),
     }));
 
+    // Ereignisse statt Nachsehen im Takt: ein inotify-Beobachter weckt die Schleife, wenn im Eingangs-Domainverzeichnis ein Flow
+    // erscheint oder verschwindet; die Kopierer wecken sie, wenn ihre Quelle verloren geht. Dazwischen schläft sie (nur ein
+    // 2-s-Herzschlag für die Liveness-Überwachung des Node-SDK).
+    let wake: Arc<dyn Fn() + Send + Sync> = {
+        let tx = commands_tx.clone();
+        let m = std::sync::Mutex::new(());
+        Arc::new(move || {
+            let _g = m.lock();
+            let _ = tx.send(Command::SourceLost);
+        })
+    };
+    let watcher = match DomainWatch::new(std::path::Path::new(&config.in_domain)) {
+        Ok(w) => {
+            let tx = commands_tx.clone();
+            let stop = shutdown.clone();
+            Some(std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    // Blockiert im Kernel bis zu einer Änderung; die Sekunde ist nur die Stopp-Prüfung.
+                    if w.wait(Some(Duration::from_secs(1))) && tx.send(Command::DomainChanged).is_err() {
+                        break;
+                    }
+                }
+            }))
+        }
+        Err(e) => {
+            eprintln!("omp-mxl-bridge: Domain {} nicht beobachtbar ({e}) — Quellen, die später erscheinen, werden nicht automatisch erkannt", config.in_domain);
+            None
+        }
+    };
     let mut video: Option<VideoBranch> = None;
     let mut audio: Option<AudioBranch> = None;
     let mut last_audio: Option<String> = None;
@@ -416,11 +454,11 @@ pub fn run(
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
-        match commands_rx.recv_timeout(Duration::from_millis(500)) {
+        match commands_rx.recv_timeout(Duration::from_secs(2)) {
             Ok(Command::ConnectVideo(id)) => {
                 last_video = Some(id.clone());
                 video = None;
-                match connect_video(&in_ctx, &out_ctx, &id, &config, video_flowed.clone(), &video_mode) {
+                match connect_video(&in_ctx, &out_ctx, &id, &config, video_flowed.clone(), &video_mode, &wake) {
                     Ok(p) => {
                         video = Some(p);
                         retry_video = None;
@@ -441,7 +479,7 @@ pub fn run(
             Ok(Command::ConnectAudio(id)) => {
                 last_audio = Some(id.clone());
                 audio = None;
-                match connect_audio(&in_ctx, &out_ctx, &id, &config, audio_flowed.clone(), &audio_mode) {
+                match connect_audio(&in_ctx, &out_ctx, &id, &config, audio_flowed.clone(), &audio_mode, &wake) {
                     Ok(p) => {
                         audio = Some(p);
                         retry_audio = None;
@@ -458,7 +496,26 @@ pub fn run(
                 last_audio = None;
                 audio_mode.lock().expect("lock poisoned").clear();
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            // Quelle verloren: nur den Zweig abbauen und merken. KEIN sofortiger neuer Versuch — die Flow-Datei eines beendeten
+            // Schreibers bleibt liegen, ein Neuöffnen würde nach 3 s wieder scheitern (verstecktes Polling im 3-s-Takt). Der
+            // nächste Versuch kommt erst, wenn sich im Domainverzeichnis etwas ändert (Flow neu angelegt/ersetzt).
+            Ok(Command::SourceLost) => {
+                // Ein Kopierer, dessen Quelle verschwand (neu angelegt/gestoppt), baut sich neu auf.
+                if video.as_ref().is_some_and(VideoBranch::is_dead) {
+                    eprintln!("omp-mxl-bridge: Videoquelle liefert keine Bilder mehr — verbinde neu");
+                    video = None;
+                    video_flowed.store(false, Ordering::Relaxed);
+                    retry_video = last_video.clone();
+                }
+                if audio.as_ref().is_some_and(AudioBranch::is_dead) {
+                    eprintln!("omp-mxl-bridge: Tonquelle liefert nichts mehr — verbinde neu");
+                    audio = None;
+                    audio_flowed.store(false, Ordering::Relaxed);
+                    retry_audio = last_audio.clone();
+                }
+}
+            // Ein Flow wurde angelegt oder entfernt: offene Verbindungen erneut versuchen (inotify, kein Nachsehen im Takt).
+            Ok(Command::DomainChanged) => {
                 // Ein Kopierer, dessen Quelle verschwand (neu angelegt/gestoppt), baut sich neu auf.
                 if video.as_ref().is_some_and(VideoBranch::is_dead) {
                     eprintln!("omp-mxl-bridge: Videoquelle liefert keine Bilder mehr — verbinde neu");
@@ -475,22 +532,27 @@ pub fn run(
                 // Die Quelle erscheint evtl. erst später in der Eingangsdomain (Start-Reihenfolge) — erneut versuchen.
                 if video.is_none()
                     && let Some(id) = retry_video.clone()
-                    && let Ok(p) = connect_video(&in_ctx, &out_ctx, &id, &config, video_flowed.clone(), &video_mode)
+                    && let Ok(p) = connect_video(&in_ctx, &out_ctx, &id, &config, video_flowed.clone(), &video_mode, &wake)
                 {
                     video = Some(p);
                     retry_video = None;
                 }
                 if audio.is_none()
                     && let Some(id) = retry_audio.clone()
-                    && let Ok(p) = connect_audio(&in_ctx, &out_ctx, &id, &config, audio_flowed.clone(), &audio_mode)
+                    && let Ok(p) = connect_audio(&in_ctx, &out_ctx, &id, &config, audio_flowed.clone(), &audio_mode, &wake)
                 {
                     audio = Some(p);
                     retry_audio = None;
                 }
             }
+            // Nur der Herzschlag (Schleifenanfang): nichts zu tun, kein Nachsehen.
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
     drop(video);
     drop(audio);
+    if let Some(w) = watcher {
+        let _ = w.join();
+    }
 }

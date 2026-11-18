@@ -200,6 +200,62 @@ fn transport_type_response(transport_urn: &str) -> Vec<u8> {
     serde_json::to_vec(transport_urn).unwrap_or_default()
 }
 
+// ---- Standard-Sender-Endpunkte (IS-05) für Nodes ohne eigene Sender-Connection-API --------------------------------------
+//
+// Ein MXL-Sender hat nichts zu "verbinden": der Flow wird geschrieben, sobald der Node läuft. Trotzdem fragt der
+// Orchestrator beim Verbinden IS-05 am SENDER an (`PatchSenderStaged`, graph.Service.Connect) und meldete bei Nodes ohne
+// diese Endpunkte jedes Mal eine Warnung "[OMP-4001] … 404". Statt jeden Node einzeln auszustatten, liefert das SDK für
+// alle beim Start (und über `add_sender`) registrierten MXL-Sender Standard-Endpunkte, WENN der Node die Anfrage nicht
+// selbst beantwortet (Fallback in `server.rs`, nach `extra_route`). Zustand: staged = active, `master_enable` wie gepatcht,
+// Transportparameter mit der Domain-ID (BCP-007-03), `mxl_flow_id` = `auto`.
+
+struct DefaultSenderControl;
+impl SenderControl for DefaultSenderControl {
+    fn apply(&self, _resource: &SenderResource) {}
+}
+
+struct DefaultSenderSdp;
+impl SenderSdp for DefaultSenderSdp {
+    fn sdp(&self, _resource: &SenderResource) -> String {
+        String::new()
+    }
+}
+
+type DefaultSender = SenderConnection<DefaultSenderControl, DefaultSenderSdp>;
+
+static DEFAULT_SENDERS: std::sync::Mutex<Vec<(String, std::sync::Arc<DefaultSender>)>> = std::sync::Mutex::new(Vec::new());
+
+/// Meldet einen MXL-Sender für die Standard-Endpunkte an (idempotent). Andere Transporte werden nicht bedient (sie
+/// brauchen eine echte SDP und damit eine eigene Implementierung).
+pub fn register_default_sender(sender_id: &str, transport_urn: Option<&str>) {
+    if transport_urn.is_some_and(|t| t != TRANSPORT_MXL) {
+        return;
+    }
+    let mut v = DEFAULT_SENDERS.lock().expect("lock poisoned");
+    if v.iter().any(|(id, _)| id == sender_id) {
+        return;
+    }
+    v.push((sender_id.to_string(), std::sync::Arc::new(SenderConnection::new(sender_id, DefaultSenderControl, DefaultSenderSdp))));
+}
+
+/// Gegenstück zu [`register_default_sender`] (Sender zur Laufzeit entfernt).
+pub fn unregister_default_sender(sender_id: &str) {
+    DEFAULT_SENDERS.lock().expect("lock poisoned").retain(|(id, _)| id != sender_id);
+}
+
+/// Fallback-Route: Auffindbarkeit (`/x-nmos/connection/…`, Liste der Sender) und die Endpunkte der angemeldeten Sender.
+/// `None`, wenn nichts angemeldet ist oder der Pfad nicht passt.
+pub fn default_sender_route(method: &str, path: &str, body: &[u8]) -> Option<(u16, &'static str, Vec<u8>)> {
+    let senders: Vec<(String, std::sync::Arc<DefaultSender>)> = DEFAULT_SENDERS.lock().expect("lock poisoned").clone();
+    if senders.is_empty() {
+        return None;
+    }
+    let ids: Vec<&str> = senders.iter().map(|(id, _)| id.as_str()).collect();
+    root_discovery(method, path)
+        .or_else(|| list_ids(method, path, "senders", &ids))
+        .or_else(|| senders.iter().find_map(|(_, c)| c.handle(method, path, body)))
+}
+
 /// IS-05-Connection-API-Versionen, die [`SenderConnection`] und
 /// [`ReceiverConnection`] parallel bedienen (Nachtrag 189, Go-Pendant:
 /// `nodes/mock/internal/connection::apiVersions`). v1.2.0 ist
@@ -1356,5 +1412,32 @@ mod tests {
         assert_eq!(domain_id_from(false, env).as_deref(), Some(own));
         assert_eq!(domain_id_from(true, |_| None), None);
         assert_eq!(domain_id_from(false, |k| (k == "OMP_MXL_DOMAIN_ID").then(|| "kaputt".to_string())), None);
+    }
+}
+
+#[cfg(test)]
+mod default_sender_tests {
+    use super::*;
+
+    #[test]
+    fn default_sender_endpoints_cover_the_orchestrators_patch() {
+        register_default_sender("ds-test-1", None);
+        register_default_sender("ds-test-rtp", Some("urn:x-nmos:transport:rtp")); // wird nicht bedient
+        register_default_sender("ds-test-1", None); // idempotent
+        let base = "/x-nmos/connection/v1.2/single/senders/ds-test-1";
+        // genau der Aufruf, der vorher 404 lieferte
+        let (status, _, body) = default_sender_route("PATCH", &format!("{base}/staged"), br#"{"master_enable":true}"#).expect("PATCH staged");
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+        assert!(String::from_utf8_lossy(&body).contains("\"master_enable\":true"));
+        let (status, _, body) = default_sender_route("GET", &format!("{base}/active"), b"").expect("GET active");
+        assert_eq!(status, 200);
+        assert!(String::from_utf8_lossy(&body).contains("mxl_domain_id"));
+        let (_, _, list) = default_sender_route("GET", "/x-nmos/connection/v1.1/single/senders/", b"").expect("Liste");
+        let list = String::from_utf8_lossy(&list).to_string();
+        assert!(list.contains("ds-test-1"), "{list}");
+        assert!(!list.contains("ds-test-rtp"), "{list}");
+        assert!(default_sender_route("PATCH", "/x-nmos/connection/v1.2/single/senders/unbekannt/staged", b"{}").is_none());
+        unregister_default_sender("ds-test-1");
+        assert!(default_sender_route("GET", &format!("{base}/active"), b"").is_none());
     }
 }

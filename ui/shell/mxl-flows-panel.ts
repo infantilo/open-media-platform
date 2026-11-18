@@ -24,6 +24,9 @@ export class MxlFlowsPanel {
   #rows: FlowRow[] = [];
   #domain = "";
   #domainName = "default";
+  // Rechner, dessen Domain angezeigt wird ("" = Orchestrator-Rechner, sonst Host-Agent-ID; Kap. 103).
+  #hostId = "";
+  #hosts: { id: string; label: string }[] = [];
   #domains: DomainRow[] = [];
   #domainBar = el("div", "display:flex;gap:8px;align-items:center;margin:0 0 10px;flex-wrap:wrap;");
   #timer: number | undefined;
@@ -57,8 +60,16 @@ export class MxlFlowsPanel {
   async refresh() {
     const seq = ++this.#seq;
     try {
-      const q = this.#domainName === "default" ? "" : `?domain=${encodeURIComponent(this.#domainName)}`;
-      const [res, dres] = await Promise.all([apiFetch("/api/v1/admin/mxl/flows" + q), apiFetch("/api/v1/admin/mxl/domains")]);
+      const params = new URLSearchParams();
+      if (this.#domainName !== "default") params.set("domain", this.#domainName);
+      if (this.#hostId) params.set("host", this.#hostId);
+      const q = params.toString() ? `?${params}` : "";
+      const [res, dres, hres] = await Promise.all([
+        apiFetch("/api/v1/admin/mxl/flows" + q),
+        apiFetch("/api/v1/admin/mxl/domains"),
+        apiFetch("/api/v1/hosts").catch(() => null),
+      ]);
+      if (hres?.ok) this.#hosts = ((await hres.json()) as { id: string; label: string }[]).map((h) => ({ id: h.id, label: h.label }));
       if (!res.ok) throw new Error(String(res.status));
       const data = (await res.json()) as { domain: string; flows: FlowRow[] };
       if (dres.ok) this.#domains = ((await dres.json()) as { domains?: DomainRow[] }).domains ?? [];
@@ -101,7 +112,30 @@ export class MxlFlowsPanel {
     del.className = "omp-btn";
     del.disabled = this.#domainName === "default";
     del.addEventListener("click", () => void this.#deleteDomain());
-    this.#domainBar.replaceChildren(el("span", "color:var(--omp-text-dim);", t("mxlflows.domain")), sel, add, del);
+    // Rechner: der Orchestrator-Rechner oder ein Host-Agent (jeder Host hat seine eigenen Domains in seinem /dev/shm).
+    const hostSel = el("select", "min-width:200px;");
+    hostSel.className = "omp-input";
+    hostSel.setAttribute("aria-label", t("mxlflows.host"));
+    const local = el("option", "", t("mxlflows.host.local"));
+    local.value = "";
+    hostSel.append(local);
+    for (const h of this.#hosts) {
+      const o = el("option", "", h.label);
+      o.value = h.id;
+      hostSel.append(o);
+    }
+    hostSel.value = this.#hostId;
+    hostSel.addEventListener("change", () => {
+      this.#hostId = hostSel.value;
+      void this.refresh();
+    });
+    this.#domainBar.replaceChildren(
+      ...(this.#hosts.length > 0 ? [el("span", "color:var(--omp-text-dim);", t("mxlflows.host")), hostSel] : []),
+      el("span", "color:var(--omp-text-dim);", t("mxlflows.domain")),
+      sel,
+      add,
+      del,
+    );
   }
 
   async #createDomain() {

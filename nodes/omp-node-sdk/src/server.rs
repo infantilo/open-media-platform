@@ -388,6 +388,14 @@ fn route_with_headers(method: &Method, url: &str, headers: &[(String, String)], 
         return resp.boxed();
     }
 
+    // Standard-IS-05-Endpunkte der MXL-Sender, wenn der Node keine eigenen hat (s. connection::default_sender_route).
+    if let Some((status, content_type, out)) = crate::connection::default_sender_route(method.as_str(), url, body) {
+        return Response::from_data(out)
+            .with_status_code(status)
+            .with_header(Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).expect("valid content-type header value"))
+            .boxed();
+    }
+
     error_response(404, "not found")
 }
 

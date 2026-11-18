@@ -14,8 +14,11 @@ use std::time::{Duration, Instant};
 use crate::mxl::MxlContext;
 
 /// Wie lange ohne ein einziges Grain, bis der Kopierer sich selbst als tot meldet (die Quelle ist weg oder wurde neu
-/// angelegt; der Aufrufer baut dann neu auf).
+/// angelegt; der Aufrufer baut dann neu auf) — er ruft dazu `on_dead` auf.
 const STALL: Duration = Duration::from_secs(3);
+
+/// Wartezeit eines blockierenden Lesens (Futex); danach wird kurz die Stopp-Bedingung geprüft und erneut gewartet.
+const READ_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Das Zielformat, dem die Quelle entsprechen muss.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +149,7 @@ impl RawAudioCopy {
         label: &str,
         target: AudioFormat,
         flowed: Arc<AtomicBool>,
+        on_dead: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self, String> {
         let mut def = source_def;
         if let Some(o) = def.as_object_mut() {
@@ -178,7 +182,7 @@ impl RawAudioCopy {
                 let mut index = now_index().saturating_sub(batch * 3);
                 let mut last_ok = Instant::now();
                 while run.load(Ordering::Relaxed) {
-                    match samples_reader.get_samples_non_blocking(index, AUDIO_BATCH) {
+                    match samples_reader.get_samples(index, AUDIO_BATCH, READ_TIMEOUT) {
                         Ok(data) => {
                             match samples_writer.open_samples(index, AUDIO_BATCH) {
                                 Ok(mut access) => {
@@ -195,15 +199,15 @@ impl RawAudioCopy {
                                 Err(e) => eprintln!("omp-mediaio(rawcopy): open_samples {index} failed: {e}"),
                             }
                             index += batch;
-                            // Ein Batch dauert 10 ms: bis kurz davor schlafen statt jede Millisekunde nachzusehen.
-                            thread::sleep(Duration::from_millis(6));
                         }
-                        Err(mxl::Error::OutOfRangeTooEarly) => thread::sleep(Duration::from_millis(1)),
+                        Err(mxl::Error::Timeout) => {}
                         Err(mxl::Error::OutOfRangeTooLate) => index = index.max(now_index().saturating_sub(batch * 2)),
+                        Err(mxl::Error::OutOfRangeTooEarly) => thread::sleep(Duration::from_millis(2)),
                         Err(_) => thread::sleep(Duration::from_millis(20)),
                     }
                     if last_ok.elapsed() > STALL {
                         dd.store(true, Ordering::Relaxed);
+                        on_dead(); // den Aufrufer wecken (kein Nachsehen im Takt auf seiner Seite)
                         break;
                     }
                 }
@@ -244,6 +248,7 @@ impl RawVideoCopy {
         label: &str,
         target: VideoFormat,
         flowed: Arc<AtomicBool>,
+        on_dead: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self, String> {
         let mut def = source_def;
         if let Some(o) = def.as_object_mut() {
@@ -285,12 +290,14 @@ impl RawVideoCopy {
                         .unwrap_or(0)
                 };
                 // Zwei Bilder hinter der Uhr beginnen: die Quelle hat dort sicher fertig geschrieben.
-                let period_us = 1_000_000u64 * target.rate_den.max(1) as u64 / target.rate_num.max(1) as u64;
                 let mut index = now_index().saturating_sub(2);
                 let mut last_ok = Instant::now();
                 while run.load(Ordering::Relaxed) {
-                    match grain_reader.get_grain_non_blocking(index) {
-                        Ok(g) if g.index == index && g.payload.len() == g.total_size => {
+                    // Blockierend: der Aufruf kehrt zurück, sobald der Schreiber das Grain fertig committet hat (Futex), oder
+                    // nach dem Timeout — kein Nachsehen im Takt. Gemessen (blocking_read_probe, MXL 1.1.0 GA): auch mit 8
+                    // Lesern und ständigem Öffnen/Schließen kein Hängen über das Timeout hinaus.
+                    match grain_reader.get_complete_grain(index, READ_TIMEOUT) {
+                        Ok(g) if g.index == index => {
                             match grain_writer.open_grain(index) {
                                 Ok(mut access) => {
                                     let payload = access.payload_mut();
@@ -302,31 +309,22 @@ impl RawVideoCopy {
                                         last_ok = Instant::now();
                                     }
                                 }
-                                Err(e) => eprintln!(
-                                    "omp-mediaio(rawcopy): open_grain {index} failed: {e}"
-                                ),
+                                Err(e) => eprintln!("omp-mediaio(rawcopy): open_grain {index} failed: {e}"),
                             }
                             index += 1;
-                            // Das nächste Grain kommt frühestens in einer Bildperiode: bis kurz davor schlafen statt
-                            // alle 2 ms nachzusehen (5/8 Periode, den Rest übernimmt das kurze Abfragen unten).
-                            thread::sleep(Duration::from_micros(period_us * 5 / 8));
                         }
                         // Der Ringplatz enthält ein NEUERES Grain: der Schreiber ist uns davongelaufen → aufschließen.
-                        Ok(g) if g.index > index => {
-                            index = index.max(now_index().saturating_sub(1))
-                        }
-                        // Noch nicht (vollständig) geschrieben: kurz warten, gleiches Grain erneut.
-                        Ok(_) | Err(mxl::Error::OutOfRangeTooEarly) => {
-                            thread::sleep(Duration::from_millis(2))
-                        }
+                        Ok(g) if g.index > index => index = index.max(now_index().saturating_sub(1)),
+                        Ok(_) | Err(mxl::Error::Timeout) => {}
                         // Zu spät (aus dem Ring gefallen): aufschließen.
-                        Err(mxl::Error::OutOfRangeTooLate) => {
-                            index = index.max(now_index().saturating_sub(1))
-                        }
+                        Err(mxl::Error::OutOfRangeTooLate) => index = index.max(now_index().saturating_sub(1)),
+                        // Index liegt zu weit in der Zukunft: kurz warten, der Takt holt auf.
+                        Err(mxl::Error::OutOfRangeTooEarly) => thread::sleep(Duration::from_millis(2)),
                         Err(_) => thread::sleep(Duration::from_millis(20)),
                     }
                     if last_ok.elapsed() > STALL {
                         dd.store(true, Ordering::Relaxed);
+                        on_dead(); // den Aufrufer wecken (kein Nachsehen im Takt auf seiner Seite)
                         break;
                     }
                 }
