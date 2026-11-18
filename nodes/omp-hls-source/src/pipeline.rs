@@ -168,13 +168,34 @@ impl Pipeline {
             });
 
         let video_q = make("queue")?;
+        // Takt: HLS liefert segmentweise (alle 2-6 s ein ganzer Block Bilder auf einmal), die MXL-Ausgänge schreiben
+        // ohne eigenen Takt (appsink sync=false). Ohne diesen Schritt springt der Flow-Kopf alle Segmentlängen um
+        // ein ganzes Segment und steht dazwischen (gemessen 2026-11-18: 0 0 0 0 51 0 0 …). `identity sync=true`
+        // gibt jeden Puffer erst zu seiner Zeit weiter; die Latenz entspricht damit einem Segment (HLS-typisch).
+        let video_sync = gst::ElementFactory::make("identity")
+            .property("sync", true)
+            .build()
+            .map_err(|e| format!("identity (video): {e}"))?;
+        let audio_sync = gst::ElementFactory::make("identity")
+            .property("sync", true)
+            .build()
+            .map_err(|e| format!("identity (audio): {e}"))?;
         let tee = make("tee")?;
         let mxl_queue = make("queue")?;
         let audio_q = make("queue")?;
         pipeline
-            .add_many([&src, &video_q, &tee, &mxl_queue, &audio_q])
+            .add_many([
+                &src,
+                &video_q,
+                &video_sync,
+                &tee,
+                &mxl_queue,
+                &audio_q,
+                &audio_sync,
+            ])
             .map_err(|e| format!("add elements: {e}"))?;
-        gst::Element::link_many([&video_q, &tee]).map_err(|e| format!("link video: {e}"))?;
+        gst::Element::link_many([&video_q, &video_sync, &tee])
+            .map_err(|e| format!("link video: {e}"))?;
         gst::Element::link_many([&tee, &mxl_queue]).map_err(|e| format!("link mxl branch: {e}"))?;
 
         let mjpeg_elements = preview::build_mjpeg_branch(
@@ -187,14 +208,14 @@ impl Pipeline {
             PREVIEW_JPEG_QUALITY,
         )?;
 
-        // Bildzähler hinter dem Decoder (vor dem Teiler): misst, was der Stream wirklich liefert.
+        // Bildzähler hinter dem Takt (vor dem Teiler): misst, was der Stream wirklich liefert.
         {
             let counter = shared.video_buffers.clone();
             let total = shared.video_total.clone();
             let flowed = shared.video_flowed.clone();
-            let pad = video_q
+            let pad = video_sync
                 .static_pad("src")
-                .ok_or("video queue ohne src-Pad")?;
+                .ok_or("video identity ohne src-Pad")?;
             pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
                 counter.fetch_add(1, Ordering::Relaxed);
                 total.fetch_add(1, Ordering::Relaxed);
@@ -287,9 +308,10 @@ impl Pipeline {
             Arc::new(AtomicU64::new(0)),
         )?;
         mxl_output.set_active(true);
+        gst::Element::link_many([&audio_q, &audio_sync]).map_err(|e| format!("link audio: {e}"))?;
         let mxl_audio_output = MxlAudioOutput::new(
             &pipeline,
-            &audio_q,
+            &audio_sync,
             mxl_context,
             &config.audio_flow_id,
             &config.label,
@@ -400,6 +422,7 @@ pub fn run(
         let mut last_total = shared.video_total.load(Ordering::Relaxed);
         let mut last_change = Instant::now();
         let mut seen_frame = false;
+        let mut fps_since = Instant::now();
         let mut problem: Option<String> = None;
         loop {
             heartbeat.fetch_add(1, Ordering::Relaxed);
@@ -428,9 +451,13 @@ pub fn run(
                 ));
                 break;
             }
-            let _ = tx.send(Event::Fps(
-                shared.video_buffers.swap(0, Ordering::Relaxed) as f64
-            ));
+            // Bildrate über die tatsächlich vergangene Zeit (die Schleife läuft nicht exakt im Sekundentakt).
+            let dt = fps_since.elapsed();
+            if dt >= Duration::from_millis(900) {
+                let n = shared.video_buffers.swap(0, Ordering::Relaxed) as f64;
+                let _ = tx.send(Event::Fps(n / dt.as_secs_f64()));
+                fps_since = Instant::now();
+            }
         }
         pipeline.shutdown();
         drop(pipeline);

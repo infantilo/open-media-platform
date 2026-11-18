@@ -49,7 +49,7 @@ export class MxlFlowsPanel {
   readonly el: HTMLElement;
   #summary = el("div", "margin:4px 0 12px;color:var(--omp-text-dim);");
   #body = el("div");
-  #search = el("input", "margin:0 0 10px;min-width:280px;");
+  #search = el("input", "margin:0 0 10px;min-width:420px;");
   #rows: FlowRow[] = [];
   #domain = "";
   #timer: number | undefined;
