@@ -8,6 +8,7 @@ export interface DomainInfo {
   path?: string;
   description?: string;
   default?: boolean;
+  isolated?: boolean;
   flows?: number;
   instances?: number;
 }
@@ -16,6 +17,11 @@ export interface DomainInfo {
 export function instanceDomain(inst: { extraEnv?: Record<string, string> } | undefined): string {
   const n = inst?.extraEnv?.OMP_MXL_DOMAIN_NAME;
   return n && n !== "" ? n : DEFAULT_DOMAIN;
+}
+
+/** Ob eine Instanz in der Mount-Sandbox einer abgeschotteten Domain läuft (extraEnv `OMP_MXL_SANDBOX`). */
+export function instanceSandboxed(inst: { extraEnv?: Record<string, string> } | undefined): boolean {
+  return inst?.extraEnv?.OMP_MXL_SANDBOX === "1";
 }
 
 /** Zieldomain einer Domain-Brücke (extraEnv `OMP_MXL_TARGET_DOMAIN_NAME`); sonst leer. */
@@ -46,6 +52,7 @@ export function workflowDomainZone(
 
 export interface DomainZone {
   id: string;
+  isolated?: boolean;
   label: string;
   subtitle?: string;
 }
@@ -62,7 +69,8 @@ export function domainZones(known: DomainInfo[], usedNames: Iterable<string>): D
   const out: DomainZone[] = [];
   for (const n of [...names, ...extra]) {
     const d = info.get(n);
-    out.push({ id: n, label: n === DEFAULT_DOMAIN ? DEFAULT_DOMAIN : n, subtitle: d?.description || (d || n === DEFAULT_DOMAIN ? "" : "nicht angelegt") });
+    const base = d?.description || (d || n === DEFAULT_DOMAIN ? "" : "nicht angelegt");
+    out.push({ id: n, label: n === DEFAULT_DOMAIN ? DEFAULT_DOMAIN : n, subtitle: d?.isolated ? `🔒 ${base}`.trim() : base, isolated: !!d?.isolated });
   }
   return out;
 }

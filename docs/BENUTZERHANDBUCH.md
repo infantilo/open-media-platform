@@ -1295,6 +1295,17 @@ untereinander):
   jeder Host hat seine eigenen Domains in seinem Arbeitsspeicher; die Tabelle zeigt dann
   die Flows dieses Hosts (der Agent liest sie selbst).
 
+  **Domain abschotten:** Beim Anlegen („Neue Domain“) fragt die Plattform, ob die Domain
+  abgeschottet werden soll (nachträglich nicht änderbar). Nodes einer abgeschotteten Domain
+  laufen in einer Sandbox und sehen von allen MXL-Domains nur ihre eigene (bei einer Brücke
+  zusätzlich die Zieldomain) — die Flows anderer Domains sind für sie weder sichtbar noch
+  lesbar; das erzwingt der Betriebssystem-Kern, nicht ein Dateirecht. Kein Root nötig. Ein
+  🔒 kennzeichnet solche Domains in der Auswahl, im Zonenkopf und am Domain-Reiter der Kachel.
+  Ist die Sandbox auf dem Rechner nicht möglich (`unshare` fehlt oder User-Namespaces sind
+  gesperrt), startet der Node nicht, statt ohne Abschottung zu laufen. Gilt für Prozess-Nodes
+  (Container-Nodes sehen ohnehin nur ihre eigene Domain). Im Namespace erscheint der Node als
+  Benutzer 0 (ohne echte Rechte).
+
   ![Administration → MXL-Flows mit Domain-Auswahl, „Neue Domain“ und „Domain löschen“; Reste ohne Schreiber orange](screenshots/admin-mxl-domains.png)
 
   **Domains im Workflow:** In den Workflow-Einstellungen („MXL-Domain“) legen Sie fest,

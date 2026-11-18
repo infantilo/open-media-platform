@@ -22,6 +22,20 @@ use std::time::Duration;
 /// Nach so langer Zeit ohne gelesenes Grain/Sample wird ein Reader neu geöffnet (s. read_loop).
 const STALE_READER_AFTER: Duration = Duration::from_secs(3);
 
+/// Wartezeit eines blockierenden Lesens (Futex im Kernel): kehrt SOFORT zurück, sobald der Schreiber das Grain committet
+/// hat; die 100 ms sind nur die Obergrenze, nach der die Schleife ihre Stopp-/Wächter-Bedingungen prüft.
+const READ_WAIT: Duration = Duration::from_millis(100);
+
+/// Lesemodus der MXL-Leseschleifen. Standard: **blockierend** (`get_complete_grain`/`get_samples` mit Timeout) — der
+/// Lese-Thread schläft im Kernel, bis das nächste Grain da ist, statt alle 5 ms nachzusehen (gemessen am Viewer: 172
+/// Aufwachen/s und 5 % eines Kerns allein für die Abfrage; docs/decisions.md 2026-11-18). Grund für das frühere Abfragen war der
+/// "MXL-Read-Livelock" (2026-07-17), mit MXL 1.1.0 GA nicht mehr reproduzierbar (8 Leser, Dauer-Öffnen/Schließen).
+/// `OMP_MXL_READ_MODE=poll` schaltet auf das alte Abfragen zurück (Rückfallebene, falls ein Aufbau Probleme macht).
+fn blocking_reads() -> bool {
+    static MODE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| std::env::var("OMP_MXL_READ_MODE").map(|v| v != "poll").unwrap_or(true))
+}
+
 use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
@@ -2352,7 +2366,10 @@ fn read_loop(
             last_ok = std::time::Instant::now();
             Err(mxl::Error::Unknown(mxl_sys::MXL_ERR_FLOW_INVALID))
         } else {
-            grain_reader.as_ref().expect("grain_reader is Some outside the FLOW_INVALID branch").get_grain_non_blocking(index)
+            {
+                let r = grain_reader.as_ref().expect("grain_reader is Some outside the FLOW_INVALID branch");
+                if blocking_reads() { r.get_complete_grain(index, READ_WAIT) } else { r.get_grain_non_blocking(index) }
+            }
         };
         if read_result.is_ok() {
             last_ok = std::time::Instant::now();
@@ -2482,7 +2499,8 @@ fn read_loop(
                 index = context.instance.get_current_index(grain_rate);
                 thread::sleep(Duration::from_millis(5));
             }
-            Err(mxl::Error::OutOfRangeTooEarly) => {
+            // Timeout (blockierender Modus): schon gewartet — wie "noch nicht geschrieben", aber ohne zusätzliches Schlafen.
+            Err(e @ (mxl::Error::OutOfRangeTooEarly | mxl::Error::Timeout)) => {
                 st[5] += 1;
                 // Fluss steht (seit 4 Perioden kein Grain): das zuletzt übersprungene Grain nachliefern. Ohne PTS: `do-timestamp`
                 // des appsrc stempelt es mit der aktuellen Laufzeit.
@@ -2518,7 +2536,11 @@ fn read_loop(
                 // korrekt hier in Rust. 5ms liegen deutlich unter einer
                 // Frame-Periode (40ms bei 25fps) und verzögern kein
                 // tatsächlich verfügbares Grain spürbar.
-                thread::sleep(Duration::from_millis(5));
+                // [2026-11-18] Standard ist jetzt der blockierende Lesepfad (s. `blocking_reads`); nur im Abfragemodus
+                // (OMP_MXL_READ_MODE=poll) oder bei einem Index weit in der Zukunft wird hier geschlafen.
+                if !matches!(e, mxl::Error::Timeout) {
+                    thread::sleep(Duration::from_millis(5));
+                }
             }
             // `MXL_ERR_FLOW_INVALID` (Statuscode 11) — der `mxl`-Crate
             // kennt dieses Statuswort noch nicht als eigene Variante
@@ -2950,7 +2972,10 @@ fn read_audio_loop(
             last_ok = std::time::Instant::now();
             Err(mxl::Error::Unknown(mxl_sys::MXL_ERR_FLOW_INVALID))
         } else {
-            samples_reader.as_ref().expect("samples_reader is Some outside the FLOW_INVALID branch").get_samples_non_blocking(index, batch_size as usize)
+            {
+                let r = samples_reader.as_ref().expect("samples_reader is Some outside the FLOW_INVALID branch");
+                if blocking_reads() { r.get_samples(index, batch_size as usize, READ_WAIT) } else { r.get_samples_non_blocking(index, batch_size as usize) }
+            }
         };
         if read_result.is_ok() {
             last_ok = std::time::Instant::now();
@@ -3012,15 +3037,17 @@ fn read_audio_loop(
                 index = context.instance.get_current_index(sample_rate);
                 thread::sleep(Duration::from_millis(5));
             }
-            Err(mxl::Error::OutOfRangeTooEarly) => {
+            Err(e @ (mxl::Error::OutOfRangeTooEarly | mxl::Error::Timeout)) => {
                 // Noch nicht geschrieben — gleichen Index nach kurzem
                 // Rust-seitigem Backoff erneut versuchen. Gleicher Grund
                 // wie bei `MxlVideoInput`s `read_loop`: bewusst
                 // `get_samples_non_blocking` statt des blockierenden
                 // `get_samples` (docs/decisions.md, 2026-07-17), das den
                 // nachgewiesenen Futex-Hang im vendorten MXL-C++ bei ≥3
-                // gleichzeitigen Lesern umgeht.
-                thread::sleep(Duration::from_millis(5));
+                // gleichzeitigen Lesern umgeht. [2026-11-18] Standard jetzt blockierend (s. `blocking_reads`).
+                if !matches!(e, mxl::Error::Timeout) {
+                    thread::sleep(Duration::from_millis(5));
+                }
             }
             // Gleiches Prinzip wie in `read_loop` oben: `MXL_ERR_FLOW_INVALID`
             // (Statuscode 11) faellt beim jetzigen `mxl`-Crate noch unter das
@@ -3965,7 +3992,10 @@ impl MxlDataInput {
                     last_ok = std::time::Instant::now();
                     Err(mxl::Error::Unknown(mxl_sys::MXL_ERR_FLOW_INVALID))
                 } else {
-                    reader.as_ref().expect("Leser vorhanden").get_grain_non_blocking(index)
+                    {
+                        let r = reader.as_ref().expect("Leser vorhanden");
+                        if blocking_reads() { r.get_complete_grain(index, READ_WAIT) } else { r.get_grain_non_blocking(index) }
+                    }
                 };
                 match result {
                     Ok(grain) => {
@@ -3981,6 +4011,7 @@ impl MxlDataInput {
                         }
                         index += 1;
                     }
+                    Err(mxl::Error::Timeout) => {} // blockierender Modus: schon gewartet
                     Err(mxl::Error::OutOfRangeTooEarly) => thread::sleep(Duration::from_millis(5)),
                     Err(mxl::Error::OutOfRangeTooLate) => {
                         index = context.instance.get_current_index(&rate);

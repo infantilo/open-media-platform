@@ -8,7 +8,7 @@
 import { TallyBoard, tallyLabel } from "./tally-logic.ts";
 import { t as tt, tLoose } from "../shell/i18n.ts";
 import { promptDialog } from "../kit/omp-prompt.ts";
-import { DEFAULT_DOMAIN, domainColor, type DomainInfo, domainZones, hasNamedDomains, domainTabText, hostChipLabel, hostSummary, instanceDomain, instanceTargetDomain, workflowDomainZone } from "./domain-view-logic.ts";
+import { DEFAULT_DOMAIN, domainColor, type DomainInfo, domainZones, hasNamedDomains, domainTabText, hostChipLabel, hostSummary, instanceDomain, instanceSandboxed, instanceTargetDomain, workflowDomainZone } from "./domain-view-logic.ts";
 import { ghostEntriesForZone, type GhostEntry, type PlanInput, type StartPlan, zoneForStoppedWorkflow } from "../shell/workflow-plan-logic.ts";
 import {
   type ArrangeEdge,
@@ -3655,7 +3655,10 @@ export class FlowCanvas extends HTMLElement {
       }
     }
     const ids = this.#itemsAtScope();
-    this.#viewport = this.#fitViewportToIds([...ids.nodeIds, ...ids.groupIds]);
+    // Am Root stehen die kollabierten Workflow-Kacheln mit auf der Fläche — sie gehören zum Einpassen (ohne laufende Nodes
+    // bestehen sie allein den ganzen Inhalt).
+    const workflowIds = this.#scope === null && !this.#workflowEditId ? this.#allWorkflowTileIds().filter((id) => !!this.#positions[id]) : [];
+    this.#viewport = this.#fitViewportToIds([...ids.nodeIds, ...ids.groupIds, ...workflowIds]);
     this.#applyViewportTransform();
     this.#saveLayout();
   }
@@ -4154,21 +4157,35 @@ export class FlowCanvas extends HTMLElement {
   // "Alle einpassen"-Button (#fitAllToViewport, nur die im aktuellen Scope
   // sichtbaren Kacheln).
   #fitViewportToIds(ids: string[]): Viewport {
-    const points = ids.map((id) => this.#positions[id]).filter((p): p is Point => !!p);
-    if (points.length === 0) return { ...IDENTITY_VIEWPORT };
+    // Echte Kachelhöhen (Workflow-Kacheln: Standardhöhe), links/rechts eine Kachelbreite, oben Platz für die Reiter (Domain/Host).
+    const boxes = ids
+      .map((id) => {
+        const p = this.#positions[id];
+        if (!p) return null;
+        const h = workflowIdFromTileId(id) !== null ? MIN_BODY_HEIGHT + HEADER_HEIGHT : this.#tileHeightById.get(id) ?? MIN_BODY_HEIGHT + HEADER_HEIGHT;
+        return { x1: p.x, y1: p.y - 16, x2: p.x + NODE_WIDTH, y2: p.y + h };
+      })
+      .filter((b): b is { x1: number; y1: number; x2: number; y2: number } => b !== null);
+    if (boxes.length === 0) return { ...IDENTITY_VIEWPORT };
 
-    const minX = Math.min(...points.map((p) => p.x));
-    const maxX = Math.max(...points.map((p) => p.x)) + NODE_WIDTH;
-    const minY = Math.min(...points.map((p) => p.y));
-    const maxY = Math.max(...points.map((p) => p.y)) + MIN_BODY_HEIGHT + HEADER_HEIGHT;
+    const minX = Math.min(...boxes.map((b) => b.x1));
+    const maxX = Math.max(...boxes.map((b) => b.x2));
+    const minY = Math.min(...boxes.map((b) => b.y1));
+    const maxY = Math.max(...boxes.map((b) => b.y2));
     const rect = this.#svg.getBoundingClientRect();
     // Mitte des sichtbaren Bereichs unterhalb der Breadcrumb-Leiste, nicht der ganzen Zeichenfläche.
     const top = this.#fitInsetTop();
+    // Passt der Inhalt nicht in den sichtbaren Bereich, wird verkleinert (nie vergrößert): „Alle einpassen“ zeigt alles.
+    const pad = 24;
+    const w = Math.max(1, maxX - minX);
+    const h = Math.max(1, maxY - minY);
+    const fit = rect.width > 0 && rect.height > top ? Math.min((rect.width - 2 * pad) / w, (rect.height - top - 2 * pad) / h) : 1;
+    const scale = Math.max(0.1, Math.min(1, fit));
 
     return {
-      x: rect.width / 2 - (minX + maxX) / 2,
-      y: top + (rect.height - top) / 2 - (minY + maxY) / 2,
-      scale: 1,
+      x: rect.width / 2 - ((minX + maxX) / 2) * scale,
+      y: top + (rect.height - top) / 2 - ((minY + maxY) / 2) * scale,
+      scale,
     };
   }
 
@@ -4655,7 +4672,8 @@ export class FlowCanvas extends HTMLElement {
         const text = `⬡ ${truncateTileTitle(domainTabText(dom, bridgeTarget), 24)}`;
         addTab(text, domainColor(dom), "#10151f", tt("flow.domainView.bridgeTip", { from: dom, to: bridgeTarget }), "domain-tab");
       } else if (dom !== DEFAULT_DOMAIN) {
-        addTab(`⬡ ${truncateTileTitle(dom, 14)}`, domainColor(dom), "#10151f", tt("flow.domainView.tabHint", { name: dom }), "domain-tab");
+        const lock = instanceSandboxed(tileInst) ? "🔒 " : "";
+        addTab(`⬡ ${lock}${truncateTileTitle(dom, 14)}`, domainColor(dom), "#10151f", tt("flow.domainView.tabHint", { name: dom }) + (lock ? ` — ${tt("flow.domainView.sandboxTip")}` : ""), "domain-tab");
       }
       if (showHost) {
         const full = this.#hostLabelForTileId(tile.id);

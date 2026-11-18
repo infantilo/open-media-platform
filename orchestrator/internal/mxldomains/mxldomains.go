@@ -49,12 +49,14 @@ func ValidateName(name string) error {
 type Domain struct {
 	Name string `json:"name"`
 	// ID: die BCP-007-03-Domain-ID (UUIDv5 aus dem Namen, podmanrun.DomainID) — erscheint als mxl_domain_id in IS-05.
-	ID          string    `json:"id"`
-	Path        string    `json:"path"`
-	Description string    `json:"description,omitempty"`
-	Default     bool      `json:"default,omitempty"`
-	CreatedBy   string    `json:"createdBy,omitempty"`
-	CreatedAt   time.Time `json:"createdAt,omitzero"`
+	ID          string `json:"id"`
+	Path        string `json:"path"`
+	Description string `json:"description,omitempty"`
+	// Isolated: Nodes dieser Domain laufen in einer Mount-Sandbox, die nur ihre Domain sieht (D7, podmanrun.WrapSandbox).
+	Isolated  bool      `json:"isolated,omitempty"`
+	Default   bool      `json:"default,omitempty"`
+	CreatedBy string    `json:"createdBy,omitempty"`
+	CreatedAt time.Time `json:"createdAt,omitzero"`
 }
 
 // Store hält die Domain-Liste in Postgres.
@@ -82,7 +84,7 @@ func (s *Store) PathFor(name string) string {
 // List liefert die Standarddomain und alle benannten Domains (nach Namen).
 func (s *Store) List() ([]Domain, error) {
 	out := []Domain{{Name: DefaultName, ID: podmanrun.DomainID(DefaultName), Path: s.defaultPath, Default: true}}
-	rows, err := s.db.Query(`SELECT name, description, created_by, created_at FROM mxl_domains ORDER BY name`)
+	rows, err := s.db.Query(`SELECT name, description, created_by, created_at, isolated FROM mxl_domains ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +92,7 @@ func (s *Store) List() ([]Domain, error) {
 	var named []Domain
 	for rows.Next() {
 		var d Domain
-		if err := rows.Scan(&d.Name, &d.Description, &d.CreatedBy, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.Name, &d.Description, &d.CreatedBy, &d.CreatedAt, &d.Isolated); err != nil {
 			return nil, err
 		}
 		d.Path = s.PathFor(d.Name)
@@ -123,6 +125,18 @@ func (s *Store) Resolve(name string) (string, error) {
 	return s.PathFor(name), nil
 }
 
+// Isolated: ob die Domain abgeschottet ist (Standarddomain und Unbekanntes: nein).
+func (s *Store) Isolated(name string) bool {
+	if name == "" || name == DefaultName {
+		return false
+	}
+	var iso bool
+	if err := s.db.QueryRow(`SELECT isolated FROM mxl_domains WHERE name=$1`, name).Scan(&iso); err != nil {
+		return false
+	}
+	return iso
+}
+
 // NameForPath ist die Umkehrung: Domainname zu einem Pfad (z. B. aus OMP_MXL_DOMAIN einer Instanz); unbekannte
 // Pfade liefern den Pfad selbst, leer = Standarddomain.
 func (s *Store) NameForPath(path string) string {
@@ -137,14 +151,14 @@ func (s *Store) NameForPath(path string) string {
 }
 
 // Create legt eine Domain an (Eintrag + Verzeichnis 0755).
-func (s *Store) Create(name, description, by string) (Domain, error) {
+func (s *Store) Create(name, description, by string, isolated bool) (Domain, error) {
 	if err := ValidateName(name); err != nil {
 		return Domain{}, err
 	}
 	if len(description) > 200 {
 		return Domain{}, fmt.Errorf("%w: Beschreibung höchstens 200 Zeichen", ErrValidation)
 	}
-	res, err := s.db.Exec(`INSERT INTO mxl_domains (name, description, created_by) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING`, name, description, by)
+	res, err := s.db.Exec(`INSERT INTO mxl_domains (name, description, created_by, isolated) VALUES ($1,$2,$3,$4) ON CONFLICT (name) DO NOTHING`, name, description, by, isolated)
 	if err != nil {
 		return Domain{}, err
 	}
@@ -156,7 +170,7 @@ func (s *Store) Create(name, description, by string) (Domain, error) {
 		_, _ = s.db.Exec(`DELETE FROM mxl_domains WHERE name=$1`, name)
 		return Domain{}, fmt.Errorf("Verzeichnis %s anlegen: %w", path, err)
 	}
-	return Domain{Name: name, ID: podmanrun.DomainID(name), Path: path, Description: description, CreatedBy: by, CreatedAt: time.Now()}, nil
+	return Domain{Name: name, ID: podmanrun.DomainID(name), Path: path, Description: description, Isolated: isolated, CreatedBy: by, CreatedAt: time.Now()}, nil
 }
 
 // Delete entfernt den Eintrag. Das Verzeichnis wird nur entfernt, wenn es leer ist (os.Remove, kein RemoveAll): was

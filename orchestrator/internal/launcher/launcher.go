@@ -1638,8 +1638,15 @@ func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, lab
 // gemeinsamer Kern von startLocal und supervise's Neustart-Zweig.
 func (l *Launcher) execEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv map[string]string) (*exec.Cmd, *tailBuffer, error) {
 	argv := wrapRealtime(entry.Type, withCPUAffinity(entry.Realtime, extraEnv), entry.Command)
+	env := buildEnv(entry.Env, extraEnv, id, label, launchSecret, l.registryURL, l.orchestratorURL, l.natsURL)
+	// Abgeschottete MXL-Domain (Kap. 103, D7): der Node startet in einer Mount-Sandbox, die nur seine Domain(s) sieht. Ist sie
+	// verlangt, aber nicht möglich, startet er nicht (kein stilles Weiterlaufen ohne Abschottung).
+	argv, env, err := podmanrun.WrapSandbox(argv, env)
+	if err != nil {
+		return nil, nil, fmt.Errorf("MXL-Sandbox: %w", err)
+	}
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Env = buildEnv(entry.Env, extraEnv, id, label, launchSecret, l.registryURL, l.orchestratorURL, l.natsURL)
+	cmd.Env = env
 	// Node-Ausgaben (Pipeline-Fehler etc.) an den Orchestrator-Log
 	// weiterreichen statt sie im Subprozess verschwinden zu lassen —
 	// kein eigenes Log-Aggregations-System für diesen Schritt. stderrTail

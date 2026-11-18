@@ -18,6 +18,8 @@ export interface DomainRow {
   path: string;
   description?: string;
   default?: boolean;
+  /** Abgeschottet (D7): Nodes laufen in einer Mount-Sandbox, die nur diese Domain sieht. */
+  isolated?: boolean;
   flows: number;
   stale: number;
   instances: number;
@@ -25,7 +27,7 @@ export interface DomainRow {
 
 /** Text einer Domain in der Auswahl: Name, Flows, Instanzen (Wörter für die Sprache übergeben). */
 export function domainOptionLabel(d: DomainRow, flowsWord = "flows", instWord = "inst."): string {
-  return `${d.default ? "default" : d.name} — ${d.flows} ${flowsWord}, ${d.instances} ${instWord}`;
+  return `${d.isolated ? "🔒 " : ""}${d.default ? "default" : d.name} — ${d.flows} ${flowsWord}, ${d.instances} ${instWord}`;
 }
 
 export function formatName(f: string | undefined): string {

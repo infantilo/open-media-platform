@@ -61,3 +61,14 @@ Deno.test("Brücken-Reiter", async () => {
   assertEquals(domainTabText("a", "b"), "a → b");
   assertEquals(domainTabText("a", ""), "a");
 });
+
+Deno.test("abgeschottete Domain: Schloss im Zonenkopf, Sandbox-Erkennung", async () => {
+  const { instanceSandboxed } = await import("./domain-view-logic.ts");
+  const z = domainZones([{ name: "default", default: true }, { name: "sicher", isolated: true, description: "Live" }, { name: "offen" }], []);
+  assertEquals(z.find((x) => x.id === "sicher")?.subtitle, "🔒 Live");
+  assertEquals(z.find((x) => x.id === "sicher")?.isolated, true);
+  assertEquals(z.find((x) => x.id === "offen")?.isolated, false);
+  assertEquals(instanceSandboxed({ extraEnv: { OMP_MXL_SANDBOX: "1" } }), true);
+  assertEquals(instanceSandboxed({ extraEnv: {} }), false);
+  assertEquals(instanceSandboxed(undefined), false);
+});

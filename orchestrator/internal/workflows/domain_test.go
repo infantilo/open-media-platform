@@ -2,10 +2,14 @@ package workflows
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
 type fakeDomains map[string]bool
+
+// Isolated: im Test gelten Domains mit Namensanfang "sicher" als abgeschottet.
+func (f fakeDomains) Isolated(n string) bool { return f[n] && strings.HasPrefix(n, "sicher") }
 
 func (f fakeDomains) Resolve(n string) (string, error) {
 	if f[n] {
@@ -30,17 +34,17 @@ func TestEffectiveDomainAndEnv(t *testing.T) {
 		t.Errorf("default in der Rolle hebt die Workflow-Domain auf: %q", got)
 	}
 	base := map[string]string{"X": "1"}
-	env := withRoleDomain(base, def, def.Roles[0])
+	env := (&Service{}).withRoleDomain(base, def, def.Roles[0])
 	if env["OMP_MXL_DOMAIN_NAME"] != "studio" || env["X"] != "1" {
 		t.Errorf("env = %v", env)
 	}
 	if _, has := base["OMP_MXL_DOMAIN_NAME"]; has {
 		t.Error("die übergebene Map darf nicht verändert werden")
 	}
-	if env := withRoleDomain(base, def, def.Roles[2]); len(env) != 1 {
+	if env := (&Service{}).withRoleDomain(base, def, def.Roles[2]); len(env) != 1 {
 		t.Errorf("Standarddomain: kein Zusatz, env = %v", env)
 	}
-	if env := withRoleDomain(nil, defWith(""), Role{Name: "x"}); env != nil {
+	if env := (&Service{}).withRoleDomain(nil, defWith(""), Role{Name: "x"}); env != nil {
 		t.Errorf("nil bleibt nil: %v", env)
 	}
 }
@@ -94,13 +98,13 @@ func TestCheckDomainLinks(t *testing.T) {
 
 func TestBridgeEnvAndTargetCheck(t *testing.T) {
 	def := Definition{Roles: []Role{{Name: "br", NodeType: "omp-mxl-bridge", Domain: "a", TargetDomain: "b"}}}
-	env := withRoleDomain(nil, def, def.Roles[0])
+	env := (&Service{}).withRoleDomain(nil, def, def.Roles[0])
 	if env["OMP_MXL_DOMAIN_NAME"] != "a" || env["OMP_MXL_TARGET_DOMAIN_NAME"] != "b" {
 		t.Errorf("env = %v", env)
 	}
 	// Ziel nur bei Brücken
 	other := Definition{Roles: []Role{{Name: "x", NodeType: "omp-source", Domain: "a", TargetDomain: "b"}}}
-	if env := withRoleDomain(nil, other, other.Roles[0]); env["OMP_MXL_TARGET_DOMAIN_NAME"] != "" {
+	if env := (&Service{}).withRoleDomain(nil, other, other.Roles[0]); env["OMP_MXL_TARGET_DOMAIN_NAME"] != "" {
 		t.Errorf("Ziel nur für Brücken: %v", env)
 	}
 	s := &Service{}
@@ -119,5 +123,28 @@ func TestBridgeEnvAndTargetCheck(t *testing.T) {
 	toDefault := Definition{Roles: []Role{{Name: "br", NodeType: "omp-mxl-bridge", Domain: "a", TargetDomain: "default"}}}
 	if err := s.checkDomains(toDefault); err != nil {
 		t.Errorf("Ziel Standarddomain: %v", err)
+	}
+}
+
+func TestIsolatedDomainSetsSandbox(t *testing.T) {
+	s := &Service{}
+	s.SetDomains(fakeDomains{"studio": true, "sicher": true, "sicher2": true})
+	def := Definition{Settings: Settings{Domain: "sicher"}, Roles: []Role{
+		{Name: "a", NodeType: "omp-source"},
+		{Name: "b", NodeType: "omp-source", Domain: "studio"},
+		{Name: "br", NodeType: "omp-mxl-bridge", Domain: "studio", TargetDomain: "sicher2"},
+	}}
+	if env := s.withRoleDomain(nil, def, def.Roles[0]); env["OMP_MXL_SANDBOX"] != "1" {
+		t.Errorf("abgeschottete Workflow-Domain: %v", env)
+	}
+	if env := s.withRoleDomain(nil, def, def.Roles[1]); env["OMP_MXL_SANDBOX"] != "" {
+		t.Errorf("normale Domain der Rolle hebt die Abschottung auf: %v", env)
+	}
+	if env := s.withRoleDomain(nil, def, def.Roles[2]); env["OMP_MXL_SANDBOX"] != "1" {
+		t.Errorf("abgeschottete Zieldomain einer Brücke: %v", env)
+	}
+	// ohne Domain-Verwaltung nie Sandbox
+	if env := (&Service{}).withRoleDomain(nil, def, def.Roles[0]); env["OMP_MXL_SANDBOX"] != "" {
+		t.Errorf("ohne Verwaltung keine Sandbox: %v", env)
 	}
 }

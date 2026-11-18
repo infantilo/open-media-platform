@@ -17,10 +17,11 @@ import (
 type memDomains struct {
 	base  string
 	known map[string]bool
+	iso   map[string]bool
 }
 
 func newMemDomains(t *testing.T, names ...string) *memDomains {
-	m := &memDomains{base: filepath.Join(t.TempDir(), "omp-mxl"), known: map[string]bool{}}
+	m := &memDomains{base: filepath.Join(t.TempDir(), "omp-mxl"), known: map[string]bool{}, iso: map[string]bool{}}
 	for _, n := range names {
 		m.known[n] = true
 	}
@@ -58,8 +59,10 @@ func (m *memDomains) NameForPath(p string) string {
 	}
 	return strings.TrimPrefix(p, m.base+"-")
 }
-func (m *memDomains) Create(n, d, by string) (mxldomains.Domain, error) {
+func (m *memDomains) Isolated(n string) bool { return m.iso[n] }
+func (m *memDomains) Create(n, d, by string, isolated bool) (mxldomains.Domain, error) {
 	m.known[n] = true
+	m.iso[n] = isolated
 	return mxldomains.Domain{Name: n, Path: m.PathFor(n)}, nil
 }
 func (m *memDomains) Delete(n string) error { delete(m.known, n); return nil }
@@ -301,5 +304,24 @@ func TestChangeInstanceDomain(t *testing.T) {
 	}
 	if rec, _ := post(l, noEdges, `{"domain":"b","targetDomain":"a"}`); rec.Code != http.StatusOK || l.env["OMP_MXL_TARGET_DOMAIN_NAME"] != "a" || l.env["OMP_MXL_DOMAIN_NAME"] != "b" {
 		t.Errorf("Brücke umdrehen: %d env=%v", rec.Code, l.env)
+	}
+}
+
+func TestIsolatedDomainStartEnv(t *testing.T) {
+	ds := newMemDomains(t, "offen", "sicher")
+	ds.iso["sicher"] = true
+	cl := &capturingLauncher{fakeLauncherService: fakeLauncherService{catalog: []launcher.CatalogEntry{{Type: "omp-source"}, {Type: "omp-mxl-bridge"}}, started: launcher.Instance{ID: "i"}}}
+	postInstance(t, cl, ds, `{"type":"omp-source","domain":"offen"}`)
+	if cl.env["OMP_MXL_SANDBOX"] != "" {
+		t.Errorf("offene Domain: %v", cl.env)
+	}
+	postInstance(t, cl, ds, `{"type":"omp-source","domain":"sicher"}`)
+	if cl.env["OMP_MXL_SANDBOX"] != "1" {
+		t.Errorf("abgeschottete Domain: %v", cl.env)
+	}
+	// Brücke: nur das Ziel abgeschottet genügt
+	postInstance(t, cl, ds, `{"type":"omp-mxl-bridge","domain":"offen","targetDomain":"sicher"}`)
+	if cl.env["OMP_MXL_SANDBOX"] != "1" || cl.env["OMP_MXL_TARGET_DOMAIN_NAME"] != "sicher" {
+		t.Errorf("Brücke mit abgeschottetem Ziel: %v", cl.env)
 	}
 }

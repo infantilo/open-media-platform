@@ -560,7 +560,7 @@ func (s *Service) runMigration(workflowID, role, oldInstanceID, targetHostID, re
 		}
 	}
 	roleEnv = s.withRoleHooks(roleEnv, wf.Definition, roleDef)
-	roleEnv = withRoleDomain(roleEnv, wf.Definition, roleDef)
+	roleEnv = s.withRoleDomain(roleEnv, wf.Definition, roleDef)
 	if oldLost {
 		roleEnv = withRoleSeed(roleEnv, wf.ID, seedRoleName(wf, role))
 		roleEnv[launcher.StateKeyEnv] = roleStateKey(wf.ID, roleDef.Name)

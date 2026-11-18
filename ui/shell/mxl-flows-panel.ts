@@ -141,10 +141,12 @@ export class MxlFlowsPanel {
   async #createDomain() {
     const name = await promptDialog(t("mxlflows.domain.addPrompt"), { okLabel: t("mxlflows.domain.add") });
     if (!name || !name.trim()) return;
+    // Abschotten (D7): Nodes laufen dann in einer Sandbox, die nur diese Domain sieht — nur beim Anlegen wählbar.
+    const isolated = await confirmDialog(t("mxlflows.domain.isolatedAsk"), { confirmLabel: t("mxlflows.domain.isolatedYes"), cancelLabel: t("mxlflows.domain.isolatedNo") });
     const res = await apiFetch("/api/v1/admin/mxl/domains", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: name.trim() }),
+      body: JSON.stringify({ name: name.trim(), isolated }),
     });
     if (!res.ok) {
       showToast(`${t("mxlflows.domain.failed")}: ${(await res.text()).trim()}`);

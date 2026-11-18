@@ -56,17 +56,17 @@ func TestStoreLifecycle(t *testing.T) {
 	if _, err := s.Resolve("test"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unbekannt: %v", err)
 	}
-	d, err := s.Create("test", "Testlauf", "alice")
+	d, err := s.Create("test", "Testlauf", "alice", false)
 	if err != nil || d.Path != base+"-test" {
 		t.Fatalf("Create = %+v, %v", d, err)
 	}
 	if st, err := os.Stat(d.Path); err != nil || !st.IsDir() {
 		t.Fatalf("Verzeichnis fehlt: %v", err)
 	}
-	if _, err := s.Create("test", "", "alice"); !errors.Is(err, ErrExists) {
+	if _, err := s.Create("test", "", "alice", false); !errors.Is(err, ErrExists) {
 		t.Fatalf("doppelt: %v", err)
 	}
-	if _, err := s.Create("default", "", "alice"); !errors.Is(err, ErrValidation) {
+	if _, err := s.Create("default", "", "alice", false); !errors.Is(err, ErrValidation) {
 		t.Fatalf("default: %v", err)
 	}
 	if p, err := s.Resolve("test"); err != nil || p != base+"-test" {
@@ -77,6 +77,17 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 	l, _ = s.List()
 	if len(l) != 2 || l[1].Name != "test" || l[1].Description != "Testlauf" {
+		t.Fatalf("Liste = %+v", l)
+	}
+
+	// Abschottung gilt ab dem Anlegen
+	if _, err := s.Create("sicher", "", "alice", true); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Isolated("sicher") || s.Isolated("test") || s.Isolated("default") || s.Isolated("") || s.Isolated("nope") {
+		t.Fatal("Isolated falsch")
+	}
+	if l, _ := s.List(); len(l) != 3 || !l[1].Isolated {
 		t.Fatalf("Liste = %+v", l)
 	}
 

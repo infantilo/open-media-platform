@@ -118,7 +118,8 @@ type MXLDomainStore interface {
 	Resolve(name string) (string, error)
 	NameForPath(path string) string
 	PathFor(name string) string
-	Create(name, description, by string) (mxldomains.Domain, error)
+	Create(name, description, by string, isolated bool) (mxldomains.Domain, error)
+	Isolated(name string) bool
 	Delete(name string) error
 }
 
@@ -174,12 +175,21 @@ func handleCreateMXLDomain(ds MXLDomainStore, audit DomainAuditLogger) http.Hand
 		var body struct {
 			Name        string `json:"name"`
 			Description string `json:"description"`
+			// Isolated: Nodes in dieser Domain laufen in einer Mount-Sandbox (D7). Nur beim Anlegen wählbar.
+			Isolated bool `json:"isolated"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		d, err := ds.Create(strings.TrimSpace(body.Name), strings.TrimSpace(body.Description), actorFromRequest(r))
+		if body.Isolated {
+			// Die Sandbox muss auf dem Orchestrator-Rechner möglich sein (Agents prüfen beim Start selbst und lehnen sonst ab).
+			if err := podmanrun.SandboxAvailable(); err != nil {
+				http.Error(w, "sandbox not available on this machine: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		d, err := ds.Create(strings.TrimSpace(body.Name), strings.TrimSpace(body.Description), actorFromRequest(r), body.Isolated)
 		switch {
 		case errors.Is(err, mxldomains.ErrValidation):
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -188,7 +198,7 @@ func handleCreateMXLDomain(ds MXLDomainStore, audit DomainAuditLogger) http.Hand
 		case err != nil:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		default:
-			logDomainAudit(audit, actorFromRequest(r), "mxl-domain", d.Name, "create", map[string]any{"description": d.Description})
+			logDomainAudit(audit, actorFromRequest(r), "mxl-domain", d.Name, "create", map[string]any{"description": d.Description, "isolated": d.Isolated})
 			writeJSON(w, http.StatusCreated, d)
 		}
 	}
@@ -256,6 +266,9 @@ func domainStartEnv(ds MXLDomainStore, name, target string) (map[string]string, 
 			return nil, err
 		}
 		env[key] = n
+		if ds.Isolated(n) {
+			env[podmanrun.SandboxKey] = "1" // abgeschottet: der Node startet in der Mount-Sandbox (D7)
+		}
 	}
 	if len(env) == 0 {
 		return nil, nil

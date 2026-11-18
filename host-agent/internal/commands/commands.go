@@ -70,6 +70,7 @@ var allowedExtraEnvKeys = map[string]bool{
 	// Getrennte MXL-Domain (Kap. 103): nur der NAME; den Pfad leitet buildEnv aus der lokalen Standarddomain ab.
 	podmanrun.DomainNameKey:       true,
 	podmanrun.TargetDomainNameKey: true, // Zieldomain einer Domain-Brücke
+	podmanrun.SandboxKey:          true, // abgeschottete Domain: Node in der Mount-Sandbox starten
 	"OMP_WORKFLOW_ID":             true, // 2026-09-30: Workflow-Zugehörigkeit als NMOS-Node-Tag, s. workflows/state.go workflowIDEnvKey
 	// Kap. 81: stabiler Zustandsschlüssel der Instanz (launcher.StateKeyEnv) — der Orchestrator setzt ihn bei JEDEM Start;
 	// ohne diesen Eintrag lehnte der Agent jeden Remote-Start ab. Nur ein Dateiname-Baustein, kein Geheimnis.
@@ -471,12 +472,18 @@ func (e *Executor) start(req Request) Response {
 
 	stderrTail := newTailBuffer(crashStderrLines)
 	argv := wrapRealtime(entry.Type, withCPUAffinity(toCatalogRealtime(entry.Realtime), extra), entry.Command)
-	cmd := exec.Command(argv[0], argv[1:]...)
 	ensureMxlDomain()
-	cmd.Env = buildEnv(entry.Env, extra, req.InstanceID, req.Label, e.registryURL, e.natsURL, e.orchestratorURL, req.LaunchSecret)
+	env := buildEnv(entry.Env, extra, req.InstanceID, req.Label, e.registryURL, e.natsURL, e.orchestratorURL, req.LaunchSecret)
 	if req.NodeAPIToken != "" {
-		cmd.Env = append(cmd.Env, "OMP_NODE_API_TOKEN="+req.NodeAPIToken)
+		env = append(env, "OMP_NODE_API_TOKEN="+req.NodeAPIToken)
 	}
+	// Abgeschottete MXL-Domain (Kap. 103, D7): Mount-Sandbox, die nur die Domain(s) des Nodes sieht; nicht möglich → kein Start.
+	argv, env, serr := podmanrun.WrapSandbox(argv, env)
+	if serr != nil {
+		return Response{OK: false, Error: fmt.Sprintf("MXL-Sandbox: %v", serr)}
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrTail)
 

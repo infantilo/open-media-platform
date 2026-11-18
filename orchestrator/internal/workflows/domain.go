@@ -17,6 +17,11 @@ type DomainResolver interface {
 	Resolve(name string) (string, error)
 }
 
+// SandboxChecker: optional — sagt, ob eine Domain abgeschottet ist (D7); *mxldomains.Store kann es.
+type SandboxChecker interface {
+	Isolated(name string) bool
+}
+
 // SetDomains verdrahtet die Domain-Verwaltung nachträglich (nil = Domains nicht eingeschaltet).
 func (s *Service) SetDomains(d DomainResolver) { s.domains = d }
 
@@ -33,7 +38,7 @@ func effectiveDomain(def Definition, role Role) string {
 }
 
 // withRoleDomain ergänzt die Rollenumgebung um die Domain; die übergebene Map bleibt unverändert.
-func withRoleDomain(env map[string]string, def Definition, role Role) map[string]string {
+func (s *Service) withRoleDomain(env map[string]string, def Definition, role Role) map[string]string {
 	d := effectiveDomain(def, role)
 	target := ""
 	if isBridgeType(role.NodeType) && role.TargetDomain != "" && role.TargetDomain != "default" {
@@ -51,6 +56,10 @@ func withRoleDomain(env map[string]string, def Definition, role Role) map[string
 	}
 	if target != "" {
 		out[podmanrun.TargetDomainNameKey] = target
+	}
+	// Abgeschottete Domain (eigene oder Ziel): die Rolle startet in der Mount-Sandbox.
+	if sc, ok := s.domains.(SandboxChecker); ok && ((d != "" && sc.Isolated(d)) || (target != "" && sc.Isolated(target))) {
+		out[podmanrun.SandboxKey] = "1"
 	}
 	return out
 }

@@ -1020,7 +1020,7 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 		// statt mutierten Map.
 		roleEnv := roleExtraEnv(extraEnv, role)
 		roleEnv = s.withRoleHooks(roleEnv, wf.Definition, role)
-		roleEnv = withRoleDomain(roleEnv, wf.Definition, role)
+		roleEnv = s.withRoleDomain(roleEnv, wf.Definition, role)
 		roleEnv = withRoleSeed(roleEnv, wf.ID, role.Name)
 		// D13-Fix (2026-08-20, s. ioPortExtraEnv-Doku): der geclaimte
 		// physische Port muss an die Instanz weitergereicht werden, sonst
@@ -1609,7 +1609,7 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 	// role.MixerLevels (Nutzerwunsch 2026-08-14) additiv gemergt.
 	roleEnv := roleExtraEnv(extraEnv, role)
 	roleEnv = s.withRoleHooks(roleEnv, wf.Definition, role)
-	roleEnv = withRoleDomain(roleEnv, wf.Definition, role)
+	roleEnv = s.withRoleDomain(roleEnv, wf.Definition, role)
 	roleEnv = withRoleSeed(roleEnv, wf.ID, role.Name)
 
 	resolvedHostID := role.HostID

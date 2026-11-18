@@ -376,7 +376,7 @@ func (s *Service) roleBaseEnv(wf Workflow, roleDef Role) map[string]string {
 	for k, v := range formatExtraEnv(roleDef.Format) {
 		env[k] = v
 	}
-	out := withRoleDomain(s.withRoleHooks(env, wf.Definition, roleDef), wf.Definition, roleDef)
+	out := s.withRoleDomain(s.withRoleHooks(env, wf.Definition, roleDef), wf.Definition, roleDef)
 	if out == nil {
 		out = map[string]string{}
 	}
