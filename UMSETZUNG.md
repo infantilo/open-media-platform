@@ -51,6 +51,11 @@ und werden hier nicht wiederholt — bei Widerspruch gilt `ARCHITECTURE.md`.
     einer Norm abweicht oder etwas ergänzt (z. B. eine Haltezeit), steht das
     ausdrücklich dabei. Nummern, die sich nicht belegen lassen, werden nicht
     zitiert.
+11. **Große Dokus gezielt lesen, Index pflegen:** `UMSETZUNG.md` und
+    `ARCHITECTURE.md` nie ganz lesen, sondern erst `docs/entwicklung/DOKU-INDEX.md`
+    (Überschriften mit Zeilennummern) und dann nur den Abschnitt per
+    offset/limit. Nach jedem neuen oder verschobenen Kapitel den Index mit
+    `sh docs/entwicklung/doku-index.sh` neu erzeugen und mit committen.
 
 ---
 

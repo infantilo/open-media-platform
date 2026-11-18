@@ -36,3 +36,10 @@ Die Implementierung folgt `UMSETZUNG.md`: Schritt-für-Schritt-Plan für
 Claude Sonnet (Pro-Plan), jeder Schritt mit Verifikationskriterien. Bei
 Implementierungsarbeit: dortige Arbeitsregeln (§0) befolgen, genau einen
 Schritt pro Sitzung, Status-Checkliste pflegen.
+
+## Große Dokus gezielt lesen
+
+`UMSETZUNG.md` (~6700 Zeilen) und `ARCHITECTURE.md` (~4600 Zeilen) nie ganz
+lesen. Zuerst `docs/entwicklung/DOKU-INDEX.md` (Überschriften mit
+Zeilennummern), dann nur den Abschnitt per Read mit offset/limit. Index nach
+Doku-Änderungen neu erzeugen: `sh docs/entwicklung/doku-index.sh`.
