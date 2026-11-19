@@ -172,6 +172,20 @@ type AlertRuleBinder interface {
 	RemoveWorkflow(workflowID string) error
 }
 
+// GroupDirectory übersetzt zwischen Gruppen-ID und Gruppenname (Export zeigt/schreibt den Namen, Import löst ihn auf).
+type GroupDirectory interface {
+	GroupName(id string) (string, bool)
+	GroupIDByName(name string) (string, bool)
+}
+
+// groupBindingCreator ist die optionale Fähigkeit des AuthzBinder, eine Gruppenbindung anzulegen (authz.Store hat sie).
+type groupBindingCreator interface {
+	CreateGroupBinding(groupID, workflowID, nodeID string, verb authz.Verb) (authz.Binding, error)
+}
+
+// SetGroupDirectory verdrahtet das Gruppenverzeichnis (nil = Gruppenbindungen werden beim Import nicht übernommen).
+func (s *Service) SetGroupDirectory(d GroupDirectory) { s.groups = d }
+
 // SetAlertRules verdrahtet die Alarmregeln (nil = aus).
 func (s *Service) SetAlertRules(b AlertRuleBinder) { s.alertRules = b }
 
@@ -309,6 +323,8 @@ type Service struct {
 	authz AuthzBinder
 	// alertRules (Kap. 83): E-Mail-Alarmregeln je Workflow — beim Löschen aufräumen, beim Export/Import mitnehmen. nil = aus.
 	alertRules AlertRuleBinder
+	// groups: Gruppenname ↔ ID für den Export/Import von Rollenbindungen. nil = aus.
+	groups GroupDirectory
 	// domains (Kap. 103): Prüfung benannter MXL-Domains beim Start; nil = nicht eingeschaltet.
 	domains DomainResolver
 	// hostMetrics (K7 Teil 4, failover.go) — s. SetHostMetrics/
@@ -600,7 +616,13 @@ func (s *Service) Export(id string, includeBindings bool) (ExportedWorkflow, err
 			return ExportedWorkflow{}, err
 		}
 		for _, b := range bindings {
-			exported.Bindings = append(exported.Bindings, ExportedBinding{Subject: b.Subject, Role: b.NodeID, Verb: b.Verb})
+			eb := ExportedBinding{Subject: b.Subject, SubjectType: b.SubjectType, SubjectName: b.Subject, Role: b.NodeID, Verb: b.Verb}
+			if b.SubjectType == authz.SubjectTypeGroup && s.groups != nil {
+				if name, ok := s.groups.GroupName(b.Subject); ok {
+					eb.SubjectName = name
+				}
+			}
+			exported.Bindings = append(exported.Bindings, eb)
 		}
 	}
 	if includeBindings && s.alertRules != nil {
@@ -648,6 +670,12 @@ func (s *Service) Import(exported ExportedWorkflow, ownerOrgID string) (Workflow
 	// wurde) bricht den bereits erfolgreichen Import nicht ab.
 	if s.authz != nil {
 		for _, b := range exported.Bindings {
+			if b.SubjectType == authz.SubjectTypeGroup {
+				if note := s.importGroupBinding(wf.ID, b); note != "" {
+					wf.ImportNotes = append(wf.ImportNotes, note)
+				}
+				continue
+			}
 			if _, err := s.authz.Create(b.Subject, wf.ID, b.Role, b.Verb); err != nil {
 				slog.Warn("workflows: failed to restore role binding on import", "workflow", wf.ID, "subject", b.Subject, "role", b.Role, "error", err)
 			}
@@ -664,6 +692,37 @@ func (s *Service) Import(exported ExportedWorkflow, ownerOrgID string) (Workflow
 		}
 	}
 	return wf, nil
+}
+
+// importGroupBinding legt eine Gruppenbindung aus einer Importdatei an. Die Gruppe wird zuerst über ihren Namen gesucht (die ID
+// einer anderen Installation gilt hier nicht), danach über die ID. Findet sich keine, bleibt die Bindung weg und der Import
+// meldet es als Hinweis; liefert "" bei Erfolg.
+func (s *Service) importGroupBinding(workflowID string, b ExportedBinding) string {
+	label := b.SubjectName
+	if label == "" {
+		label = b.Subject
+	}
+	creator, ok := s.authz.(groupBindingCreator)
+	if !ok || s.groups == nil {
+		return "Rollenbindung der Gruppe „" + label + "“ nicht übernommen: Gruppen nicht verfügbar"
+	}
+	id := ""
+	if b.SubjectName != "" {
+		id, _ = s.groups.GroupIDByName(b.SubjectName)
+	}
+	if id == "" {
+		if _, known := s.groups.GroupName(b.Subject); known {
+			id = b.Subject
+		}
+	}
+	if id == "" {
+		return "Rollenbindung der Gruppe „" + label + "“ nicht übernommen: Gruppe nicht gefunden"
+	}
+	if _, err := creator.CreateGroupBinding(id, workflowID, b.Role, b.Verb); err != nil {
+		slog.Warn("workflows: failed to restore group binding on import", "workflow", workflowID, "group", id, "role", b.Role, "error", err)
+		return "Rollenbindung der Gruppe „" + label + "“ nicht übernommen: " + err.Error()
+	}
+	return ""
 }
 
 func uniqueWorkflowName(name string, existing []Workflow) string {

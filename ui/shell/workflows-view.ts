@@ -888,7 +888,7 @@ class WorkflowsView extends HTMLElement {
       p.textContent = intro;
       body.appendChild(p);
       const roles = exp.definition.roles.map((r) => `${r.name} — ${r.nodeType}`);
-      const bindings = (exp.bindings ?? []).map((b) => describeBinding(b, tt("wf.io.wholeWorkflow")));
+      const bindings = (exp.bindings ?? []).map((b) => describeBinding(b, tt("wf.io.wholeWorkflow"), tt("wf.io.group"), tt("wf.io.user")));
       const alerts = (exp.alertRules ?? []).map(describeAlertRoute);
       body.appendChild(listBlock(tt("wf.io.roles"), roles, tt("wf.io.none")));
       body.appendChild(listBlock(tt("wf.io.bindings"), bindings, tt("wf.io.noneBindings")));

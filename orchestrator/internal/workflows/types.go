@@ -509,9 +509,17 @@ type ExportedWorkflow struct {
 // ohne ID/WorkflowID, die sich beim Import ohnehin ändern) — Nutzername,
 // Rollenname (oder authz.AnyNode für "der ganze Workflow") und Verb.
 type ExportedBinding struct {
-	Subject string     `json:"subject"`
-	Role    string     `json:"role"`
-	Verb    authz.Verb `json:"verb"`
+	// Subject: Nutzername (SubjectType "user") bzw. Gruppen-ID (SubjectType "group"). Die ID einer Gruppe gilt nur auf dem
+	// System, auf dem sie angelegt wurde — deshalb steht der lesbare Name daneben.
+	Subject string `json:"subject"`
+	// SubjectType: "user" (leer = "user", ältere Dateien) oder "group". Früher fehlte das Feld, ein Gruppenrecht wurde beim
+	// Import zu einem Nutzerrecht mit der Gruppen-ID als Nutzername und wirkte nie.
+	SubjectType string `json:"subjectType,omitempty"`
+	// SubjectName: Anzeigename — bei Gruppen der Gruppenname, bei Nutzern der Nutzername. Beim Import löst der Name eine Gruppe
+	// auf einem anderen System auf.
+	SubjectName string     `json:"subjectName,omitempty"`
+	Role        string     `json:"role"`
+	Verb        authz.Verb `json:"verb"`
 }
 
 // Workflow ist der Body von GET /api/v1/workflows (Liste/Einzelabruf)

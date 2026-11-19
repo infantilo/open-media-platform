@@ -341,6 +341,18 @@ func (f *fakeAuthzBinder) Create(subject, workflowID, nodeID string, verb authz.
 	return b, nil
 }
 
+// CreateGroupBinding: gleiches Muster wie Create, mit SubjectType "group".
+func (f *fakeAuthzBinder) CreateGroupBinding(groupID, workflowID, nodeID string, verb authz.Verb) (authz.Binding, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return authz.Binding{}, f.err
+	}
+	b := authz.Binding{Subject: groupID, SubjectType: authz.SubjectTypeGroup, WorkflowID: workflowID, NodeID: nodeID, Verb: verb}
+	f.created = append(f.created, b)
+	return b, nil
+}
+
 func (f *fakeAuthzBinder) snapshot() []authz.Binding {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -2507,5 +2519,78 @@ func TestRoleTopologyChanged(t *testing.T) {
 	ren.Roles = []Role{{Name: "A2", NodeType: "x"}, {Name: "B", NodeType: "y"}}
 	if !roleTopologyChanged(base, ren) {
 		t.Fatal("Umbenennen einer Rolle muss erkannt werden")
+	}
+}
+
+// fakeGroups ist ein GroupDirectory mit festen Gruppen (ID → Name).
+type fakeGroups map[string]string
+
+func (g fakeGroups) GroupName(id string) (string, bool) { n, ok := g[id]; return n, ok }
+func (g fakeGroups) GroupIDByName(name string) (string, bool) {
+	for id, n := range g {
+		if n == name {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// TestExportCarriesGroupNameAndType: ein Gruppenrecht steht im Export mit Typ und Namen, nicht nur mit der Gruppen-ID.
+func TestExportCarriesGroupNameAndType(t *testing.T) {
+	az := &fakeAuthzBinder{}
+	svc := &Service{store: newFakeStore(), nodes: &fakeNodeLister{}, graph: &fakeGraph{}, launcher: &fakeLauncher{}, authz: az}
+	svc.SetGroupDirectory(fakeGroups{"g-1": "Bildmeister"})
+	wf, err := svc.Create("Regieplatz 1", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := az.CreateGroupBinding("g-1", wf.ID, "mixer", authz.VerbOperate); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := az.Create("anna", wf.ID, "mixer", authz.VerbOperate); err != nil {
+		t.Fatal(err)
+	}
+	exp, err := svc.Export(wf.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var group, user *ExportedBinding
+	for i := range exp.Bindings {
+		switch exp.Bindings[i].SubjectType {
+		case authz.SubjectTypeGroup:
+			group = &exp.Bindings[i]
+		default:
+			user = &exp.Bindings[i]
+		}
+	}
+	if group == nil || group.Subject != "g-1" || group.SubjectName != "Bildmeister" {
+		t.Fatalf("Gruppenbindung = %+v, want g-1/Bildmeister/group", group)
+	}
+	if user == nil || user.Subject != "anna" || user.SubjectName != "anna" {
+		t.Fatalf("Nutzerbindung = %+v, want anna", user)
+	}
+}
+
+// TestImportRestoresGroupBindingByName: auf einem anderen System hat die Gruppe eine andere ID — der Import findet sie
+// über den Namen und legt eine Gruppenbindung an (früher entstand ein wirkungsloses Nutzerrecht mit der Gruppen-ID).
+func TestImportRestoresGroupBindingByName(t *testing.T) {
+	az := &fakeAuthzBinder{}
+	svc := &Service{store: newFakeStore(), nodes: &fakeNodeLister{}, graph: &fakeGraph{}, launcher: &fakeLauncher{catalog: []launcher.CatalogEntry{{Type: "omp-video-mixer-me"}}}, authz: az}
+	svc.SetGroupDirectory(fakeGroups{"neu-42": "Bildmeister"})
+	in := ExportedWorkflow{Version: 1, Name: "X", Definition: Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}},
+		Bindings: []ExportedBinding{
+			{Subject: "alt-7", SubjectType: authz.SubjectTypeGroup, SubjectName: "Bildmeister", Role: "mixer", Verb: authz.VerbOperate},
+			{Subject: "alt-8", SubjectType: authz.SubjectTypeGroup, SubjectName: "Gibt es nicht", Role: "mixer", Verb: authz.VerbOperate},
+		}}
+	wf, err := svc.Import(in, "")
+	if err != nil {
+		t.Fatalf("Import() error = %v", err)
+	}
+	got := az.snapshot()
+	if len(got) != 1 || got[0].Subject != "neu-42" || got[0].SubjectType != authz.SubjectTypeGroup || got[0].WorkflowID != wf.ID {
+		t.Fatalf("Bindungen = %+v, want eine Gruppenbindung auf neu-42", got)
+	}
+	if len(wf.ImportNotes) != 1 || !strings.Contains(wf.ImportNotes[0], "Gibt es nicht") {
+		t.Fatalf("ImportNotes = %v, want ein Hinweis zur unbekannten Gruppe", wf.ImportNotes)
 	}
 }

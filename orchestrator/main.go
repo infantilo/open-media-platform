@@ -1072,6 +1072,7 @@ func main() {
 		// Kap. 83: manuelle Benutzeraktionen aus dem Domänen-Audit (Opt-in: nur Regeln, die „Manuelle Benutzeraktion“ nennen).
 		domainAuditStore.SetObserver(userActionAlerter(sink))
 		// Kap. 83: Alarm → Workflow(s) für Regeln je Workflow. Host-Alarme gehören zu allen laufenden Workflows mit einer Rolle auf dem Host.
+		workflowSvc.SetGroupDirectory(groupDirectory{groupStore}) // Rollenbindungen von Gruppen: Name im Export, Auflösung beim Import
 		if alertMailStore != nil {
 			workflowSvc.SetAlertRules(alertMailStore) // Kap. 83: Regeln je Workflow beim Löschen aufräumen, beim Export/Import mitnehmen
 		}
@@ -1897,4 +1898,28 @@ func announceToLeader(ctx context.Context, n *cluster.Node, selfURL string, m *c
 		}
 		cancel()
 	}
+}
+
+// groupDirectory passt den Gruppenspeicher an workflows.GroupDirectory an.
+type groupDirectory struct{ store *groups.Store }
+
+func (d groupDirectory) GroupName(id string) (string, bool) {
+	g, err := d.store.Get(id)
+	if err != nil {
+		return "", false
+	}
+	return g.Name, true
+}
+
+func (d groupDirectory) GroupIDByName(name string) (string, bool) {
+	list, err := d.store.List()
+	if err != nil {
+		return "", false
+	}
+	for _, g := range list {
+		if g.Name == name {
+			return g.ID, true
+		}
+	}
+	return "", false
 }

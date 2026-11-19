@@ -3311,4 +3311,6 @@ export const de = {
   "wf.io.errName": "Bitte einen Namen eingeben.",
   "wf.io.errEmpty": "Ein Rollenname ist leer.",
   "wf.io.errDup": "Zwei Rollen haben denselben Namen.",
+  "wf.io.group": "Gruppe",
+  "wf.io.user": "Nutzer",
 };

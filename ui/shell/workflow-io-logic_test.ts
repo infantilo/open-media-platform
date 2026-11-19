@@ -30,8 +30,12 @@ Deno.test("Export-Auswahl beschneidet Bindungen und Alarmregeln", () => {
 });
 
 Deno.test("Anzeige von Bindung und Alarmregel", () => {
-  assertEquals(describeBinding(exp.bindings![0]), "operator1 — Regie 1 Mischer — operate");
-  assertEquals(describeBinding(exp.bindings![1]), "chef — ganzer Workflow — admin");
+  assertEquals(describeBinding(exp.bindings![0]), "Nutzer operator1 — Regie 1 Mischer — operate");
+  assertEquals(describeBinding(exp.bindings![1]), "Nutzer chef — ganzer Workflow — admin");
+  const g = { subject: "33d573f370de18e18156e27667198ac1", subjectType: "group", subjectName: "Bildmeister", role: "*", verb: "operate" };
+  assertEquals(describeBinding(g), "Gruppe Bildmeister — ganzer Workflow — operate");
+  // alte Datei ohne Namen: ID gekürzt statt der ganzen Zeichenkette
+  assertEquals(describeBinding({ ...g, subjectName: undefined }), "Gruppe 33d573f3… — ganzer Workflow — operate");
   assertEquals(describeAlertRoute(exp.alertRules![0]), "Ausfall · critical · → a@b.de");
 });
 

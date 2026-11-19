@@ -3312,4 +3312,6 @@ export const en: Record<keyof typeof de, string> = {
   "wf.io.errName": "Please enter a name.",
   "wf.io.errEmpty": "A role name is empty.",
   "wf.io.errDup": "Two roles have the same name.",
+  "wf.io.group": "Group",
+  "wf.io.user": "User",
 };

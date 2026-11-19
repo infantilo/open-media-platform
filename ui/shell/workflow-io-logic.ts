@@ -3,6 +3,10 @@
 
 export interface IoBinding {
   subject: string;
+  /** "user" (leer = Nutzer) oder "group". Bei Gruppen ist `subject` eine Gruppen-ID. */
+  subjectType?: string;
+  /** Lesbarer Name: Gruppenname bzw. Nutzername. Ältere Dateien haben ihn nicht. */
+  subjectName?: string;
   role: string;
   verb: string;
 }
@@ -47,9 +51,12 @@ export interface IoExport {
 }
 
 /** Rollenbindung für die Anzeige: „Nutzer — Rolle — Recht“. Die Rolle `*` (ganzer Workflow) heißt „ganzer Workflow“. */
-export function describeBinding(b: IoBinding, wholeWorkflowLabel = "ganzer Workflow"): string {
+export function describeBinding(b: IoBinding, wholeWorkflowLabel = "ganzer Workflow", groupLabel = "Gruppe", userLabel = "Nutzer"): string {
   const role = b.role === "" || b.role === "*" ? wholeWorkflowLabel : b.role;
-  return `${b.subject} — ${role} — ${b.verb}`;
+  const isGroup = b.subjectType === "group";
+  // Name statt ID: eine Gruppen-ID ist nur eine Zeichenkette; ohne Namen (alte Datei) wird die ID gekürzt gezeigt
+  const who = b.subjectName || (isGroup && b.subject.length > 12 ? b.subject.slice(0, 8) + "…" : b.subject);
+  return `${isGroup ? groupLabel : userLabel} ${who} — ${role} — ${b.verb}`;
 }
 
 /** Alarmregel für die Anzeige: Name, Arten/Schweregrade und Empfänger. */
