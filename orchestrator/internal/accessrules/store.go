@@ -48,7 +48,7 @@ func newID() (string, error) {
 func (s *Store) List() ([]Rule, error) {
 	s.mu.RLock()
 	if s.loaded {
-		out := append([]Rule(nil), s.cached...)
+		out := append([]Rule{}, s.cached...)
 		s.mu.RUnlock()
 		return out, nil
 	}
@@ -76,7 +76,7 @@ func (s *Store) reload() ([]Rule, error) {
 	s.mu.Lock()
 	s.cached, s.loaded = out, true
 	s.mu.Unlock()
-	return append([]Rule(nil), out...), nil
+	return append([]Rule{}, out...), nil
 }
 
 // Create legt eine Regel an.
