@@ -3,6 +3,7 @@
 import { apiFetch, confirmDialog, features, showToast, t } from "../host.ts";
 import { hasFeature } from "../../kit/features.ts";
 import { btn, type Cfg, CARD, DIM, el, fmtMs, hostLabel, INPUT, jsonOrThrow, openModal, pill, post, roleLabel, type Root, STATE_COLOR, stateLabel, TD, TH } from "./files-ui.ts";
+import { openTransferDialog, renderTransfers, type TransferRow } from "./files-transfer.ts";
 import { canSubmitDelete, crumbs, deleteMode, fmtBytes, freePercent, joinPath, parentPath, remaining, type Plan } from "./files-logic.ts";
 
 
@@ -21,8 +22,10 @@ interface AssetRow { id: string; title: string; type: string; status: string }
 
 
 
+const DRAG_TYPE = "application/x-omp-files";
+
 export class FilesView extends HTMLElement {
-  #tab: "places" | "assets" | "trash" = "places";
+  #tab: "places" | "assets" | "trash" | "transfers" = "places";
   #roots: Root[] = [];
   #rootId = "";
   #path = "";
@@ -32,7 +35,11 @@ export class FilesView extends HTMLElement {
   #filter = "";
   #orphanMode = false;
   #orphanInfo = "";
-  #can = { view: false, del: false, force: false, upload: false, admin: false };
+  #can = { view: false, del: false, force: false, upload: false, admin: false, transfer: false };
+  // Übertragungen
+  #transfers: TransferRow[] = [];
+  #trOpen = new Set<string>();
+  #trTimer: number | undefined;
   #cfg: Cfg | null = null;
   #body!: HTMLDivElement;
   #err = "";
@@ -56,7 +63,7 @@ export class FilesView extends HTMLElement {
     void features().then(async (f) => {
       this.#can = {
         view: hasFeature(f, "files.view"), del: hasFeature(f, "files.delete"), force: hasFeature(f, "files.force"),
-        upload: hasFeature(f, "files.upload"), admin: hasFeature(f, "files.admin"),
+        upload: hasFeature(f, "files.upload"), admin: hasFeature(f, "files.admin"), transfer: hasFeature(f, "files.transfer"),
       };
       await this.#loadRoots();
       try { this.#cfg = await jsonOrThrow<Cfg>(await apiFetch("/api/v1/files/config")); } catch { /* Standardtext */ }
@@ -114,7 +121,8 @@ export class FilesView extends HTMLElement {
     if (!this.#can.view) { this.#body.append(el("div", DIM, t("filesv.err.noRight"))); return; }
     const bar = el("div", "display:flex;gap:6px;align-items:center;margin-bottom:12px;flex-wrap:wrap;");
     bar.append(el("h2", "font-size:var(--omp-font-size-lg);margin:0 12px 0 0;", t("filesv.title")));
-    const tabs: ["places" | "assets" | "trash", string][] = [["places", "filesv.tab.places"], ["assets", "filesv.tab.assets"], ["trash", "filesv.tab.trash"]];
+    const tabs: ["places" | "assets" | "trash" | "transfers", string][] = [["places", "filesv.tab.places"], ["assets", "filesv.tab.assets"], ["trash", "filesv.tab.trash"]];
+    if (this.#can.transfer) tabs.push(["transfers", "filesv.tab.transfers"]);
     for (const [id, key] of tabs) {
       const b = btn(t(key), () => void this.#goTab(id), { role: `files-tab-${id}` });
       if (this.#tab === id) b.style.cssText += "font-weight:700;border-color:var(--omp-accent-cyan);";
@@ -126,11 +134,44 @@ export class FilesView extends HTMLElement {
       case "places": this.#body.append(this.#viewPlaces()); break;
       case "assets": this.#body.append(this.#viewAssets()); break;
       case "trash": this.#body.append(this.#viewTrash()); break;
+      case "transfers": this.#body.append(renderTransfers(this.#transfers, {
+        canCancel: this.#can.transfer, open: this.#trOpen, rerender: () => this.#render(),
+        onCancel: (id) => void apiFetch(`/api/v1/files/transfers/${encodeURIComponent(id)}/cancel`, { method: "POST" }).then(() => this.#loadTransfers()),
+      })); break;
     }
   }
 
-  async #goTab(tab: "places" | "assets" | "trash") {
+  async #loadTransfers() {
+    try {
+      this.#transfers = (await jsonOrThrow<TransferRow[]>(await apiFetch("/api/v1/files/transfers"))) ?? [];
+    } catch { /* bleibt leer */ }
+    if (this.#tab === "transfers") this.#render();
+    const active = this.#transfers.some((r) => r.status === "running" || r.status === "queued");
+    if (active && this.#trTimer === undefined) {
+      this.#trTimer = window.setInterval(() => {
+        if (!this.isConnected) { clearInterval(this.#trTimer); this.#trTimer = undefined; return; }
+        void this.#loadTransfers();
+      }, 1500);
+    } else if (!active && this.#trTimer !== undefined) {
+      clearInterval(this.#trTimer);
+      this.#trTimer = undefined;
+    }
+  }
+
+  disconnectedCallback() { if (this.#trTimer !== undefined) clearInterval(this.#trTimer); this.#trTimer = undefined; }
+
+  /** Dialog „Kopieren/Verschieben nach …“ für die gewählten Pfade (aus dem Ort r); dst: vorgewähltes Ziel (Ziehen und Ablegen). */
+  #openTransfer(r: Root, mode: "copy" | "move", paths: string[], dst?: { rootId?: string; dir?: string }) {
+    openTransferDialog({
+      roots: this.#roots, srcRoot: r, paths, mode, dstRootId: dst?.rootId, dstDir: dst?.dir,
+      canMove: this.#can.del && !r.readOnly, canForce: this.#can.force,
+      onStarted: () => { this.#sel.clear(); this.#tab = "transfers"; void this.#loadTransfers().then(() => this.#render()); },
+    });
+  }
+
+  async #goTab(tab: "places" | "assets" | "trash" | "transfers") {
     this.#tab = tab;
+    if (tab === "transfers") await this.#loadTransfers();
     if (tab === "places") await this.#loadDir();
     if (tab === "assets") await this.#loadAssets();
     if (tab === "trash") await this.#loadTrash();
@@ -165,6 +206,12 @@ export class FilesView extends HTMLElement {
         if (r.trashItems) card.append(el("div", DIM, t("filesv.root.trash", { p0: r.trashItems })));
       }
       card.addEventListener("click", () => { this.#rootId = r.id; this.#path = ""; this.#orphanMode = false; this.#sel.clear(); void this.#loadDir().then(() => this.#render()); });
+      // Ziehen und Ablegen: Dateien auf einen Ort ziehen öffnet den Übertragungsdialog mit diesem Ziel
+      if (this.#can.transfer && !r.readOnly) {
+        card.addEventListener("dragover", (ev) => { if (ev.dataTransfer?.types.includes(DRAG_TYPE)) { ev.preventDefault(); card.style.outline = "2px dashed var(--omp-accent-cyan)"; } });
+        card.addEventListener("dragleave", () => { card.style.outline = ""; });
+        card.addEventListener("drop", (ev) => this.#dropOn(ev, card, r.id, ""));
+      }
       side.append(card);
     }
     wrap.append(side);
@@ -199,6 +246,10 @@ export class FilesView extends HTMLElement {
     const n = this.#sel.size;
     const sel = el("span", DIM, n ? t("filesv.act.selected", { p0: n }) : "");
     tools.append(sel);
+    if (this.#can.transfer && n > 0) {
+      tools.append(btn(t("filesv.act.copyTo"), () => this.#openTransfer(r, "copy", [...this.#sel]), { role: "files-copy" }));
+      if (this.#can.del && !r.readOnly) tools.append(btn(t("filesv.act.moveTo"), () => this.#openTransfer(r, "move", [...this.#sel]), { role: "files-move" }));
+    }
     if (this.#can.del && n > 0) {
       tools.append(btn(t("filesv.act.newAsset"), () => this.#newAsset(r), { role: "files-new-asset" }));
       tools.append(btn(t("filesv.act.attach"), () => void this.#attach(r), { role: "files-attach", disabled: n !== 1 }));
@@ -210,6 +261,18 @@ export class FilesView extends HTMLElement {
     out.push(holder);
     queueMicrotask(() => this.#renderTable());
     return out;
+  }
+
+  /** Ablegen: Auswahl auf einen Ort oder Ordner gezogen → Übertragungsdialog (Umschalttaste = verschieben). */
+  #dropOn(ev: DragEvent, target: HTMLElement, rootId: string, dir: string) {
+    ev.preventDefault();
+    target.style.outline = "";
+    try {
+      const d = JSON.parse(ev.dataTransfer?.getData(DRAG_TYPE) ?? "{}") as { root?: string; paths?: string[] };
+      const src = this.#roots.find((x) => x.id === d.root);
+      if (!src || !d.paths?.length) return;
+      this.#openTransfer(src, ev.shiftKey && this.#can.del && !src.readOnly ? "move" : "copy", d.paths, { rootId, dir });
+    } catch { /* kein gültiges Ziehen */ }
   }
 
   async #reloadDir() { await (this.#orphanMode ? this.#loadOrphans() : this.#loadDir()); this.#render(); }
@@ -230,6 +293,19 @@ export class FilesView extends HTMLElement {
       const rel = this.#orphanMode ? e.name : joinPath(this.#path, e.name);
       const tr = el("tr");
       tr.setAttribute("data-rel", rel);
+      if (this.#can.transfer && !this.#orphanMode) {
+        tr.draggable = true;
+        tr.addEventListener("dragstart", (ev) => {
+          if (!this.#sel.has(rel)) { this.#sel.clear(); this.#sel.add(rel); }
+          ev.dataTransfer?.setData(DRAG_TYPE, JSON.stringify({ root: r.id, paths: [...this.#sel] }));
+          if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "copyMove";
+        });
+        if (e.isDir) {
+          tr.addEventListener("dragover", (ev) => { if (ev.dataTransfer?.types.includes(DRAG_TYPE) && !r.readOnly) { ev.preventDefault(); tr.style.outline = "2px dashed var(--omp-accent-cyan)"; } });
+          tr.addEventListener("dragleave", () => { tr.style.outline = ""; });
+          tr.addEventListener("drop", (ev) => this.#dropOn(ev, tr, r.id, rel));
+        }
+      }
       const c0 = el("td", TD);
       if (!e.isDir) {
         const cb = el("input") as HTMLInputElement;

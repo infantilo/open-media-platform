@@ -45,3 +45,37 @@ Deno.test("Platz und Restzeit", () => {
   assertEquals(remaining(2000 + 5 * 3_600_000, 2000), "5 h");
   assertEquals(remaining(2000 + 90_000, 2000), "1 min");
 });
+
+import { canStartTransfer, commonParent, etaSeconds, fmtDuration, percent, type TransferPlan } from "./files-logic.ts";
+
+const tp = (o: Partial<TransferPlan> = {}): TransferPlan => ({ mode: "copy", items: [{ rel: "a", dstRel: "b", size: 1, status: "ok" }], files: 1, totalBytes: 1, conflicts: 0, blocked: false, needsForce: false, needsConfirm: false, dstFree: 0, noSpace: false, rename: false, ...o });
+
+Deno.test("Übertragen: Start nur, wenn der Plan es zulässt", () => {
+  const none = { confirm: false, force: false, reason: "", canForce: false };
+  assertEquals(canStartTransfer(null, none), false);
+  assertEquals(canStartTransfer(tp(), none), true);
+  assertEquals(canStartTransfer(tp({ blocked: true }), none), false);
+  assertEquals(canStartTransfer(tp({ needsConfirm: true }), none), false);
+  assertEquals(canStartTransfer(tp({ needsConfirm: true }), { ...none, confirm: true }), true);
+  assertEquals(canStartTransfer(tp({ needsForce: true }), { ...none, force: true, reason: "Notfall", canForce: false }), false);
+  assertEquals(canStartTransfer(tp({ needsForce: true }), { confirm: false, force: true, reason: "kurz", canForce: true }), false);
+  assertEquals(canStartTransfer(tp({ needsForce: true }), { confirm: false, force: true, reason: "Sendung ist vorbei", canForce: true }), true);
+});
+
+Deno.test("Übertragen: Dauer, Restzeit, Prozent", () => {
+  assertEquals(fmtDuration(45), "45 s");
+  assertEquals(fmtDuration(200), "3 min 20 s");
+  assertEquals(fmtDuration(7500), "2 h 05 min");
+  assertEquals(etaSeconds(50, 150, 10), 10);
+  assertEquals(etaSeconds(0, 100, 0), null);
+  assertEquals(etaSeconds(100, 100, 5), null);
+  assertEquals(percent(50, 200), 25);
+  assertEquals(percent(5, 0), 0);
+  assertEquals(percent(300, 200), 100);
+});
+
+Deno.test("Übertragen: gemeinsamer Ordner der Auswahl", () => {
+  assertEquals(commonParent(["a/b/x.mxf", "a/b/y.mxf"]), "a/b");
+  assertEquals(commonParent(["a/x.mxf", "b/y.mxf"]), "");
+  assertEquals(commonParent([]), "");
+});
