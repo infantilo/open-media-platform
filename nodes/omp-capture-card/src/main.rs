@@ -537,6 +537,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }),
                     label: multi.then(|| format!("Eingang {d} – Video")),
                     tags: HashMap::new(),
+                    interlaced_tff: mode_info.interlaced,
                     ..Default::default()
                 });
                 senders.push(SenderSpec {

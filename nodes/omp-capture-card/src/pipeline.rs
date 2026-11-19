@@ -25,10 +25,10 @@
 //! Regelfall); eine feste `video-format`-Wahl wäre nur für exotische
 //! Formate (RGB/ARGB) nötig, kein Regelfall hier.
 //!
-//! **Nur progressive Modi in v1** (`MODES` unten) — interlaced Eingänge
-//! (1080i50 etc.) bräuchten eine eigene De-Interlace-Kette wie PIPELINE
-//! CONTROLLERs `lib/InterlaceChain.js`, bewusst nicht Teil dieser
-//! Sitzung (s. `docs/decisions.md`).
+//! **Halbbildmodi (1080i50/5994/60), Top Field First:** der Grain bleibt das GANZE Bild mit verschränkten
+//! Zeilen (wie `decklinkvideosrc` es liefert), der MXL-Flow meldet `interlace_mode: interlaced_tff`
+//! (`MxlVideoOutput::new_interlaced_tff`); keine De-Interlace-Kette. Bottom Field First gibt es nicht (SD-576i
+//! ist BFF und deshalb nicht in der Modustabelle).
 //!
 //! **`channels` ist ein FIXER ENUM {2, 8, 16}** (0="max") — PIPELINE
 //! CONTROLLERs `server.js`-Kommentar dokumentiert einen echten,
@@ -45,6 +45,7 @@ use std::time::Duration;
 
 use gst::prelude::*;
 use gstreamer as gst;
+use gstreamer_video as gst_video;
 use omp_mediaio::Output;
 use omp_mediaio::mxl::{MxlAudioInput, MxlAudioOutput, MxlContext, MxlVideoInput, MxlVideoOutput};
 use omp_node_sdk::channelmapping::MapEntry;
@@ -52,6 +53,12 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 pub const SAMPLE_RATE: u32 = 48000;
+
+/// Markiert einen Puffer als Halbbild-Vollbild, oberes Halbbild zuerst (`GST_VIDEO_BUFFER_FLAG_INTERLACED|TFF`).
+fn mark_tff(buffer: &mut gst::BufferRef) {
+    use gst_video::prelude::VideoBufferExt;
+    buffer.set_video_flags(gst_video::VideoBufferFlags::INTERLACED | gst_video::VideoBufferFlags::TFF);
+}
 
 /// Profile der DeckLink-Karte (GStreamer-Enum `GstDecklinkProfileId`, `gst-inspect-1.0 decklinkvideosrc`).
 /// `default` ändert nichts. Eine Duplex-Karte (SDI-Profile `*-full`, DeckLink IP) erfasst und gibt gleichzeitig aus.
@@ -135,27 +142,41 @@ fn build_channel_matrix(pipeline: &gst::Pipeline, upstream: &gst::Element, chann
 pub struct ModeInfo {
     pub width: u32,
     pub height: u32,
+    /// BILDrate (1080i50 = 25/1), nicht Halbbildrate.
     pub fps_numerator: u32,
     pub fps_denominator: u32,
+    /// Halbbildmodus, Top Field First (alle SDI-HD-Halbbildnormen; Bottom Field First wird nicht angeboten).
+    pub interlaced: bool,
 }
 
 pub fn mode_info(mode: &str) -> Option<ModeInfo> {
-    let (width, height, fps_numerator, fps_denominator) = match mode {
-        "pal-p" => (720, 576, 50, 1),
-        "720p50" => (1280, 720, 50, 1),
-        "720p5994" => (1280, 720, 60000, 1001),
-        "1080p25" => (1920, 1080, 25, 1),
-        "1080p2997" => (1920, 1080, 30000, 1001),
-        "1080p50" => (1920, 1080, 50, 1),
+    let (width, height, fps_numerator, fps_denominator, interlaced) = match mode {
+        "pal-p" => (720, 576, 50, 1, false),
+        "720p50" => (1280, 720, 50, 1, false),
+        "720p5994" => (1280, 720, 60000, 1001, false),
+        "720p60" => (1280, 720, 60, 1, false),
+        "1080p2398" => (1920, 1080, 24000, 1001, false),
+        "1080p24" => (1920, 1080, 24, 1, false),
+        "1080p25" => (1920, 1080, 25, 1, false),
+        "1080p2997" => (1920, 1080, 30000, 1001, false),
+        "1080p30" => (1920, 1080, 30, 1, false),
+        "1080p50" => (1920, 1080, 50, 1, false),
+        "1080p5994" => (1920, 1080, 60000, 1001, false),
+        "1080p60" => (1920, 1080, 60, 1, false),
+        "1080i50" => (1920, 1080, 25, 1, true),
+        "1080i5994" => (1920, 1080, 30000, 1001, true),
+        "1080i60" => (1920, 1080, 30, 1, true),
         _ => return None,
     };
-    Some(ModeInfo { width, height, fps_numerator, fps_denominator })
+    Some(ModeInfo { width, height, fps_numerator, fps_denominator, interlaced })
 }
 
 /// Von `mode_info` unterstützte Modus-Namen, für Fehlermeldungen/
 /// Descriptor (`ParamSpec::range`, s. `main.rs`).
-pub const SUPPORTED_MODES: &[&str] =
-    &["pal-p", "720p50", "720p5994", "1080p25", "1080p2997", "1080p50"];
+pub const SUPPORTED_MODES: &[&str] = &[
+    "pal-p", "720p50", "720p5994", "720p60", "1080p2398", "1080p24", "1080p25", "1080p2997", "1080p30", "1080p50", "1080p5994",
+    "1080p60", "1080i50", "1080i5994", "1080i60",
+];
 
 /// `decklinkaudiosrc`s `channels`-Property ist ein fixer Enum, s.
 /// Moduldoku oben.
@@ -220,7 +241,7 @@ impl Pipeline {
         let decklinkvideosrc = crate::card::make(crate::card::Role::VideoSrc, config.device_number, Some("decklinkvideosrc"))
             .map_err(PipelineError)?;
         select_device(&decklinkvideosrc);
-        crate::card::set_mode(&decklinkvideosrc, &config.mode, mode_info.height, mode_info.fps_numerator, mode_info.fps_denominator)
+        crate::card::set_mode(&decklinkvideosrc, &config.mode, mode_info.height, mode_info.fps_numerator, mode_info.fps_denominator, mode_info.interlaced)
             .map_err(PipelineError)?;
 
         let video_queue = gst::ElementFactory::make("queue")
@@ -238,7 +259,8 @@ impl Pipeline {
             MxlContext::new(&config.domain)
                 .map_err(|e| PipelineError(format!("MxlContext::new: {e}")))?,
         );
-        let mxl_output = MxlVideoOutput::new(
+        let new_video = if mode_info.interlaced { MxlVideoOutput::new_interlaced_tff } else { MxlVideoOutput::new };
+        let mxl_output = new_video(
             &pipeline,
             &video_queue,
             mxl_context.clone(),
@@ -560,13 +582,35 @@ fn build_output(
     let videoconvert_out = gst::ElementFactory::make("videoconvert")
         .build()
         .map_err(|e| format!("videoconvert (out): {e}"))?;
+    // Halbbildmodus: der MXL-Grain ist ein ganzes Bild mit verschränkten Zeilen, GStreamer weiß davon nichts —
+    // Caps auf `interlace-mode=interleaved` umetikettieren und TFF-Flags an die Puffer setzen (der Karten-Sink
+    // wertet beides aus). Progressive Modi: Durchreicher ohne Wirkung.
+    let interlace_tag = if mode_info.interlaced {
+        let el = gst::ElementFactory::make("capssetter")
+            .property("caps", gst::Caps::builder("video/x-raw").field("interlace-mode", "interleaved").build())
+            .property("join", true)
+            .property("replace", false)
+            .build()
+            .map_err(|e| format!("capssetter (interlace): {e}"))?;
+        if let Some(pad) = el.static_pad("src") {
+            pad.add_probe(gst::PadProbeType::BUFFER, |_pad, info| {
+                if let Some(gst::PadProbeData::Buffer(buffer)) = &mut info.data {
+                    mark_tff(buffer.make_mut());
+                }
+                gst::PadProbeReturn::Ok
+            });
+        }
+        Some(el)
+    } else {
+        None
+    };
     let decklinkvideosink = crate::card::make(crate::card::Role::VideoSink, device_number, None)?;
     // sync=true: der Karten-Sink ist der alleinige Clock-Provider dieser eigenständigen Pipeline —
     // GStreamer wählt automatisch die Karten-Clock, getaktetes Playback statt "so schnell wie
     // möglich" (identische Begründung wie PIPELINE CONTROLLERs `_buildDecklinkPipelineStr`-Kommentar).
     decklinkvideosink.set_property("sync", true);
     select_device(&decklinkvideosink);
-    crate::card::set_mode(&decklinkvideosink, mode, mode_info.height, mode_info.fps_numerator, mode_info.fps_denominator)?;
+    crate::card::set_mode(&decklinkvideosink, mode, mode_info.height, mode_info.fps_numerator, mode_info.fps_denominator, mode_info.interlaced)?;
     // Untertitel (GstVideoCaptionMeta) in die VANC-Zeile einbetten; ohne CDPs im Puffer passiert nichts.
     if decklinkvideosink.find_property("cc-line").is_some() {
         decklinkvideosink.set_property("cc-line", crate::captions::DEFAULT_CC_LINE);
@@ -583,16 +627,15 @@ fn build_output(
         .and_then(|()| pipeline.add(&videoconvert_out))
         .and_then(|()| pipeline.add(&decklinkvideosink))
         .map_err(|e| format!("add video output elements: {e}"))?;
-    gst::Element::link_many([
-        &video_input.tail,
-        &videoconvert_in,
-        &videoscale,
-        &videorate,
-        &caps,
-        &videoconvert_out,
-        &decklinkvideosink,
-    ])
-    .map_err(|e| format!("link video output chain: {e}"))?;
+    if let Some(el) = &interlace_tag {
+        pipeline.add(el).map_err(|e| format!("add capssetter: {e}"))?;
+    }
+    let mut chain: Vec<&gst::Element> = vec![&video_input.tail, &videoconvert_in, &videoscale, &videorate, &caps];
+    if let Some(el) = &interlace_tag {
+        chain.push(el);
+    }
+    chain.extend([&videoconvert_out, &decklinkvideosink]);
+    gst::Element::link_many(chain).map_err(|e| format!("link video output chain: {e}"))?;
 
     let audio_input = match audio_flow_id {
         Some(flow_id) => {
@@ -892,7 +935,8 @@ mod tests {
     #[test]
     fn unknown_mode_returns_none() {
         assert!(mode_info("bogus").is_none());
-        assert!(mode_info("1080i50").is_none(), "interlaced modes are out of scope for D10 Teil 1");
+        assert!(mode_info("1080i-bogus").is_none());
+        assert!(mode_info("pal").is_none(), "SD-576i ist Bottom Field First und wird nicht angeboten");
     }
 
     #[test]
@@ -907,6 +951,11 @@ mod tests {
             ("1080p25", 1920, 1080, 25, 1),
             ("1080p2997", 1920, 1080, 30000, 1001),
             ("1080p50", 1920, 1080, 50, 1),
+            ("1080p2398", 1920, 1080, 24000, 1001),
+            ("1080p5994", 1920, 1080, 60000, 1001),
+            ("1080i50", 1920, 1080, 25, 1),
+            ("1080i5994", 1920, 1080, 30000, 1001),
+            ("1080i60", 1920, 1080, 30, 1),
         ];
         for (mode, width, height, fps_num, fps_den) in cases {
             let info = mode_info(mode).unwrap_or_else(|| panic!("missing mode_info for {mode}"));
@@ -915,5 +964,63 @@ mod tests {
             assert_eq!(info.fps_numerator, fps_num, "{mode} fps_numerator");
             assert_eq!(info.fps_denominator, fps_den, "{mode} fps_denominator");
         }
+    }
+
+    #[test]
+    fn only_the_i_modes_are_interlaced() {
+        for m in SUPPORTED_MODES {
+            assert_eq!(mode_info(m).unwrap().interlaced, m.contains('i'), "{m}");
+        }
+    }
+
+    #[test]
+    fn mark_tff_sets_interlaced_and_tff_flags() {
+        gst::init().unwrap();
+        let mut b = gst::Buffer::new();
+        mark_tff(b.make_mut());
+        use gst_video::prelude::VideoBufferExt;
+        let f = b.video_flags();
+        assert!(f.contains(gst_video::VideoBufferFlags::INTERLACED | gst_video::VideoBufferFlags::TFF), "{f:?}");
+    }
+
+    /// Das Umetikettieren eines progressiv gelieferten Stroms als verschränkt muss ohne Fehler verhandeln.
+    #[test]
+    fn capssetter_relabels_to_interleaved_and_sets_flags() {
+        gst::init().unwrap();
+        let p = gst::parse::launch(
+            "videotestsrc num-buffers=4 ! video/x-raw,width=64,height=36,framerate=25/1 ! \
+             capssetter name=cs join=true replace=false caps=video/x-raw,interlace-mode=interleaved ! fakesink name=sink sync=false",
+        )
+        .unwrap()
+        .downcast::<gst::Pipeline>()
+        .unwrap();
+        let seen = Arc::new(Mutex::new((0u32, 0u32)));
+        let seen_p = seen.clone();
+        p.by_name("cs").unwrap().static_pad("src").unwrap().add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+            if let Some(gst::PadProbeData::Buffer(b)) = &mut info.data {
+                mark_tff(b.make_mut());
+            }
+            gst::PadProbeReturn::Ok
+        });
+        p.by_name("sink").unwrap().static_pad("sink").unwrap().add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+            if let Some(gst::PadProbeData::Buffer(b)) = &info.data {
+                let mut s = seen_p.lock().unwrap();
+                s.0 += 1;
+                use gst_video::prelude::VideoBufferExt;
+                if b.video_flags().contains(gst_video::VideoBufferFlags::TFF) {
+                    s.1 += 1;
+                }
+            }
+            gst::PadProbeReturn::Ok
+        });
+        p.set_state(gst::State::Playing).unwrap();
+        let bus = p.bus().unwrap();
+        let msg = bus.timed_pop_filtered(gst::ClockTime::from_seconds(10), &[gst::MessageType::Eos, gst::MessageType::Error]);
+        let caps = p.by_name("sink").unwrap().static_pad("sink").unwrap().current_caps();
+        p.set_state(gst::State::Null).unwrap();
+        assert!(matches!(msg.as_ref().map(|m| m.type_()), Some(gst::MessageType::Eos)), "msg = {msg:?}");
+        let (n, tff) = *seen.lock().unwrap();
+        assert_eq!((n, tff), (4, 4));
+        assert_eq!(caps.unwrap().structure(0).unwrap().get::<String>("interlace-mode").unwrap(), "interleaved");
     }
 }

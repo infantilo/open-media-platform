@@ -322,6 +322,7 @@ fn video_flow_def(
     height: u32,
     grain_rate_numerator: u32,
     grain_rate_denominator: u32,
+    interlaced_tff: bool,
 ) -> String {
     // Format/Layout 1:1 nach third_party/mxl/lib/tests/data/v210_flow.json
     // (offizielles Beispiel des MXL-Projekts) — Y in voller Breite, Cb/Cr
@@ -349,7 +350,7 @@ fn video_flow_def(
         },
         "frame_width": width,
         "frame_height": height,
-        "interlace_mode": "progressive",
+        "interlace_mode": if interlaced_tff { "interlaced_tff" } else { "progressive" },
         // IS-04 v1.3: colorspace + transfer_characteristic (SDR/HLG/PQ), Prozessvorgabe OMP_COLORIMETRY
         "colorspace": crate::colorimetry::Colorimetry::process_default().colorspace,
         "transfer_characteristic": crate::colorimetry::Colorimetry::process_default().transfer,
@@ -479,6 +480,29 @@ impl MxlVideoOutput {
             false,
             false,
             RateMode::Videorate,
+            false,
+        )
+    }
+
+    /// Wie [`Self::new`] für Halbbild-Quellen (z. B. 1080i50 einer Capture-Karte): Flow-Definition
+    /// `interlace_mode: interlaced_tff`; der Grain bleibt das ganze Bild (Zeilen beider Halbbilder verschränkt).
+    /// Bottom Field First wird bewusst nicht angeboten (SDI-Normen 1080i sind TFF).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_interlaced_tff(
+        pipeline: &gst::Pipeline,
+        upstream: &gst::Element,
+        context: Arc<MxlContext>,
+        flow_id: &str,
+        label: &str,
+        width: u32,
+        height: u32,
+        framerate_numerator: u32,
+        framerate_denominator: u32,
+        output_delay: Arc<AtomicU64>,
+    ) -> Result<Self, String> {
+        Self::new_impl(
+            pipeline, upstream, context, flow_id, label, width, height, framerate_numerator, framerate_denominator,
+            output_delay, false, false, RateMode::Videorate, true,
         )
     }
 
@@ -516,6 +540,7 @@ impl MxlVideoOutput {
             false,
             true,
             RateMode::Videorate,
+            false,
         )
     }
 
@@ -557,6 +582,7 @@ impl MxlVideoOutput {
             true,
             false,
             RateMode::Videorate,
+            false,
         )
     }
 
@@ -593,6 +619,7 @@ impl MxlVideoOutput {
             false,
             false,
             rate_mode,
+            false,
         )
     }
 
@@ -623,6 +650,8 @@ impl MxlVideoOutput {
         paced: bool,
         rgba_hop: bool,
         rate_mode: RateMode,
+        // `true`: Halbbilder, Top Field First (`interlaced_tff`) — ein Grain ist das ganze Bild mit verschränkten Zeilen.
+        interlaced_tff: bool,
     ) -> Result<Self, String> {
         let rate_mode = framerate::resolve(rate_mode);
         let videoconvert = gst::ElementFactory::make("videoconvert")
@@ -832,6 +861,7 @@ impl MxlVideoOutput {
             height,
             framerate_numerator,
             framerate_denominator,
+            interlaced_tff,
         );
         let (writer, _config, was_created) = match context.instance.create_flow_writer(&flow_def, None) {
             Ok(w) => w,
@@ -1434,6 +1464,7 @@ pub fn audio_flow_def(flow_id: &str, label: &str, sample_rate: u32, channel_coun
         "media_type": "audio/float32",
         "sample_rate": {
             "numerator": sample_rate,
+            "denominator": 1,
         },
         "channel_count": channel_count,
         "bit_depth": 32,
@@ -3671,7 +3702,7 @@ mod tests {
             numerator: 25,
             denominator: 1,
         };
-        let flow_def = video_flow_def(FLOW_ID, "livelock-diagnostic", 640, 480, 25, 1);
+        let flow_def = video_flow_def(FLOW_ID, "livelock-diagnostic", 640, 480, 25, 1, false);
         let (writer, _config, _was_created) = write_context
             .instance
             .create_flow_writer(&flow_def, None)

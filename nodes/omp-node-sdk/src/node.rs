@@ -90,6 +90,9 @@ pub struct SenderSpec {
     /// abweichender Doku-Formulierung — s. `docs/decisions.md`). Leer
     /// (Default) verhält sich unverändert wie bisher.
     pub tags: HashMap<String, Vec<String>>,
+    /// Halbbild-Quelle (Top Field First): die IS-04-Flow-Ressource meldet `interlaced_tff` statt `progressive`
+    /// (nur für `FlowSpec::Video` relevant). Default `false`.
+    pub interlaced_tff: bool,
 }
 
 /// Flow-Angaben für einen MXL-Sender (`SenderSpec::flow`), Video **oder**
@@ -400,7 +403,7 @@ fn build_sender_parts(
                         ..
                     } => {
                         source_out = Some(Source::new_video(&source_id, &label, device_id));
-                        flow_out = Some(FlowResource::Video(Flow::new_video(
+                        let mut flow = Flow::new_video(
                             &flow_id,
                             &label,
                             device_id,
@@ -409,7 +412,11 @@ fn build_sender_parts(
                             *frame_height,
                             *grain_rate_numerator,
                             *grain_rate_denominator,
-                        )));
+                        );
+                        if spec.interlaced_tff {
+                            flow.interlace_mode = "interlaced_tff".to_string();
+                        }
+                        flow_out = Some(FlowResource::Video(flow));
                     }
                     FlowSpec::Audio {
                         sample_rate_numerator,

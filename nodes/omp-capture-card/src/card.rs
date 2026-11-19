@@ -185,13 +185,21 @@ fn norm(s: &str) -> String {
 }
 
 /// Passenden Hersteller-Nick für Auflösung/Bildrate aus der Enum-Liste wählen. Erkennt Schreibweisen wie
-/// `1080p25`, `1080p-2500`, `1080p2997`, `720p-5994`; Halbbilder (`i`) zählen nicht, weil OMP progressiv arbeitet.
+/// `1080p25`, `1080p-2500`, `1080p2997`, `720p-5994`; Halbbilder (`i`) zählen hier nicht (siehe
+/// [`pick_mode_nick_ex`] für Halbbild-Modi).
 pub fn pick_mode_nick(nicks: &[String], height: u32, num: u32, den: u32) -> Option<String> {
-    let fps = num as f64 / den as f64;
+    pick_mode_nick_ex(nicks, height, num, den, false)
+}
+
+/// Wie [`pick_mode_nick`]; `interlaced`: Halbbildmodus. `num/den` ist immer die BILDrate (1080i50 = 25/1), die
+/// Hersteller-Nicks nennen aber die HALBBILDrate (`1080i50`, `1080i-5000`, `1080i5994`) — deshalb dort verdoppelt.
+pub fn pick_mode_nick_ex(nicks: &[String], height: u32, num: u32, den: u32, interlaced: bool) -> Option<String> {
+    let fps = num as f64 / den as f64 * if interlaced { 2.0 } else { 1.0 };
+    let l = if interlaced { 'i' } else { 'p' };
     let x100 = (fps * 100.0).round() as u32; // 25 → 2500, 29.97 → 2997, 59.94 → 5994
-    let mut wanted = vec![format!("{height}p{x100:04}"), format!("{height}p{}", x100)];
+    let mut wanted = vec![format!("{height}{l}{x100:04}"), format!("{height}{l}{}", x100)];
     if x100 % 100 == 0 {
-        wanted.push(format!("{height}p{}", x100 / 100));
+        wanted.push(format!("{height}{l}{}", x100 / 100));
     }
     // Ganzzahl-Schreibweise nur, wenn die Rate wirklich ganzzahlig ist: 29.97 darf nie "1080p30" treffen.
     nicks.iter().find(|n| {
@@ -202,7 +210,7 @@ pub fn pick_mode_nick(nicks: &[String], height: u32, num: u32, den: u32) -> Opti
 
 /// Setzt den Videomodus. DeckLink: OMP-Name = GStreamer-Nick (unverändert). Andere: Nick aus der
 /// Enum-Liste des Elements zuordnen; ohne `mode`-Property (z. B. Formaterkennung am Eingang) ist das kein Fehler.
-pub fn set_mode(el: &gst::Element, omp_mode: &str, height: u32, num: u32, den: u32) -> Result<(), String> {
+pub fn set_mode(el: &gst::Element, omp_mode: &str, height: u32, num: u32, den: u32, interlaced: bool) -> Result<(), String> {
     if backend().is_decklink() {
         el.set_property_from_str("mode", omp_mode);
         return Ok(());
@@ -220,11 +228,12 @@ pub fn set_mode(el: &gst::Element, omp_mode: &str, height: u32, num: u32, den: u
     if backend().props.iter().any(|(k, _)| k == "mode") {
         return Ok(());
     }
-    match pick_mode_nick(&nicks, height, num, den) {
+    match pick_mode_nick_ex(&nicks, height, num, den, interlaced) {
         Some(n) => set_checked(el, "mode", &n),
         None => Err(format!(
-            "kein Modus für {height}p{:.2} unter den Modi der Karte {nicks:?} — mit OMP_CARD_PROPS mode=<Nick> festlegen",
-            num as f64 / den as f64
+            "kein Modus für {height}{}{:.2} unter den Modi der Karte {nicks:?} — mit OMP_CARD_PROPS mode=<Nick> festlegen",
+            if interlaced { "i" } else { "p" },
+            num as f64 / den as f64 * if interlaced { 2.0 } else { 1.0 }
         )),
     }
 }
@@ -267,6 +276,10 @@ mod tests {
         assert_eq!(pick_mode_nick(&aja, 720, 60000, 1001).unwrap(), "720p-5994");
         // Halbbild-Modus ist kein progressiver Treffer.
         assert_eq!(pick_mode_nick(&v(&["1080i-5000"]), 1080, 50, 1), None);
+        // Halbbild: Bildrate 25/1 ↔ Halbbildrate 50 im Hersteller-Nick
+        assert_eq!(pick_mode_nick_ex(&v(&["1080i-5000", "1080p-2500"]), 1080, 25, 1, true).unwrap(), "1080i-5000");
+        assert_eq!(pick_mode_nick_ex(&v(&["1080i5994"]), 1080, 30000, 1001, true).unwrap(), "1080i5994");
+        assert_eq!(pick_mode_nick_ex(&v(&["1080p-2500"]), 1080, 25, 1, true), None);
         let short = v(&["1080p25", "1080p2997"]);
         assert_eq!(pick_mode_nick(&short, 1080, 25, 1).unwrap(), "1080p25");
         // 29,97 darf nie das ganzzahlige 30 treffen.
