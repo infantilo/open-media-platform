@@ -19,6 +19,10 @@ pub mod mpegts;
 pub mod time;
 pub mod types;
 
+/// Testserver für Tests (Feature `testserver`).
+#[cfg(feature = "testserver")]
+pub mod testserver;
+
 /// API-Version, gegen die dieses Crate gebaut ist (Entscheidung D-T4).
 pub const API_VERSION: &str = "8.2";
 /// Hauptversion; ein Dienst mit anderer Hauptversion wird abgelehnt (D-T4).

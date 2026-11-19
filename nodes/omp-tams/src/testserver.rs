@@ -1,10 +1,10 @@
-//! Testserver, der die TAMS-API 8.2 nachstellt (nur, was der Client nutzt). Kein Ersatz für die Prüfung gegen
+//! Testserver (Feature `testserver`), der die TAMS-API 8.2 nachstellt (nur, was der Client nutzt). Kein Ersatz für die Prüfung gegen
 //! eine echte Installation, aber er setzt die in der Spezifikation genannten Regeln durch: keine Überlappung (400),
 //! schreibgeschützter Flow (403), Stapel mit Fehlerliste (200), Seitenabruf (`Link`, `X-Paging-NextKey`),
 //! nur reservierte Objects dürfen hochgeladen und registriert werden, Anmeldung je Art.
 #![allow(dead_code)]
 
-use omp_tams::time::TimeRange;
+use crate::time::TimeRange;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};

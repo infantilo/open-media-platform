@@ -1892,10 +1892,25 @@ dependencies = [
 name = "omp-tams"
 version = "0.1.0"
 dependencies = [
+ "omp-tams",
  "serde",
  "serde_json",
  "tiny_http",
  "ureq",
+]
+
+[[package]]
+name = "omp-tams-writer"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "gstreamer-app",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "omp-tams",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

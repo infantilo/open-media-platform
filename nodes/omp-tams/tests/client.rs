@@ -1,8 +1,6 @@
 //! Der Client gegen den Testserver (`tests/common`), der die Regeln der Spezifikation 8.2 nachstellt.
 
-mod common;
-
-use common::Fake;
+use omp_tams::testserver::Fake;
 use omp_tams::auth::{Auth, Secret};
 use omp_tams::client::{Client, ClientConfig, Deleted, Error, Registered, RetryPolicy, SegmentQuery};
 use omp_tams::time::TimeRange;

@@ -25,6 +25,7 @@ members = [
     "omp-gpio",
     "omp-ptz",
     "omp-tams",
+    "omp-tams-writer",
     "omp-midi-gateway",
     "omp-failover",
     "omp-studio-logic",

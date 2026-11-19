@@ -1,0 +1,28 @@
+[package]
+name = "omp-tams-writer"
+version = "0.1.0"
+edition = "2024"
+# Kapitel 105.3 (Aufnahme in einen TAMS-Speicher). publish=false wie bei den übrigen Node-Crates.
+publish = false
+
+[lib]
+name = "omp_tams_writer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "omp-tams-writer"
+path = "src/main.rs"
+
+[dependencies]
+gstreamer = "0.25.3"
+omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
+omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+omp-tams = { version = "0.1.0", path = "../omp-tams" }
+# Sidecar-Dateien der Warteschlange und Parameter (beide schon im Baum, Minimal-Dependency-Regel)
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync"] }
+
+[dev-dependencies]
+omp-tams = { version = "0.1.0", path = "../omp-tams", features = ["testserver"] }
+gstreamer-app = "0.25"
