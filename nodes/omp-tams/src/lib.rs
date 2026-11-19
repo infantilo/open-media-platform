@@ -3,13 +3,17 @@
 //! Normlage: TAMS-API **Version 8.2** (Repository `bbc/tams`, Commit `16c1db08`, Apache 2.0), AppNotes 0002, 0008, 0012.
 //! Entwurf und Entscheidungen: `docs/entwuerfe/ENTWURF-TAMS.md`.
 //!
-//! Dieses Crate ist **rein** (kein GStreamer, kein MXL, kein Netz). Der HTTP-Client folgt in 105.2.
+//! Dieses Crate kennt weder GStreamer noch MXL. Netzzugriff gibt es nur im [`client`] (blockierend, `ureq`).
 //!
+//! * [`auth`]   — Zugangsdaten (D-T3): Geheimnis aus Datei/Umgebung, Maskierung.
+//! * [`client`] — HTTP-Client (105.2).
 //! * [`time`]   — `Timestamp` und `TimeRange` (Format, Vergleich, Überlappung, Verschiebung).
 //! * [`index`]  — MXL-Index ↔ Timestamp, bitgleich zur MXL-Bibliothek (`IndexConversion.hpp`).
 //! * [`mpegts`] — MPEG-TS-Zeit: `ts_offset` und PTS-Überlauf (AppNote 0002).
 //! * [`types`]  — Nutzlasten (Flow, Segment, Storage, Dienst) für die JSON-API.
 
+pub mod auth;
+pub mod client;
 pub mod index;
 pub mod mpegts;
 pub mod time;

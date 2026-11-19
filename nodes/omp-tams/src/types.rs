@@ -209,7 +209,7 @@ pub struct ServiceInfo {
 }
 
 /// `POST /service/webhooks`
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebhookPost {
     pub url: String,
     pub events: Vec<String>,
@@ -219,6 +219,19 @@ pub struct WebhookPost {
     pub api_key_value: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow_ids: Option<Vec<String>>,
+}
+
+/// `Debug` zeigt den Schlüsselwert nie (D-T3: keine Geheimnisse in Protokollen).
+impl std::fmt::Debug for WebhookPost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebhookPost")
+            .field("url", &crate::auth::redact_url(&self.url))
+            .field("events", &self.events)
+            .field("api_key_name", &self.api_key_name)
+            .field("api_key_value", &self.api_key_value.as_ref().map(|_| "***"))
+            .field("flow_ids", &self.flow_ids)
+            .finish()
+    }
 }
 
 #[cfg(test)]
@@ -303,6 +316,13 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(crate::check_api_version(&i.api_version), crate::VersionCheck::NewerMinor);
+    }
+
+    #[test]
+    fn webhook_debug_hides_the_key() {
+        let h = WebhookPost { url: "https://x/hook?access_token=abc".into(), events: vec![], api_key_name: Some("X-Key".into()), api_key_value: Some("streng-geheim".into()), flow_ids: None };
+        let d = format!("{h:?}");
+        assert!(!d.contains("geheim") && !d.contains("abc"), "{d}");
     }
 
     #[test]
