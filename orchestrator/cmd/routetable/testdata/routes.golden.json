@@ -2816,6 +2816,12 @@
   },
   {
     "method": "POST",
+    "path": "/api/v1/workflows/{id}/runtime-roles",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
     "path": "/api/v1/workflows/{id}/start",
     "auth": "verb:Admin",
     "domain": "core"
