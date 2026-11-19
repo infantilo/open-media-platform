@@ -63,6 +63,18 @@ fn clock_lines(host: &str) -> String {
     format!("a=ts-refclk:{refclk}\r\na=mediaclk:direct=0\r\n")
 }
 
+/// Pacing-Rate des Video-`udpsink`s in Bit/s: die Bilddaten (`width·height·Bit je Pixel·Bildrate`, 4:2:2 = 2 Abtastwerte je
+/// Pixel) samt RTP/UDP/IP-Kopf (~4 %) gleichmäßig auf ~90 % der Bildperiode verteilt, statt als Stoß am Anfang. Das ist die
+/// Software-Näherung an ST 2110-21 (breit): `udpsink max-bitrate` taktet jedes Paket. 0 = aus (`OMP_2110_PACING=off`).
+fn video_pacing_bitrate(width: i32, height: i32, depth: u8, fnum: i32, fden: i32) -> u64 {
+    if std::env::var("OMP_2110_PACING").is_ok_and(|v| v.eq_ignore_ascii_case("off")) {
+        return 0;
+    }
+    let bits_per_pixel = 2.0 * depth as f64;
+    let fps = fnum as f64 / (fden.max(1)) as f64;
+    (width as f64 * height as f64 * bits_per_pixel * fps * 1.04 / 0.9).ceil() as u64
+}
+
 /// Colorimetrie für `a=fmtp`: HD und größer BT.709, darunter BT.601 (ST 2110-20 / RFC 4175).
 fn sdp_colorimetry(height: i32) -> &'static str {
     if height >= 720 { "BT709" } else { "BT601-5" }
@@ -155,6 +167,10 @@ impl St2110VideoOutput {
             .build()
             .map_err(|e| format!("valve: {e}"))?;
         let (udpsink, _) = crate::kbypass::make_sink("st2110_video_sink", initial_host, initial_port)?;
+        let pace = video_pacing_bitrate(width, height, depth, framerate_numerator, framerate_denominator);
+        if pace > 0 && udpsink.find_property("max-bitrate").is_some() {
+            udpsink.set_property("max-bitrate", pace);
+        }
 
         pipeline
             .add(&videoconvert)
@@ -1082,6 +1098,49 @@ mod tests {
         wp.set_state(gst::State::Null).unwrap();
         rp.set_state(gst::State::Null).unwrap();
         assert!(got.load(Ordering::Relaxed), "kein Bild über den intakten Schenkel");
+    }
+
+    #[test]
+    fn pacing_rate_spreads_the_frame_over_most_of_the_period() {
+        // 1080p25, 10 Bit: 1920·1080·20·25 = 1,037 Gbit/s Nutzdaten → mit Kopf und 90 % ≈ 1,2 Gbit/s
+        let r = video_pacing_bitrate(1920, 1080, 10, 25, 1);
+        assert!((1_150_000_000..1_250_000_000).contains(&r), "{r}");
+        // 8 Bit braucht 20 % weniger
+        assert!(video_pacing_bitrate(1920, 1080, 8, 25, 1) < r);
+    }
+
+    /// Das Pacing darf die Strecke nicht stören: 10-Bit-Bilder kommen mit gesetztem `max-bitrate` an.
+    #[test]
+    fn paced_sender_sets_max_bitrate_and_still_delivers() {
+        gst::init().expect("gst::init");
+        let wp = gst::Pipeline::new();
+        let src = gst::ElementFactory::make("videotestsrc").property("is-live", true).build().unwrap();
+        wp.add(&src).unwrap();
+        let out = St2110VideoOutput::new_with_depth(&wp, &src, "127.0.0.1", 52370, 320, 180, 25, 1, 10).unwrap();
+        assert!(out.udpsink.property::<u64>("max-bitrate") > 0);
+        out.set_active(true);
+        let rp = gst::Pipeline::new();
+        let input = St2110VideoInput::new_with_depth(&rp, 52370, 320, 180, 25, 1, None, 10).unwrap();
+        let got = Arc::new(AtomicBool::new(false));
+        let g = got.clone();
+        input.tail.static_pad("src").unwrap().add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+            g.store(true, Ordering::Relaxed);
+            gst::PadProbeReturn::Remove
+        });
+        let sink = gst::ElementFactory::make("fakesink").property("sync", false).build().unwrap();
+        rp.add(&sink).unwrap();
+        input.tail.link(&sink).unwrap();
+        rp.set_state(gst::State::Playing).unwrap();
+        wp.set_state(gst::State::Playing).unwrap();
+        for _ in 0..40 {
+            if got.load(Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        wp.set_state(gst::State::Null).unwrap();
+        rp.set_state(gst::State::Null).unwrap();
+        assert!(got.load(Ordering::Relaxed), "kein Bild über den gepacten Sender");
     }
 
     #[test]

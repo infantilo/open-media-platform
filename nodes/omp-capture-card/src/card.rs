@@ -187,6 +187,7 @@ fn norm(s: &str) -> String {
 /// Passenden Hersteller-Nick für Auflösung/Bildrate aus der Enum-Liste wählen. Erkennt Schreibweisen wie
 /// `1080p25`, `1080p-2500`, `1080p2997`, `720p-5994`; Halbbilder (`i`) zählen hier nicht (siehe
 /// [`pick_mode_nick_ex`] für Halbbild-Modi).
+#[allow(dead_code)] // nur noch von den Tests genutzt; der Aufrufpfad ist `pick_mode_nick_ex`
 pub fn pick_mode_nick(nicks: &[String], height: u32, num: u32, den: u32) -> Option<String> {
     pick_mode_nick_ex(nicks, height, num, den, false)
 }
