@@ -1009,7 +1009,7 @@ Mehr-Host-Verifikation, braucht einen zweiten physischen Host), Teil 4
 automatische Placement-Auswahl Fabrics vs. ST2110/SRT, Katalog-Eintrag
 für den Gateway (bisher nur von Hand startbar).
 
-**Nachtrag 2026-09-17 (Qvest-Gap-Analyse-Rückfrage "können wir
+**Nachtrag 2026-09-17 (Gap-Analyse-Rückfrage "können wir
 mxl-fabrics auch?"):** kurz missverständlich als offene
 "Migrationsentscheidung eigener Relay vs. MXLs natives `mxl-fabrics`"
 dargestellt — das ist bereits seit der Grundsatzentscheidung oben

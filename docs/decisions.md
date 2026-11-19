@@ -24987,11 +24987,11 @@ omp-mediaio-Beispieldateien sauber (keine Treffer mehr).
 **Dateien:** `ARCHITECTURE.md` §6.5/§9/§10, `docs/decisions.md`
 (2026-07-11-Eintrag, Nachtrag 138).
 
-## 2026-09-17 (Nachtrag 229) — MXL-Transport auf AMWA BCP-007-03 v1.0.0 umgestellt (Punkt 1 der Qvest-Gap-Analyse)
+## 2026-09-17 (Nachtrag 229) — MXL-Transport auf AMWA BCP-007-03 v1.0.0 umgestellt (Punkt 1 der Gap-Analyse)
 
 **Nutzeranlass:** Fortsetzung der DMF/MXL-Standards-Recherche (Nachtrag
 227/228-Umfeld): "recherchiere aktuellste Normen... was müssen wir noch
-implementieren, damit wir besser sind als das Qvest-Demo" identifizierte
+implementieren, damit wir besser sind als ein Branchen-Demo" identifizierte
 BCP-007-03 v1.0.0 (2026-08-21, "NMOS Support for MXL") als seit
 `is04.rs`s eigener Migrationsnotiz (`TRANSPORT_MXL`-Doc, "Migrationspunkt,
 falls AMWA/EBU später eine Standard-URN definieren") erwarteten,
@@ -24999,8 +24999,8 @@ inzwischen eingetretenen Fall. Konkreter Befund: **jeder** OMP-MXL-
 Sender/-Receiver meldete bisher `urn:x-omp:transport:mxl` (proprietär)
 UND lieferte unter diesem Transport RTP-geformte `transport_params`
 (`destination_ip`/`destination_port`/`rtp_enabled`) — ein fremder,
-BCP-007-03-konformer Controller (z. B. Skyline DataMiner xOps im
-Qvest-Showcase) hätte OMPs MXL-Endpunkte weder als solche erkannt noch
+BCP-007-03-konformer Controller (z. B. ein Fremd-Orchestrator im
+Branchen-Showcase) hätte OMPs MXL-Endpunkte weder als solche erkannt noch
 sinnvoll damit interagieren können. Nutzerauftrag: "Punkt 1 ... sowie
 Punkt 2 ... gleich umsetzen" — dieser Eintrag deckt Punkt 1.
 
@@ -25103,7 +25103,7 @@ connection.rs}`, `nodes/playout/src/main.rs`,
 `nodes/mock/internal/connection/transports.go`,
 `ui/graph/flow-canvas.ts`, `orchestrator/internal/registry/types.go`.
 
-## 2026-09-17 (Nachtrag 230) — BCP-007-03-Schema-Konformitätscheck in `contract-check` (Punkt 2 der Qvest-Gap-Analyse)
+## 2026-09-17 (Nachtrag 230) — BCP-007-03-Schema-Konformitätscheck in `contract-check` (Punkt 2 der Gap-Analyse)
 
 **Direkte Fortsetzung von Nachtrag 229.** Vor der Umsetzung per
 `AskUserQuestion` geklärt: das offizielle AMWA-`nmos-testing`-Tool
@@ -25182,7 +25182,7 @@ schema.go,checks.go,checks_test.go}`, `tools/contract-check/main.go`.
 ## 2026-09-17 (Nachtrag 231) — Richtigstellung: keine "mxl-fabrics vs. eigener Relay"-Entscheidung offen, aber ein echter Prüfpunkt gefunden
 
 **Anlass:** Nutzerfrage "mxl fabric? können wir das auch?" im
-Anschluss an die Qvest-Gap-Analyse — dort als offene
+Anschluss an die Gap-Analyse — dort als offene
 Migrationsentscheidung dargestellt ("eigener `omp-fabrics-gateway`
 gegen MXLs jetzt natives `mxl-fabrics`"). Nutzer bestätigte
 ("ja"), das als nächsten Schritt vorzumerken; vor dem Vormerken
@@ -25306,11 +25306,11 @@ Nutzers, ob das gemeldet werden soll).
 
 **Dateien:** `nodes/omp-mediaio/src/fabrics.rs`, `ARCHITECTURE.md` §6.6.
 
-## 2026-09-17 (Nachtrag 233) — GPU-Telemetrie in der Placement-Engine (Punkt 4 der Qvest-Gap-Analyse)
+## 2026-09-17 (Nachtrag 233) — GPU-Telemetrie in der Placement-Engine (Punkt 4 der Gap-Analyse)
 
 **Nutzerauftrag:** "GPU-Telemetrie im Placement jetzt umsetzen" — der
 letzte in ARCHITECTURE.md §6.1 seit D6/D7 als offen dokumentierte
-Punkt aus der Qvest-Gap-Analyse, neben NIC-Bandbreite (2026-09-02) die
+Punkt aus der Gap-Analyse, neben NIC-Bandbreite (2026-09-02) die
 vierte kontinuierlich-teilbare Ressourcendimension.
 
 **Design 1:1 am NIC-Präzedenzfall gespiegelt** (`Thresholds.NetPercent`/
