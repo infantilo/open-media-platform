@@ -229,6 +229,12 @@ counters, next to what the writer actually declares about the flow._
 </tr>
 </table>
 
+<table>
+<tr>
+<td width="33%"><img src="docs/screenshots/ptz-bedienfeld.png" width="260"><br><sub><b>PTZ camera control:</b> joystick pad with speed limit, zoom, sixteen presets (recall / store / clear; empty slots dashed), position readout. Shown against the built-in simulator — not yet tried on a real camera</sub></td>
+</tr>
+</table>
+
 ### Support and diagnostics
 
 Built so that a non-specialist can tell what is wrong and an expert gets
@@ -583,6 +589,11 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   (cross-fades at the segue point, jingles over the outro, hard fix times).
   Includes a transition editor: waveforms with draggable markers, audition,
   and a render check with the segue player's own mixer; non-destructive.
+- **omp-ptz** — PTZ camera control over VISCA-over-IP (UDP 52381), one
+  instance per camera: joystick, zoom, 16 presets, home, stop. Moves carry a
+  hold time, so the node stops the camera by itself if the control panel
+  disappears (dead-man). Includes a camera simulator; not yet verified
+  against a real camera.
 - **omp-sign-avatar** — sign language avatar (DGS): a software-rasterised
   avatar (no browser, no GPU) delivered as Fill+Key MXL for the mixer
   picture-in-picture. Takes the subtitle stream (text or CEA-608), prepares

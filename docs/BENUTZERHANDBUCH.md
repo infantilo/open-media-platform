@@ -2588,6 +2588,8 @@ Das Intercom verbindet Menschen untereinander: **Kanäle** sind gemeinsame Sprec
 
 Der Node **PTZ-Kamera** (`omp-ptz`) führt eine Kamera mit Fernsteuerung über das Netz (VISCA über IP, UDP-Port 52381). Je Kamera eine Instanz starten; die Kamera-Adresse steht im Feld **Ziel** (Adresse oder Name, optional `:Port`) und wird mit **Übernehmen** gesetzt. Das Feld **Kamera** zeigt oben, ob die Kamera antwortet; ohne Antwort (rot) sind alle Bedienelemente wirkungslos außer **STOPP**. Der Hinweis **Simulator** (gelb) bedeutet: es ist keine echte Kamera angeschlossen.
 
+![PTZ-Bedienfeld: Joystick, Zoom, Geschwindigkeit, Voreinstellungen 1 bis 16 (Simulator)](screenshots/ptz-bedienfeld.png)
+
 - **Joystick:** Maus oder Finger auf die Kreisfläche drücken und halten; je weiter außen, desto schneller. Loslassen (oder das Fenster verlassen) hält die Kamera an. Der Regler **Geschwindigkeit** begrenzt den Randwert.
 - **Zoom:** **Tele +** / **Weit −** gedrückt halten.
 - **Haltezeit:** Eine Fahrt gilt nur kurz und wird vom Bedienfeld laufend erneuert. Bricht die Verbindung zum Bedienfeld ab (Browser zu, Netz weg), hält der Node die Kamera nach der Haltezeit (Einstellungen, Standard 1000 ms) von selbst an.
