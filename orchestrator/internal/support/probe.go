@@ -1,6 +1,7 @@
 package support
 
 import (
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -48,7 +49,7 @@ func ReadProcess(pid int) (ProcessFacts, error) {
 		n, _ := strconv.ParseUint(f[0], 10, 64)
 		switch k {
 		case "Threads":
-			p.Threads = int(n)
+			p.Threads = int(min(n, math.MaxInt32))
 		case "VmRSS":
 			p.RSSBytes = n * 1024
 		}

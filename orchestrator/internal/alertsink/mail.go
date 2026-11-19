@@ -239,12 +239,18 @@ func (m *Mailer) SendTo(ctx context.Context, a Alert, to []string) error {
 			return err
 		}
 	}
-	from, _ := mail.ParseAddress(m.From)
+	from, err := mail.ParseAddress(m.From)
+	if err != nil {
+		return fmt.Errorf("ungültige Absenderadresse: %w", err)
+	}
 	if err := c.Mail(from.Address); err != nil {
 		return err
 	}
 	for _, r := range to {
-		p, _ := mail.ParseAddress(r)
+		p, err := mail.ParseAddress(r)
+		if err != nil {
+			return fmt.Errorf("ungültige Empfängeradresse %q: %w", r, err)
+		}
 		if err := c.Rcpt(p.Address); err != nil {
 			return err
 		}

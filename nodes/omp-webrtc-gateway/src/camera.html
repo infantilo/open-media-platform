@@ -411,7 +411,9 @@ const hasRetour = !!(monitorBase && monitorToken);
 // Zugang des Intercom-Dienstes). Sie wird nach dem Verbinden als kompaktes Panel eingebettet (?embed=1). Fehlt sie, läuft die
 // Seite unverändert.
 const icUrl = (params.get('icUrl') || '').trim();
-const hasIntercom = /^https?:\/\/[^\s]+$/i.test(icUrl);
+// URL parsen und nur die normalisierte Form weiterverwenden (kein javascript:/data:, kein Rohstring in src/href).
+const icParsed = (() => { try { const u = new URL(icUrl); return (u.protocol === 'http:' || u.protocol === 'https:') ? u : null; } catch (_) { return null; } })();
+const hasIntercom = icParsed !== null;
 const whepUrl = hasRetour ? monitorBase + '/whep?token=' + encodeURIComponent(monitorToken) : '';
 
 let pc = null, camStream = null, sendStream = null, wakeLock = null, drawing = false, pollTimer = null;
@@ -609,9 +611,11 @@ async function start() {
     $('retourConnRow').hidden = !hasRetour;
     $('camLabel').hidden = !hasRetour; // nur bei zwei Kacheln braucht es Beschriftung, sonst eindeutig
     if (hasIntercom) {
-      const ic = icUrl + (icUrl.includes('?') ? '&' : '?') + 'embed=1&lang=' + LANG;
-      $('icFrame').src = ic;
-      $('icOpen').href = icUrl;
+      const icEmbed = new URL(icParsed.href);
+      icEmbed.searchParams.set('embed', '1');
+      icEmbed.searchParams.set('lang', LANG);
+      $('icFrame').src = icEmbed.href;
+      $('icOpen').href = icParsed.href;
       $('icBox').hidden = false;
       document.body.classList.add('has-ic');
     }

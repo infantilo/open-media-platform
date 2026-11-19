@@ -639,7 +639,9 @@ func (m *Module) hUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tmp := dst + ".part"
-	f, err := os.Create(tmp)
+	// O_EXCL folgt keinem Symlink am Zielnamen; ein Rest eines abgebrochenen Uploads wird vorher entfernt.
+	_ = os.Remove(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		writeErr(w, 500, err)
 		return
