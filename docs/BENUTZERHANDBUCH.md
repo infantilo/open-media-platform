@@ -325,6 +325,8 @@ derselben Verkabelung":
 
 ![Workflows: „Regie 1" mit sechs Rollen, gestartet, mit vier Zeitplänen](screenshots/workflows.png)
 
+**Aufbau der Kachel (feste Felder):** Oben stehen Titel und Status (mit Leuchtpunkt, pulsierend bei laufenden Zuständen), darunter Kennzahlen als Chips (Rollen, Hosts, Kategorie, Format, Zeitpläne, Tags), die Beschreibung und — falls vorhanden — Fehler und gehaltene Rollen. Der **Plan** (Rollen und Hosts) ist eingeklappt und öffnet sich per Klick; er streckt die Karte nicht. Unten stehen immer an derselben Stelle **Start/Fortsetzen, Stop und Pausieren** in drei gleich breiten Feldern und darunter **Bearbeiten, Grafisch, Duplizieren, Exportieren, Löschen**. Nicht mögliche Aktionen sind abgedunkelt, bleiben aber an ihrem Platz. Oben im Reiter filtern **Status-Pillen mit Zähler** (Läuft/Gestoppt/Pausiert/Fehler), die Suche und die Kategorie.
+
 Jede Workflow-Kachel zeigt Namen, Status und — nach Hosts gruppiert — ihre
 Rollen: je Host ein Block mit den Rollen, die dort laufen (bei einem
 gestoppten Workflow: laufen würden), Node-Typ, ob der Host fest vorgegeben

@@ -208,6 +208,89 @@ interface ExportedWorkflow {
   bindings?: ExportedBinding[];
 }
 
+// Überarbeitung 2026-11-19 (Nutzerwunsch: die Knöpfe je Workflow sprangen je nach Zahl der Rollen): jede Karte hat
+// feste Bänder — Kopf, Kennzahlen, Inhalt mit fester Höhe (der Plan klappt auf, statt die Karte zu strecken) und einen
+// Fuß, der immer unten steht: Start/Stop/Pause in drei gleich breiten Feldern, darunter fünf feste Werkzeugfelder.
+// Deaktivierte Knöpfe bleiben an ihrem Platz. Status → Gruppe für die Filter-Pillen.
+type StatusGroup = "running" | "stopped" | "paused" | "failed";
+function statusGroup(status: string): StatusGroup {
+  if (status === "started" || status === "starting" || status === "stopping") return "running";
+  if (status === "paused" || status === "pausing") return "paused";
+  if (status === "failed") return "failed";
+  return "stopped";
+}
+
+const STATUS_GROUP_ORDER: StatusGroup[] = ["running", "stopped", "paused", "failed"];
+const GROUP_COLORS: Record<StatusGroup, string> = {
+  running: "var(--omp-preset)",
+  stopped: "var(--omp-text-dim)",
+  paused: "var(--omp-info)",
+  failed: "var(--omp-error)",
+};
+
+const WF_STYLE_ID = "omp-wf-style";
+const WF_CSS = `
+.wf-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:var(--omp-space-2); margin-bottom:var(--omp-space-3); }
+.wf-toolbar .wf-title { display:flex; align-items:baseline; gap:10px; margin-right:auto; }
+.wf-toolbar .wf-count { font-size:var(--omp-font-size-sm); color:var(--omp-text-dim); }
+.wf-toolbar label.wf-import { font-size:12px; cursor:pointer; border:1px solid var(--omp-border); border-radius:var(--omp-radius); padding:5px 10px; background:var(--omp-surface-raised); }
+.wf-toolbar label.wf-import:hover { border-color:var(--omp-info); }
+.wf-options { display:flex; flex-wrap:wrap; align-items:center; gap:var(--omp-space-2); margin-bottom:var(--omp-space-3); }
+.wf-options .wf-bind { font-size:11px; color:var(--omp-text-dim); cursor:pointer; display:inline-flex; align-items:center; gap:4px; margin-left:auto; }
+.wf-pills { display:inline-flex; gap:6px; flex-wrap:wrap; }
+.wf-pill { display:inline-flex; align-items:center; gap:6px; font-size:12px; padding:3px 10px; border-radius:999px; cursor:pointer;
+  background:var(--omp-surface-raised); border:1px solid var(--omp-border); color:var(--omp-text-dim); }
+.wf-pill b { font-weight:700; color:var(--omp-text); }
+.wf-pill .wf-dot { width:8px; height:8px; border-radius:50%; background:var(--wf-c, var(--omp-text-dim)); }
+.wf-pill[aria-pressed="true"] { border-color:var(--wf-c, var(--omp-info)); color:var(--omp-text); box-shadow:0 0 0 1px var(--wf-c, var(--omp-info)) inset; }
+.wf-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:var(--omp-space-3); align-items:stretch; }
+.wf-card { --wf-c:var(--omp-text-dim); position:relative; display:flex; flex-direction:column; gap:10px; padding:14px 16px 12px; min-height:300px;
+  background:linear-gradient(180deg, color-mix(in srgb, var(--wf-c) 9%, var(--omp-surface)) 0, var(--omp-surface) 120px);
+  border:1px solid var(--omp-border); border-top:3px solid var(--wf-c); border-radius:calc(var(--omp-radius) + 4px);
+  box-shadow:0 1px 2px rgba(0,0,0,.25); transition:box-shadow .15s, transform .15s, border-color .15s; }
+.wf-card:hover { box-shadow:0 8px 26px rgba(0,0,0,.35); transform:translateY(-1px); border-color:color-mix(in srgb, var(--wf-c) 45%, var(--omp-border)); }
+.wf-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; min-height:44px; }
+.wf-head .wf-name { font-size:15px; font-weight:650; line-height:1.25; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; word-break:break-word; }
+.wf-state { flex:none; display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+  padding:3px 10px; border-radius:999px; color:var(--wf-c); border:1px solid color-mix(in srgb, var(--wf-c) 55%, transparent); background:color-mix(in srgb, var(--wf-c) 12%, transparent); }
+.wf-state i { width:8px; height:8px; border-radius:50%; background:var(--wf-c); }
+.wf-state.wf-live i { animation:wf-pulse 1.4s ease-in-out infinite; }
+@keyframes wf-pulse { 0%,100% { box-shadow:0 0 0 0 color-mix(in srgb, var(--wf-c) 70%, transparent); } 50% { box-shadow:0 0 0 5px transparent; } }
+.wf-facts { display:flex; flex-wrap:wrap; gap:6px; min-height:24px; align-content:flex-start; }
+.wf-chip { font-size:11px; padding:2px 9px; border-radius:999px; background:var(--omp-surface-raised); border:1px solid var(--omp-border); color:var(--omp-text-dim); white-space:nowrap; }
+.wf-chip.wf-strong { color:var(--omp-text); }
+.wf-desc { font-size:12px; color:var(--omp-text-dim); line-height:1.4; min-height:34px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.wf-body { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; gap:8px; }
+.wf-plan > summary { cursor:pointer; font-size:12px; font-weight:600; color:var(--omp-text-dim); list-style:none; display:flex; align-items:center; gap:6px; padding:4px 0; user-select:none; }
+.wf-plan > summary::-webkit-details-marker { display:none; }
+.wf-plan > summary::before { content:"▸"; transition:transform .15s; display:inline-block; }
+.wf-plan[open] > summary::before { transform:rotate(90deg); }
+.wf-plan[open] > summary { color:var(--omp-text); }
+.wf-plan .wf-plan-inner { max-height:230px; overflow:auto; padding-top:4px; }
+.wf-err { color:var(--omp-error); font-size:11px; white-space:pre-wrap; border-left:3px solid var(--omp-error); padding:3px 8px; background:rgba(239,83,80,.08); border-radius:0 4px 4px 0; max-height:80px; overflow:auto; }
+.wf-foot { margin-top:auto; display:flex; flex-direction:column; gap:8px; padding-top:10px; border-top:1px solid var(--omp-border); }
+.wf-run { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
+.wf-run button { height:38px; font-weight:650; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+.wf-run .wf-start:not(:disabled) { background:linear-gradient(180deg, #43a047, #2e7d32); border-color:#2e7d32; color:#fff; box-shadow:0 4px 14px rgba(67,160,71,.3); }
+.wf-run .wf-stop:not(:disabled) { background:transparent; border-color:var(--omp-error); color:var(--omp-error); }
+.wf-run .wf-stop:not(:disabled):hover { background:rgba(239,83,80,.14); }
+.wf-run .wf-pause:not(:disabled) { border-color:var(--omp-info); color:var(--omp-info); }
+.wf-tools { display:grid; grid-template-columns:repeat(5, 1fr); gap:6px; }
+.wf-tools button { height:50px; padding:4px 2px; font-size:10.5px; display:inline-flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; white-space:nowrap; overflow:hidden; }
+.wf-tools button .wf-ic, .wf-run button .wf-ic { font-size:15px; line-height:1; }
+.wf-tools .wf-del:not(:disabled) { color:var(--omp-error); border-color:color-mix(in srgb, var(--omp-error) 55%, var(--omp-border)); background:transparent; }
+.wf-tools .wf-del:not(:disabled):hover { background:rgba(239,83,80,.12); }
+@media (max-width: 520px) { .wf-grid { grid-template-columns:1fr; } }
+`;
+
+function ensureWorkflowStyles() {
+  if (document.getElementById(WF_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = WF_STYLE_ID;
+  style.textContent = WF_CSS;
+  document.head.appendChild(style);
+}
+
 class WorkflowsView extends HTMLElement {
   #pollHandle: number | undefined;
   #catalog: CatalogEntry[] = [];
@@ -228,6 +311,8 @@ class WorkflowsView extends HTMLElement {
   // Ausnahme, portabler Export ohne Bindungen soll der unauffällige
   // Default bleiben, auch nach einem Seiten-Reload.
   #exportWithBindings = false;
+  // Aufgeklappte Pläne (je Workflow-ID) — überleben jedes Neuzeichnen (SSE/Poll baut die Karten neu).
+  #openPlans = new Set<string>();
   // Kapitel 12 Teil 6 (§22.3 Punkte 4/7): rein darstellungsbezogen,
   // s. Definition-Doku im Backend. #formTags als Komma-getrennter
   // Freitext (einfachste Eingabe, keine eigene Tag-Chip-UI nötig für
@@ -826,7 +911,7 @@ class WorkflowsView extends HTMLElement {
   // Verhalten für den bisherigen Anwendungsfall ohne aktiven Filter).
   #matchesFilter(wf: Workflow): boolean {
     if (this.#filterCategory && wf.definition.category !== this.#filterCategory) return false;
-    if (this.#filterStatus && wf.status !== this.#filterStatus) return false;
+    if (this.#filterStatus && statusGroup(wf.status) !== this.#filterStatus) return false;
     const q = this.#searchQuery.trim().toLowerCase();
     if (!q) return true;
     const haystack = [wf.definition.title, wf.name, wf.definition.description, ...(wf.definition.tags ?? [])]
@@ -839,44 +924,25 @@ class WorkflowsView extends HTMLElement {
   #render() {
     this.replaceChildren();
 
+    ensureWorkflowStyles();
     const heading = document.createElement("div");
-    heading.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-3);";
+    heading.className = "wf-toolbar";
+    const titleBox = document.createElement("div");
+    titleBox.className = "wf-title";
     const headingTitle = document.createElement("span");
     headingTitle.className = "omp-h1";
-    headingTitle.textContent = tt("wf.8a9663", { p0: this.#workflows.length });
-    heading.appendChild(headingTitle);
-    // Nutzerauftrag 2026-09-02 ("Workflows nach demselben Muster"): "+ Neu"
-    // öffnet jetzt das Modal (s. #renderFormModal) statt die Form inline
-    // aufzuklappen — schließen läuft über #closeWorkflowForm (Modal-×,
-    // Backdrop-Klick, Escape), deshalb hier immer ein frischer Start statt
-    // eines Umschalt-Zustands mit "Abbrechen"-Beschriftung.
-    const newBtn = document.createElement("button");
-    newBtn.className = "omp-btn-primary";
-    newBtn.textContent = tt("wf.8df699");
-    newBtn.addEventListener("click", () => {
-      this.#editingId = null;
-      this.#resetForm();
-      this.#showForm = true;
-      this.#render();
-    });
-    heading.appendChild(newBtn);
+    headingTitle.textContent = tt("wf.ui.heading");
+    const countEl = document.createElement("span");
+    countEl.className = "wf-count";
+    countEl.textContent = tt("wf.ui.count", { p0: this.#workflows.length, p1: this.#workflows.filter((w) => statusGroup(w.status) === "running").length });
+    titleBox.append(headingTitle, countEl);
+    heading.appendChild(titleBox);
 
-    // Kapitel 12 Teil 6 (§22.3 Punkt 1): grafischer Entwurf statt des
-    // Text-Formulars — beide erzeugen denselben POST /api/v1/workflows,
-    // reine UX-Alternative, kein zweiter Datenpfad.
-    const designBtn = document.createElement("button");
-    designBtn.textContent = tt("wf.881fa7");
-    designBtn.style.cssText = "margin-left:6px;";
-    designBtn.addEventListener("click", () => this.#openRoleDesigner(null));
-    heading.appendChild(designBtn);
-
-    // Kapitel 12 Teil 3 (§12.3d): <label> um ein verstecktes
-    // <input type="file"> — Klick auf das Label öffnet nativ den
-    // Datei-Dialog, kein eigener Klick-Handler nötig.
+    // Kapitel 12 Teil 3 (§12.3d): <label> um ein verstecktes <input type="file"> — Klick auf das Label öffnet nativ
+    // den Datei-Dialog, kein eigener Klick-Handler nötig.
     const importLabel = document.createElement("label");
-    importLabel.textContent = tt("wf.5af5fb");
-    importLabel.style.cssText =
-      "font-size:11px;cursor:pointer;border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:2px 6px;margin-left:6px;";
+    importLabel.className = "wf-import";
+    importLabel.textContent = "⇧ " + tt("wf.5af5fb");
     const importInput = document.createElement("input");
     importInput.type = "file";
     importInput.accept = "application/json";
@@ -889,23 +955,24 @@ class WorkflowsView extends HTMLElement {
     importLabel.appendChild(importInput);
     heading.appendChild(importLabel);
 
-    // Feature-Wunsch 2026-08-13: die Backend-Unterstützung für
-    // Rollenbindungen im Export existierte bereits vollständig
-    // (Service.Export includeBindings-Parameter), war aber aus der UI
-    // heraus nie erreichbar — #exportWorkflow() liest dieses Feld.
-    const bindingsLabel = document.createElement("label");
-    bindingsLabel.style.cssText = "font-size:11px;cursor:pointer;margin-left:10px;display:inline-flex;align-items:center;gap:4px;";
-    bindingsLabel.title =
-      tt("wf.b7d029") +
-      tt("wf.196e31");
-    const bindingsCheckbox = document.createElement("input");
-    bindingsCheckbox.type = "checkbox";
-    bindingsCheckbox.checked = this.#exportWithBindings;
-    bindingsCheckbox.addEventListener("change", () => {
-      this.#exportWithBindings = bindingsCheckbox.checked;
+    // Kapitel 12 Teil 6 (§22.3 Punkt 1): grafischer Entwurf statt des Text-Formulars — beide erzeugen denselben POST
+    // /api/v1/workflows, reine UX-Alternative, kein zweiter Datenpfad.
+    const designBtn = document.createElement("button");
+    designBtn.textContent = "✎ " + tt("wf.881fa7");
+    designBtn.addEventListener("click", () => this.#openRoleDesigner(null));
+    heading.appendChild(designBtn);
+
+    // "+ Neu" öffnet das Modal (s. #renderFormModal); schließen läuft über #closeWorkflowForm.
+    const newBtn = document.createElement("button");
+    newBtn.className = "omp-btn-primary";
+    newBtn.textContent = tt("wf.8df699");
+    newBtn.addEventListener("click", () => {
+      this.#editingId = null;
+      this.#resetForm();
+      this.#showForm = true;
+      this.#render();
     });
-    bindingsLabel.append(bindingsCheckbox, tt("wf.937351"));
-    heading.appendChild(bindingsLabel);
+    heading.appendChild(newBtn);
 
     this.appendChild(heading);
 
@@ -924,9 +991,7 @@ class WorkflowsView extends HTMLElement {
     // Kapitel 12 Teil 6, Unterteil 2 (§22.3 Punkt 8) — Such-/Filterleiste
     // nur anzeigen, wenn es überhaupt etwas zu filtern gibt (bei einem
     // einzelnen Workflow wäre sie reiner Leerraum).
-    if (this.#workflows.length > 1) {
-      this.appendChild(this.#renderFilterBar());
-    }
+    this.appendChild(this.#renderFilterBar());
 
     const filtered = this.#workflows.filter((wf) => this.#matchesFilter(wf));
 
@@ -946,7 +1011,7 @@ class WorkflowsView extends HTMLElement {
     // Status-Badge, Kategorie-Icon.
     const grid = document.createElement("div");
     grid.setAttribute("data-role", "workflow-grid");
-    grid.className = "omp-card-grid";
+    grid.className = "wf-grid";
     for (const wf of filtered) {
       grid.appendChild(this.#renderWorkflowRow(wf));
     }
@@ -960,59 +1025,84 @@ class WorkflowsView extends HTMLElement {
   // ("change" statt "input" für ein Voll-Rerender, s. #renderForm).
   #renderFilterBar(): HTMLElement {
     const bar = document.createElement("div");
-    bar.style.cssText = "display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;";
+    bar.className = "wf-options";
 
-    const searchWrap = document.createElement("span");
-    searchWrap.className = "omp-search-wrap";
-    searchWrap.style.cssText = "flex:1;min-width:160px;";
-    const searchInput = document.createElement("input");
-    searchInput.className = "omp-search-input";
-    searchInput.type = "search";
-    searchInput.placeholder = tt("wf.4d0c9d");
-    searchInput.value = this.#searchQuery;
-    searchInput.style.cssText = "width:100%;box-sizing:border-box;";
-    searchInput.addEventListener("input", () => {
-      this.#searchQuery = searchInput.value;
-      this.#refreshGrid();
-    });
-    searchWrap.appendChild(searchInput);
-    bar.appendChild(searchWrap);
+    // Suche nur bei mehr als einem Workflow sinnvoll (sonst reiner Leerraum).
+    if (this.#workflows.length > 1) {
+      const searchWrap = document.createElement("span");
+      searchWrap.className = "omp-search-wrap";
+      searchWrap.style.cssText = "flex:1;min-width:180px;max-width:320px;";
+      const searchInput = document.createElement("input");
+      searchInput.className = "omp-search-input";
+      searchInput.type = "search";
+      searchInput.placeholder = tt("wf.4d0c9d");
+      searchInput.value = this.#searchQuery;
+      searchInput.style.cssText = "width:100%;box-sizing:border-box;";
+      searchInput.addEventListener("input", () => {
+        this.#searchQuery = searchInput.value;
+        this.#refreshGrid();
+      });
+      searchWrap.appendChild(searchInput);
+      bar.appendChild(searchWrap);
 
-    const categorySelect = document.createElement("select");
-    const anyCategoryOpt = document.createElement("option");
-    anyCategoryOpt.value = "";
-    anyCategoryOpt.textContent = tt("wf.111336");
-    categorySelect.appendChild(anyCategoryOpt);
-    for (const [value, label] of Object.entries(CATEGORY_LABELS)) {
-      const opt = document.createElement("option");
-      opt.value = value;
-      opt.textContent = label;
-      if (value === this.#filterCategory) opt.selected = true;
-      categorySelect.appendChild(opt);
+      // Status als Pillen mit Zähler statt eines Auswahlfelds: ein Klick, der Stand ist auf einen Blick sichtbar.
+      const pills = document.createElement("div");
+      pills.className = "wf-pills";
+      const mkPill = (group: StatusGroup | "", color: string, label: string, count: number) => {
+        const b = document.createElement("button");
+        b.className = "wf-pill";
+        b.style.setProperty("--wf-c", color);
+        b.setAttribute("aria-pressed", this.#filterStatus === group ? "true" : "false");
+        const dot = document.createElement("span");
+        dot.className = "wf-dot";
+        const strong = document.createElement("b");
+        strong.textContent = String(count);
+        b.append(dot, label + " ", strong);
+        b.addEventListener("click", () => {
+          this.#filterStatus = this.#filterStatus === group ? "" : group;
+          this.#render();
+        });
+        return b;
+      };
+      pills.appendChild(mkPill("", "var(--omp-info)", tt("wf.ui.f.all"), this.#workflows.length));
+      for (const g of STATUS_GROUP_ORDER) {
+        const n = this.#workflows.filter((w) => statusGroup(w.status) === g).length;
+        if (n === 0 && this.#filterStatus !== g) continue;
+        pills.appendChild(mkPill(g, GROUP_COLORS[g], tt(`wf.ui.g.${g}`), n));
+      }
+      bar.appendChild(pills);
+
+      const categorySelect = document.createElement("select");
+      const anyCategoryOpt = document.createElement("option");
+      anyCategoryOpt.value = "";
+      anyCategoryOpt.textContent = tt("wf.111336");
+      categorySelect.appendChild(anyCategoryOpt);
+      for (const [value, label] of Object.entries(CATEGORY_LABELS)) {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = label;
+        if (value === this.#filterCategory) opt.selected = true;
+        categorySelect.appendChild(opt);
+      }
+      categorySelect.addEventListener("change", () => {
+        this.#filterCategory = categorySelect.value;
+        this.#render();
+      });
+      bar.appendChild(categorySelect);
     }
-    categorySelect.addEventListener("change", () => {
-      this.#filterCategory = categorySelect.value;
-      this.#render();
-    });
-    bar.appendChild(categorySelect);
 
-    const statusSelect = document.createElement("select");
-    const anyStatusOpt = document.createElement("option");
-    anyStatusOpt.value = "";
-    anyStatusOpt.textContent = tt("wf.bcec0a");
-    statusSelect.appendChild(anyStatusOpt);
-    for (const value of Object.keys(STATUS_COLORS)) {
-      const opt = document.createElement("option");
-      opt.value = value;
-      opt.textContent = value;
-      if (value === this.#filterStatus) opt.selected = true;
-      statusSelect.appendChild(opt);
-    }
-    statusSelect.addEventListener("change", () => {
-      this.#filterStatus = statusSelect.value;
-      this.#render();
+    // Feature-Wunsch 2026-08-13: Rollenbindungen im Export (Service.Export includeBindings) — #exportWorkflow() liest es.
+    const bindingsLabel = document.createElement("label");
+    bindingsLabel.className = "wf-bind";
+    bindingsLabel.title = tt("wf.b7d029") + tt("wf.196e31");
+    const bindingsCheckbox = document.createElement("input");
+    bindingsCheckbox.type = "checkbox";
+    bindingsCheckbox.checked = this.#exportWithBindings;
+    bindingsCheckbox.addEventListener("change", () => {
+      this.#exportWithBindings = bindingsCheckbox.checked;
     });
-    bar.appendChild(statusSelect);
+    bindingsLabel.append(bindingsCheckbox, tt("wf.937351"));
+    bar.appendChild(bindingsLabel);
 
     return bar;
   }
@@ -1032,204 +1122,141 @@ class WorkflowsView extends HTMLElement {
   }
 
   #renderWorkflowRow(wf: Workflow): HTMLElement {
+    const color = STATUS_COLORS[wf.status] ?? "var(--omp-text-dim)";
+    const live = wf.status === "started" || wf.status === "starting" || wf.status === "stopping" || wf.status === "pausing";
     const row = document.createElement("div");
     row.setAttribute("data-role", "workflow-row");
     row.setAttribute("data-workflow-id", wf.id);
-    row.className = "omp-card";
-    // .omp-card liefert Fläche/Rahmen/Radius — nur der Status-Akzentrand
-    // links bleibt hier Inline (variiert pro Workflow, keine Klasse dafür).
-    row.style.cssText =
-      `padding:var(--omp-space-2) var(--omp-space-3);` +
-      `border-left:3px solid ${STATUS_COLORS[wf.status] ?? "var(--omp-text-dim)"};display:flex;flex-direction:column;`;
+    row.className = "wf-card";
+    row.style.setProperty("--wf-c", color);
 
-    const header = document.createElement("div");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:4px;";
+    // --- Kopf: Titel (Definition.title, sonst Name) und Status ------------------------------------------------
+    const head = document.createElement("div");
+    head.className = "wf-head";
     const title = document.createElement("span");
     title.setAttribute("data-role", "workflow-title");
-    // Kachel-Titel: Definition.title (Katalog-Metadaten), leer =
-    // Workflow-Name als Fallback (kein Bruch bestehender Workflows ohne
-    // Metadaten).
+    title.className = "wf-name";
     title.textContent = wf.definition.title || wf.name;
-    title.style.fontWeight = "600";
+    title.title = wf.definition.title || wf.name;
     const status = document.createElement("span");
     status.setAttribute("data-role", "workflow-status");
-    status.textContent = wf.status;
-    status.className = `omp-badge ${STATUS_BADGE_CLASS[wf.status] ?? ""}`.trim();
-    header.append(title, status);
-    row.appendChild(header);
+    status.className = "wf-state" + (live ? " wf-live" : "");
+    const dot = document.createElement("i");
+    status.append(dot, wf.status);
+    head.append(title, status);
+    row.appendChild(head);
 
-    // Kategorie-Icon-Platzhalter (Punkt 6/7): eine Text-Badge statt
-    // eines echten Icons — bis auf Weiteres kein Icon-Katalog vorhanden.
-    if (wf.definition.category) {
-      const categoryBadge = document.createElement("span");
-      categoryBadge.className = "omp-badge";
-      categoryBadge.style.cssText = "margin-top:2px;align-self:flex-start;";
-      categoryBadge.textContent = CATEGORY_LABELS[wf.definition.category] ?? wf.definition.category;
-      row.appendChild(categoryBadge);
-    }
-
-    if (wf.definition.description) {
-      const desc = document.createElement("div");
-      desc.style.cssText =
-        "font-size:var(--omp-font-size-xs);margin-top:2px;overflow:hidden;text-overflow:ellipsis;" +
-        "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;";
-      desc.textContent = wf.definition.description;
-      row.appendChild(desc);
-    }
-
-    if (wf.definition.tags && wf.definition.tags.length > 0) {
-      const tagsRow = document.createElement("div");
-      tagsRow.style.cssText = "display:flex;gap:3px;flex-wrap:wrap;margin-top:2px;";
-      for (const tag of wf.definition.tags) {
-        const pill = document.createElement("span");
-        pill.style.cssText =
-          "font-size:10px;color:var(--omp-text-dim);background:var(--omp-surface-raised);border-radius:8px;padding:0 6px;";
-        pill.textContent = tag;
-        tagsRow.appendChild(pill);
-      }
-      row.appendChild(tagsRow);
-    }
-
-    const holds = this.#renderHolds(wf);
-    if (holds) {
-      holds.style.marginTop = "6px";
-      row.appendChild(holds);
-    }
-    row.appendChild(this.#renderPlan(wf));
-
-    // Kapitel 15: nur anzeigen, wenn tatsächlich gesetzt — die meisten
-    // Workflows laufen weiterhin mit den Node-eigenen Defaults.
+    // --- Kennzahlen: Rollen, Hosts, Format, Zeitpläne, Kategorie, Tags ---------------------------------------
     const settings = wf.definition.settings;
-    if (settings?.programFormat || settings?.domain) {
-      const res = document.createElement("div");
-      res.style.cssText = "color:var(--omp-text-dim);font-size:11px;margin-top:2px;";
-      res.textContent = [settings.programFormat, settings.domain ? `⬡ ${settings.domain}` : ""].filter(Boolean).join(" · ");
-      row.appendChild(res);
+    const plan = this.#plans.get(wf.id);
+    const facts = document.createElement("div");
+    facts.className = "wf-facts";
+    const addChip = (text: string, strong = false, tip = "") => {
+      const c = document.createElement("span");
+      c.className = "wf-chip" + (strong ? " wf-strong" : "");
+      c.textContent = text;
+      if (tip) c.title = tip;
+      facts.appendChild(c);
+    };
+    const roleCount = wf.definition.roles.length;
+    addChip(tt("wf.ui.roles", { p0: roleCount }), true);
+    if (plan) {
+      const hostCount = groupByHost(plan).length;
+      if (hostCount > 0) addChip(tt("wf.ui.hosts", { p0: hostCount }), true);
     }
-
-    // D7 Teil 2: kompakte Hinweise statt vollem Zeitplan-Text — Details
-    // stehen im Formular ("Bearbeiten").
-    const badges: string[] = [];
-    if (settings?.confirmStop) badges.push(tt("wf.91d470"));
-    if (settings?.targetLatencyFrames) badges.push(tt("wf.7b3fe9", { p0: settings.targetLatencyFrames }));
+    if (wf.definition.category) addChip(CATEGORY_LABELS[wf.definition.category] ?? wf.definition.category);
+    if (settings?.programFormat) addChip(settings.programFormat);
+    if (settings?.domain) addChip(`⬡ ${settings.domain}`);
+    if (settings?.confirmStop) addChip(tt("wf.91d470"));
+    if (settings?.targetLatencyFrames) addChip(tt("wf.7b3fe9", { p0: settings.targetLatencyFrames }));
     const scheduleCount = wf.definition.schedules?.length ?? 0;
-    if (scheduleCount > 0) badges.push(tt("wf.46f0b8", { p0: scheduleCount, p1: scheduleCount === 1 ? "" : "e" }));
-    if (badges.length > 0) {
-      const badgeRow = document.createElement("div");
-      badgeRow.style.cssText = "color:var(--omp-text-dim);font-size:11px;margin-top:2px;";
-      badgeRow.textContent = badges.join(" · ");
-      row.appendChild(badgeRow);
-    }
+    if (scheduleCount > 0) addChip("⏱ " + tt("wf.46f0b8", { p0: scheduleCount, p1: scheduleCount === 1 ? "" : "e" }));
+    for (const tag of wf.definition.tags ?? []) addChip("#" + tag);
+    row.appendChild(facts);
 
+    // --- Beschreibung: immer zwei Zeilen Platz, damit Karten gleich hoch beginnen ------------------------
+    const desc = document.createElement("div");
+    desc.className = "wf-desc";
+    desc.textContent = wf.definition.description ?? "";
+    row.appendChild(desc);
+
+    // --- Inhalt: Fehler, gehaltene Rollen, Plan (eingeklappt — er streckt die Karte nicht) ----------------
+    const body = document.createElement("div");
+    body.className = "wf-body";
     if (wf.error) {
       const err = document.createElement("div");
-      err.style.cssText = "color:var(--omp-error);font-size:11px;margin-top:2px;white-space:pre-wrap;";
+      err.className = "wf-err";
       err.textContent = wf.error;
-      row.appendChild(err);
+      body.appendChild(err);
     }
+    const holds = this.#renderHolds(wf);
+    if (holds) body.appendChild(holds);
+    const details = document.createElement("details");
+    details.className = "wf-plan";
+    details.open = this.#openPlans.has(wf.id);
+    const summary = document.createElement("summary");
+    summary.textContent = tt("wf.ui.plan", { p0: roleCount });
+    const inner = document.createElement("div");
+    inner.className = "wf-plan-inner";
+    inner.appendChild(this.#renderPlan(wf));
+    details.append(summary, inner);
+    details.addEventListener("toggle", () => {
+      if (details.open) this.#openPlans.add(wf.id);
+      else this.#openPlans.delete(wf.id);
+    });
+    body.appendChild(details);
+    row.appendChild(body);
 
-    const actions = document.createElement("div");
-    actions.style.cssText = "margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;";
-    // "paused" startet identisch zu "stopped"/"failed" (Kapitel 12
-    // Teil 3: "Resume = normaler Start").
+    // --- Fuß: feste Felder, immer unten, immer an derselben Stelle ----------------------------------------
+    // "paused" startet identisch zu "stopped"/"failed" (Kapitel 12 Teil 3: "Resume = normaler Start").
     const canStart = wf.status === "stopped" || wf.status === "failed" || wf.status === "paused";
     const canStop = wf.status === "started" || wf.status === "failed" || wf.status === "starting";
-    // Nur ein laufender Workflow lässt sich pausieren (paus­ieren eines
-    // bereits gestoppten/pausierten Workflows ist bedeutungslos).
     const canPause = wf.status === "started" || wf.status === "failed" || wf.status === "starting";
-    // Bearbeiten/Löschen: "stopped" und "paused" (Kapitel 12 Teil 3
-    // erweitert §12.3c das ausdrücklich).
+    // Bearbeiten/Löschen: "stopped" und "paused" (Kapitel 12 Teil 3 erweitert §12.3c das ausdrücklich).
     const isIdle = wf.status === "stopped" || wf.status === "paused";
 
-    const startBtn = document.createElement("button");
-    startBtn.textContent = wf.status === "paused" ? tt("wf.527daf") : tt("wf.a6122a");
-    startBtn.disabled = !canStart;
-    startBtn.addEventListener("click", () => this.#startWorkflow(wf));
-    actions.appendChild(startBtn);
+    const mkBtn = (cls: string, icon: string, label: string, onClick: () => void, opts: { disabled?: boolean; title?: string } = {}) => {
+      const b = document.createElement("button");
+      if (cls) b.className = cls;
+      const ic = document.createElement("span");
+      ic.className = "wf-ic";
+      ic.textContent = icon;
+      const lb = document.createElement("span");
+      lb.className = "wf-lbl";
+      lb.textContent = label;
+      b.append(ic, lb);
+      b.disabled = !!opts.disabled;
+      b.title = opts.title ?? label;
+      b.addEventListener("click", onClick);
+      return b;
+    };
 
-    const stopBtn = document.createElement("button");
-    stopBtn.textContent = tt("wf.11a755");
-    stopBtn.disabled = !canStop;
-    stopBtn.addEventListener("click", () => this.#stopWorkflow(wf));
-    actions.appendChild(stopBtn);
-
-    // Kapitel 12 Teil 3 (§12.3c).
-    const pauseBtn = document.createElement("button");
-    pauseBtn.textContent = tt("wf.d63f99");
-    pauseBtn.disabled = !canPause;
-    pauseBtn.addEventListener("click", () => this.#pauseWorkflow(wf));
-    actions.appendChild(pauseBtn);
-
-    // Kapitel 12 Teil 1 (PUT /api/v1/workflows/{id}): "stopped"/"paused"
-    // (s. workflows.Service.Update) — gleiche Begründung wie beim
-    // Löschen, kein Umschreiben unter laufenden Prozessen.
-    const editBtn = document.createElement("button");
-    editBtn.textContent = tt("wf.5ad05d");
-    editBtn.disabled = !isIdle;
-    editBtn.title = isIdle ? "" : tt("wf.f7bfda");
-    editBtn.addEventListener("click", () => this.#editWorkflow(wf));
-    actions.appendChild(editBtn);
-
-    // Kapitel 12 Teil 6 (§22.3 Punkt 1): grafisches Bearbeiten derselben
-    // Definition — gleiche Zustands-Voraussetzung wie "Bearbeiten"
-    // (PUT nur in stopped/paused), reine UX-Alternative.
-    const designEditBtn = document.createElement("button");
-    designEditBtn.textContent = tt("wf.971a83");
-    designEditBtn.disabled = !isIdle;
-    designEditBtn.title = isIdle ? "" : tt("wf.f7bfda");
-    designEditBtn.addEventListener("click", () => this.#openRoleDesigner(wf.id));
-    actions.appendChild(designEditBtn);
-
-    // UX-Überarbeitung 2026-09-07 (Nutzerauftrag "das UI für das
-    // Workflow bearbeiten... ist noch absolut nicht intuitiv"): bis
-    // hierhin gab es DREI Wege, dieselbe Rollen-/Verbindungs-Definition
-    // eines idle Workflows zu bearbeiten — dieses "Im Flow-Editor
-    // bearbeiten" (navigierte in `enterWorkflowEditScope`, das für einen
-    // idle Workflow laut eigener Doku dort NUR synthetische Rollen-
-    // Platzhalter zeigt — exakt dieselbe Aufgabe wie "Grafisch
-    // bearbeiten" unten, nur mit einer zweiten, unabhängig gebauten
-    // Canvas-Implementierung), "Grafisch bearbeiten"
-    // (`<omp-role-designer>`) und die (jetzt entfernte) Rollen-/
-    // Verbindungs-Sektion im Text-Formular oben. Alle drei waren
-    // `disabled = !isIdle` — identisch gegatet, kein funktionaler
-    // Unterschied für den Nutzer erkennbar. Entschieden: `<omp-role-
-    // designer>` bleibt der EINE Weg für die idle-Definition (zweckgebaut
-    // für genau das, s. dessen eigene Moduldoku "Endausbau"), dieser
-    // Button entfällt ersatzlos. `enterWorkflowEditScope`s ANDERER Zweig
-    // (echte laufende Nodes eines GESTARTETEN Workflows bearbeiten) bleibt
-    // unverändert über einen Doppelklick auf die Workflow-Kachel im
-    // Flow-Editor selbst erreichbar — dafür gab es ohnehin nie einen
-    // Knopf hier (dieser Button war laut `disabled`-Bedingung nie der
-    // Weg dorthin).
-
-    const delBtn = document.createElement("button");
-    delBtn.textContent = tt("wf.1010b0");
-    delBtn.className = "omp-btn-danger";
-    delBtn.disabled = !isIdle;
-    delBtn.title = isIdle ? "" : tt("wf.bc9ab0");
-    delBtn.addEventListener("click", () => this.#deleteWorkflow(wf));
-    actions.appendChild(delBtn);
-
-    // Kapitel 12 Teil 3 (§12.3d): in jedem Zustand exportierbar (der
-    // Export beschreibt die Definition, nicht den Laufzeitzustand).
-    const exportBtn = document.createElement("button");
-    exportBtn.textContent = tt("wf.8721fc");
-    exportBtn.addEventListener("click", () => this.#exportWorkflow(wf));
-    actions.appendChild(exportBtn);
-
-    // Nutzerwunsch 2026-09-11 ("Möglichkeit, einen Workflow zu 'clonen'
-    // — zweiter Regieplatz mit derselben Config"): der Export→Import-
-    // Weg konnte das bereits, aber nur über Datei-Download+erneuten
-    // Upload. Ein-Klick-Duplizieren (#duplicateWorkflow) verkettet
-    // beide API-Aufrufe intern, ohne Datei-Umweg — in jedem Zustand
-    // möglich wie Export selbst (Definition, nicht Laufzeitzustand).
-    const duplicateBtn = document.createElement("button");
-    duplicateBtn.textContent = tt("wf.529fdd");
-    duplicateBtn.title = tt("wf.5e9890");
-    duplicateBtn.addEventListener("click", () => this.#duplicateWorkflow(wf));
-    actions.appendChild(duplicateBtn);
-
-    row.appendChild(actions);
+    const foot = document.createElement("div");
+    foot.className = "wf-foot";
+    const run = document.createElement("div");
+    run.className = "wf-run";
+    run.append(
+      mkBtn("wf-start", "▶", wf.status === "paused" ? tt("wf.527daf") : tt("wf.a6122a"), () => this.#startWorkflow(wf), { disabled: !canStart }),
+      mkBtn("wf-stop", "■", tt("wf.11a755"), () => this.#stopWorkflow(wf), { disabled: !canStop }),
+      mkBtn("wf-pause", "❚❚", tt("wf.d63f99"), () => this.#pauseWorkflow(wf), { disabled: !canPause }),
+    );
+    const tools = document.createElement("div");
+    tools.className = "wf-tools";
+    const idleHint = isIdle ? undefined : tt("wf.f7bfda");
+    tools.append(
+      // Kapitel 12 Teil 1 (PUT /api/v1/workflows/{id}): nur "stopped"/"paused" (s. workflows.Service.Update).
+      mkBtn("", "✎", tt("wf.5ad05d"), () => this.#editWorkflow(wf), { disabled: !isIdle, title: idleHint ?? tt("wf.5ad05d") }),
+      // Kapitel 12 Teil 6 (§22.3 Punkt 1): grafisches Bearbeiten derselben Definition, gleiche Voraussetzung.
+      // (Der frühere dritte Weg "Im Flow-Editor bearbeiten" entfiel am 2026-09-07 ersatzlos, s. Git-Historie.)
+      mkBtn("", "◫", tt("wf.ui.designShort"), () => this.#openRoleDesigner(wf.id), { disabled: !isIdle, title: idleHint ?? tt("wf.971a83") }),
+      // Nutzerwunsch 2026-09-11: Ein-Klick-Duplizieren (#duplicateWorkflow), in jedem Zustand möglich.
+      mkBtn("", "⧉", tt("wf.529fdd"), () => this.#duplicateWorkflow(wf), { title: tt("wf.5e9890") }),
+      // Kapitel 12 Teil 3 (§12.3d): in jedem Zustand exportierbar (Definition, nicht Laufzeitzustand).
+      mkBtn("", "⇩", tt("wf.8721fc"), () => this.#exportWorkflow(wf)),
+      mkBtn("wf-del", "🗑", tt("wf.1010b0"), () => this.#deleteWorkflow(wf), { disabled: !isIdle, title: isIdle ? tt("wf.1010b0") : tt("wf.bc9ab0") }),
+    );
+    foot.append(run, tools);
+    row.appendChild(foot);
     return row;
   }
 
