@@ -31,6 +31,7 @@ const XY_T = (() => {
       pickTarget: "Ziel-Node wählen.", nothingToRoute: "Nichts zu schalten — Zuordnung prüfen.", moveUp: "Nach oben",
       skinNew: "Konsole 2 ▸", skinClassic: "◂ Klassisch", skinTip: "Optik umschalten (nur Darstellung)", moveDown: "Nach unten",
       bundleN: "{n} Quellen", notMatched: "Ohne Partner",
+      viewList: "Listen", viewMatrix: "Matrix", collapseAll: "Alle zu", expandAll: "Alle auf", mxTip: "Zeile = Ziel, Spalte = Quelle. Klick auf einen Kreuzpunkt schaltet, Klick auf einen aktiven Kreuzpunkt trennt. Node-Kopf klicken: auf-/zuklappen.", mxCorner: "Ziele ↓ / Quellen →", mxGroup: "{n} Punkte, {r} geschaltet (zum Aufklappen klicken)", mxEmpty: "Keine Quellen oder Ziele für diesen Filter.",
       grant: "Schalten über dieses Panel freigeben", grantHint: "Nutzer/Gruppen mit Bedienrecht (operate) auf diesem Panel dürfen darüber beliebige Ziele schalten.", grantFailed: "Freigabe konnte nicht gespeichert werden: {detail}",
     },
     en: {
@@ -59,6 +60,7 @@ const XY_T = (() => {
       pickTarget: "Choose a destination node.", nothingToRoute: "Nothing to route — check the mapping.", moveUp: "Move up",
       skinNew: "Console 2 ▸", skinClassic: "◂ Classic", skinTip: "Switch look (display only)", moveDown: "Move down",
       bundleN: "{n} sources", notMatched: "No partner",
+      viewList: "Lists", viewMatrix: "Matrix", collapseAll: "Collapse all", expandAll: "Expand all", mxTip: "Row = destination, column = source. Click a crosspoint to route, click an active crosspoint to disconnect. Click a node header to expand/collapse.", mxCorner: "Destinations ↓ / Sources →", mxGroup: "{n} points, {r} routed (click to expand)", mxEmpty: "No sources or destinations for this filter.",
       grant: "Allow routing via this panel", grantHint: "Users/groups with operate rights on this panel may route any destination through it.", grantFailed: "Could not save the permission: {detail}",
     },
   };
@@ -146,6 +148,42 @@ input[type=search], select { font: inherit; color: inherit; background: var(--om
 .bq .nm { flex: 1 1 160px; }
 .bq .full { flex: 1 1 100%; }
 .bq .nm small { display: block; color: var(--omp-text-dim, #93a1ba); }
+.views { display: flex; gap: 0; }
+.views button { border-radius: 0; }
+.views button:first-child { border-radius: var(--omp-radius, 6px) 0 0 var(--omp-radius, 6px); }
+.views button:last-child { border-radius: 0 var(--omp-radius, 6px) var(--omp-radius, 6px) 0; }
+.views button.on { border-color: var(--omp-accent-cyan, #19d3f3); background: var(--omp-surface, #0f1522); }
+.mxbox { background: var(--omp-surface, #0f1522); border: 1px solid var(--omp-border, #223049); border-radius: var(--omp-radius, 6px); padding: 5px; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.mxtools { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.mxtools input[type=search] { width: 180px; max-width: 100%; }
+.mxf { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; padding: 2px 6px; border-left: 3px solid var(--omp-accent-cyan, #19d3f3); }
+.mxf.d { border-left-color: var(--omp-accent-violet, #a45cff); }
+.mxtools .tip { color: var(--omp-text-dim, #93a1ba); font-size: var(--omp-font-size-sm, 12px); flex: 1 1 240px; }
+.mxwrap { overflow: auto; max-height: 68vh; border: 1px solid var(--omp-border, #223049); border-radius: 4px; background: var(--omp-bg, #080c16); }
+table.mx { border-collapse: separate; border-spacing: 0; font-size: var(--omp-font-size-sm, 12px); }
+table.mx th { background: var(--omp-surface-raised, #172033); font-weight: 600; padding: 0; white-space: nowrap; }
+table.mx th.corner { position: sticky; left: 0; top: 0; z-index: 4; padding: 4px 6px; font-weight: 400; color: var(--omp-text-dim, #93a1ba); text-align: left; }
+table.mx th.sgrp { position: sticky; top: 0; z-index: 3; height: 24px; padding: 0 6px; text-align: left; overflow: hidden; max-width: 0; text-overflow: ellipsis; cursor: pointer; border-left: 2px solid var(--omp-border, #223049); color: var(--omp-accent-cyan, #19d3f3); }
+table.mx th.scol { position: sticky; top: 24px; z-index: 3; height: 120px; width: 22px; min-width: 22px; vertical-align: bottom; border-left: 1px solid var(--omp-border, #223049); }
+table.mx th.scol span { display: block; writing-mode: vertical-rl; transform: rotate(180deg); padding: 6px 0; margin: 0 auto; max-height: 118px; overflow: hidden; text-overflow: ellipsis; }
+table.mx th.dgrp { position: sticky; left: 0; z-index: 2; width: 110px; min-width: 110px; max-width: 110px; padding: 2px 6px; text-align: left; vertical-align: top; overflow: hidden; text-overflow: ellipsis; cursor: pointer; border-top: 2px solid var(--omp-border, #223049); color: var(--omp-accent-violet, #a45cff); }
+table.mx th.drow { position: sticky; left: 110px; z-index: 2; min-width: 130px; max-width: 220px; height: 22px; padding: 0 6px; text-align: left; overflow: hidden; text-overflow: ellipsis; border-top: 1px solid var(--omp-border, #223049); }
+table.mx th.video { box-shadow: inset 3px 0 0 var(--omp-info, #2f8cff); }
+table.mx th.audio { box-shadow: inset 3px 0 0 var(--omp-preset, #43a047); }
+table.mx th.data { box-shadow: inset 3px 0 0 var(--omp-cue, #fb8c00); }
+table.mx th.scol.video { box-shadow: inset 0 -3px 0 var(--omp-info, #2f8cff); }
+table.mx th.scol.audio { box-shadow: inset 0 -3px 0 var(--omp-preset, #43a047); }
+table.mx th.scol.data { box-shadow: inset 0 -3px 0 var(--omp-cue, #fb8c00); }
+table.mx th.off { opacity: .55; font-style: italic; }
+table.mx td { width: 22px; min-width: 22px; height: 22px; padding: 0; border-top: 1px solid var(--omp-border, #223049); border-left: 1px solid var(--omp-border, #223049); text-align: center; cursor: pointer; line-height: 1; }
+table.mx td.no { cursor: not-allowed; background: repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,.04) 4px 8px); }
+table.mx td.agg { cursor: default; }
+table.mx td.on { background: var(--omp-preset, #43a047); box-shadow: inset 0 0 0 3px var(--omp-bg, #080c16); }
+table.mx td.agg.on { background: color-mix(in srgb, var(--omp-preset, #43a047) 55%, transparent); }
+table.mx td.sel { outline: 2px solid var(--omp-onair, #e53935); outline-offset: -2px; }
+table.mx td.hl { background-color: color-mix(in srgb, var(--omp-accent-cyan, #19d3f3) 18%, transparent); }
+table.mx td.on.hl { background: var(--omp-accent-cyan, #19d3f3); }
+table.mx th.hl { color: var(--omp-accent-cyan, #19d3f3); background: color-mix(in srgb, var(--omp-accent-cyan, #19d3f3) 18%, var(--omp-surface-raised, #172033)); }
 @container (max-width: 760px) {
   .tabs { display: flex; }
   .cols { grid-template-columns: 1fr; }
@@ -232,6 +270,8 @@ class OmpXyPanel extends HTMLElement {
       auto: localStorage.getItem("omp-xy-auto") !== "0",
       nodeMode: ["tags", "tagsOnly", "order"].includes(localStorage.getItem("omp-xy-nodemode")) ? localStorage.getItem("omp-xy-nodemode") : "tags",
       tab: "src",
+      view: localStorage.getItem("omp-xy-view") === "matrix" ? "matrix" : "list",
+      mx: { sm: "", sq: "", dm: "", dq: "", closedSrc: new Set(), closedDst: new Set(), top: 0, left: 0 },
       draft: null, // null = aus, sonst [{from,to}]
       bundle: null, // null = aus, sonst {items:[Quellpunkte], name, mode}
       modal: null,
@@ -601,6 +641,91 @@ class OmpXyPanel extends HTMLElement {
       return xyEl("section", { class: "side" + (st.tab === kind ? "" : " hide") }, xyEl("h3", { text: title }), nav, chips, search, listHost);
     }
 
+    /** Kreuzschiene: Zeilen = Ziele, Spalten = Quellen, gruppiert nach Node (auf-/zuklappbar). */
+    function renderMatrix() {
+      const m = st.mx;
+      const srcs = L.filterPoints(allSources(), { media: m.sm, query: m.sq });
+      const dsts = L.filterPoints(allSinks(), { media: m.dm, query: m.dq });
+      const routeOf = L.routeMap(st.edges);
+      const feeds = (d) => (d.ifc ? new Set(d.feedSenderIds || []) : new Set(routeOf.has(d.id) ? [routeOf.get(d.id)] : []));
+      const feedOf = new Map(dsts.map((d) => [d.id, feeds(d)]));
+      const units = (points, closed) => [...L.groupPointsByNode(points)].map(([id, pts]) => ({
+        id, pts, label: st.names.get(id) ?? L.stripInstanceId(pts[0].nodeLabel), closed: closed.has(id) && pts.length > 1,
+      })).sort((a, b) => a.label.localeCompare(b.label));
+      const cu = units(srcs, m.closedSrc), ru = units(dsts, m.closedDst);
+
+      const filt = (title, mk, qk, side) => xyEl("div", { class: "mxf " + side },
+        xyEl("b", { text: title }),
+        xyEl("div", { class: "chips" }, ...[["", "all"], ["video", "video"], ["audio", "audio"], ["data", "data"]].map(([k, key]) =>
+          xyEl("button", { class: m[mk] === k ? "on" : "", onclick: () => { m[mk] = k; render(); } }, t(key)))),
+        (() => { const i = xyEl("input", { type: "search", placeholder: t("search"), "aria-label": title + ": " + t("search"), "data-side": "mx" + qk }); i.value = m[qk];
+          i.addEventListener("input", () => { m[qk] = i.value; render(); }); return i; })());
+      const tools = xyEl("div", { class: "mxtools" },
+        filt(t("sources"), "sm", "sq", "s"), filt(t("sinks"), "dm", "dq", "d"),
+        xyEl("button", { onclick: () => { m.closedSrc = new Set(cu.map((u) => u.id)); m.closedDst = new Set(ru.map((u) => u.id)); render(); } }, "▸ " + t("collapseAll")),
+        xyEl("button", { onclick: () => { m.closedSrc.clear(); m.closedDst.clear(); render(); } }, "▾ " + t("expandAll")),
+        xyEl("span", { class: "tip", text: t("mxTip") }));
+      if (!cu.length || !ru.length) return xyEl("div", { class: "mxbox" }, tools, xyEl("div", { class: "empty", text: t("mxEmpty") }));
+
+      // Spalten: je Node entweder jeder Punkt einzeln oder eine Sammelspalte.
+      const cols = [];
+      for (const u of cu) { if (u.closed) cols.push({ u, pts: u.pts, agg: true }); else for (const p of u.pts) cols.push({ u, pts: [p], agg: false }); }
+      const gh = xyEl("tr", {}, xyEl("th", { class: "corner", rowspan: 2, colspan: 2, text: t("mxCorner") }),
+        ...cu.map((u) => xyEl("th", { class: "sgrp", colspan: u.closed ? 1 : u.pts.length, title: u.label, onclick: () => { if (u.pts.length > 1) { if (m.closedSrc.has(u.id)) m.closedSrc.delete(u.id); else m.closedSrc.add(u.id); render(); } } },
+          (u.pts.length > 1 ? (u.closed ? "▸ " : "▾ ") : "") + u.label)));
+      const ph = xyEl("tr", {}, ...cols.map((c) => c.agg
+        ? xyEl("th", { class: "scol", title: c.u.label }, xyEl("span", { text: `${c.u.label} (${c.pts.length})` }))
+        : xyEl("th", { class: `scol ${c.pts[0].mediaType} ${c.pts[0].online ? "" : "off"}`, title: pointName(c.pts[0]) + (c.pts[0].tags.length ? "\n" + c.pts[0].tags.join(", ") : ""), "data-c": c.pts[0].id },
+          xyEl("span", { text: L.shortLabel(c.pts[0], c.u.label) }))));
+      const rows = [];
+      for (const u of ru) {
+        const rs = u.closed ? [{ pts: u.pts, agg: true }] : u.pts.map((p) => ({ pts: [p], agg: false }));
+        rs.forEach((r, i) => {
+          const tds = cols.map((c) => {
+            if (!r.agg && !c.agg) {
+              const s = c.pts[0], d = r.pts[0];
+              const ok = L.compatible(s, d), on = feedOf.get(d.id).has(s.id);
+              return xyEl("td", { class: [on ? "on" : ok ? "" : "no", st.selSrc === s.id && st.selDst === d.id ? "sel" : ""].filter(Boolean).join(" "),
+                "data-c": s.id, "data-r": d.id, title: `${pointName(s)} → ${pointName(d)}` });
+            }
+            const n = c.pts.reduce((a, s) => a + r.pts.filter((d) => feedOf.get(d.id).has(s.id)).length, 0);
+            return xyEl("td", { class: "agg" + (n ? " on" : ""), title: t("mxGroup", { n: c.pts.length * r.pts.length, r: n }) });
+          });
+          const cells = [];
+          if (i === 0) cells.push(xyEl("th", { class: "dgrp", rowspan: rs.length, title: u.label, onclick: () => { if (u.pts.length > 1) { if (m.closedDst.has(u.id)) m.closedDst.delete(u.id); else m.closedDst.add(u.id); render(); } } },
+            (u.pts.length > 1 ? (u.closed ? "▸ " : "▾ ") : "") + u.label));
+          cells.push(r.agg ? xyEl("th", { class: "drow", text: `${u.label} (${u.pts.length})` })
+            : xyEl("th", { class: `drow ${r.pts[0].mediaType} ${r.pts[0].online ? "" : "off"}`, title: pointName(r.pts[0]) + (r.pts[0].tags.length ? "\n" + r.pts[0].tags.join(", ") : ""), "data-r": r.pts[0].id, text: L.shortLabel(r.pts[0], u.label) }));
+          rows.push(xyEl("tr", {}, ...cells, ...tds));
+        });
+      }
+      const table = xyEl("table", { class: "mx" }, xyEl("thead", {}, gh, ph), xyEl("tbody", {}, rows));
+      const wrap = xyEl("div", { class: "mxwrap" }, table);
+      let hl = [];
+      const clearHl = () => { hl.forEach((e) => e.classList.remove("hl")); hl = []; };
+      table.addEventListener("mouseover", (e) => {
+        const td = e.target.closest("td[data-c]");
+        clearHl();
+        if (!td) return;
+        const c = td.getAttribute("data-c"), r = td.getAttribute("data-r");
+        hl = [td, ...table.querySelectorAll(`th[data-c="${CSS.escape(c)}"], th[data-r="${CSS.escape(r)}"]`)];
+        hl.forEach((x) => x.classList.add("hl"));
+      });
+      table.addEventListener("mouseleave", clearHl);
+      table.addEventListener("click", (e) => {
+        const td = e.target.closest("td[data-c]");
+        if (!td || td.classList.contains("no")) return;
+        const s = bySrc().get(td.getAttribute("data-c")), d = byDst().get(td.getAttribute("data-r"));
+        if (!s || !d) return;
+        const on = feedOf.get(d.id) && feedOf.get(d.id).has(s.id);
+        if (!st.auto) { st.selSrc = s.id; st.selDst = d.id; st.selSrcNode = null; st.selDstNode = null; render(); return; }
+        if (on) doDisconnect(d); else doTake(s, d);
+      });
+      wrap.addEventListener("scroll", () => { m.top = wrap.scrollTop; m.left = wrap.scrollLeft; });
+      queueMicrotask(() => { wrap.scrollTop = m.top; wrap.scrollLeft = m.left; });
+      return xyEl("div", { class: "mxbox" }, tools, wrap);
+    }
+
     function renderBar() {
       const src = bySrc().get(st.selSrc);
       const dst = byDst().get(st.selDst);
@@ -831,7 +956,12 @@ class OmpXyPanel extends HTMLElement {
         cb.checked = st.grant.on;
         grantUi = xyEl("label", { class: "auto", title: t("grantHint") }, cb, t("grant"));
       }
+      const matrix = st.view === "matrix" && !st.bundle;
+      const views = xyEl("div", { class: "views" },
+        xyEl("button", { class: matrix ? "" : "on", onclick: () => { st.view = "list"; try { localStorage.setItem("omp-xy-view", "list"); } catch {} render(); } }, "☰ " + t("viewList")),
+        xyEl("button", { class: matrix ? "on" : "", onclick: () => { st.view = "matrix"; try { localStorage.setItem("omp-xy-view", "matrix"); } catch {} render(); } }, "▦ " + t("viewMatrix")));
       const top = xyEl("div", { class: "top" },
+        views,
         xyEl("div", { class: "grp" }, xyEl("button", { onclick: openBouquetDialog }, "▦ " + t("bouquets")), xyEl("button", { onclick: openTagDialog }, "# " + t("tagRouting"))),
         ...(grantUi ? [grantUi] : []), auto,
         xyEl("button", { class: "skin-toggle", type: "button", title: t("skinTip"), onclick: () => {
@@ -840,7 +970,7 @@ class OmpXyPanel extends HTMLElement {
           applySkin(next); render();
         } }, host.getAttribute("data-skin") === "c2" ? t("skinClassic") : t("skinNew")));
       const msg = xyEl("div", { id: "msg", class: "msg" + (st.msgErr ? " err" : ""), role: "status", "aria-live": "polite", text: st.msg });
-      root.replaceChildren(top, tabs, xyEl("div", { class: "cols" }, renderSide("src"), renderSide("dst")), ...(st.draft ? [renderDraft()] : []), ...(st.bundle ? [renderBundle()] : [renderBar()]), msg);
+      root.replaceChildren(top, ...(matrix ? [renderMatrix()] : [tabs, xyEl("div", { class: "cols" }, renderSide("src"), renderSide("dst"))]), ...(st.draft ? [renderDraft()] : []), ...(st.bundle ? [renderBundle()] : [renderBar()]), msg);
       if (keepFocus) {
         const inp = shadow.querySelector(`input[data-side="${keepFocus}"]`);
         if (inp) { inp.focus(); try { inp.setSelectionRange(caret, caret); } catch { /* egal */ } }
