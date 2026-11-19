@@ -158,6 +158,17 @@ fn redundant_tx(prefix: &str) -> Result<Option<(String, u16)>, String> {
     }
 }
 
+/// RTP-Zeitstempel nach ST 2059-1 an die PTP-Zeit binden (nur mit synchroner PTP-Clock); sonst bleibt der
+/// zufällige Ursprung und die Logzeile sagt es.
+fn align_st2059(pipeline: &gst::Pipeline, clock: Option<&gstreamer_net::PtpClock>, audio_rate: u32) {
+    let Some(clock) = clock else { return };
+    match omp_mediaio::ptp::align_rtp_to_st2059(pipeline, clock, audio_rate) {
+        Ok(true) => eprintln!("omp-2110-gateway: RTP-Zeitstempel an PTP-Zeit gebunden (ST 2059-1)"),
+        Ok(false) => eprintln!("omp-2110-gateway: PTP nicht synchron — RTP-Zeitstempel ohne ST-2059-Bezug"),
+        Err(e) => eprintln!("omp-2110-gateway: ST-2059-Ausrichtung: {e}"),
+    }
+}
+
 /// Griff auf die laufende Ingest-Pipeline — hält `pipeline`/`_input`/
 /// `_output` am Leben (gleiche Drop-Reihenfolge-Überlegung wie
 /// `omp-viewer::pipeline::ActivePipeline`: Pipeline zuerst auf Null,
@@ -558,6 +569,7 @@ fn build_output(
         output.add_redundant_leg(&pipeline, &host, port)?;
     }
     output.set_active(true);
+    align_st2059(&pipeline, ptp_clock.as_ref(), 48_000);
 
     pipeline
         .set_state(gst::State::Playing)
@@ -818,6 +830,7 @@ fn build_audio_output(
         output.add_redundant_leg(&pipeline, &host, port)?;
     }
     output.set_active(true);
+    align_st2059(&pipeline, ptp_clock.as_ref(), sample_rate as u32);
 
     pipeline.set_state(gst::State::Playing).map_err(|e| format!("set state playing: {e}"))?;
 
