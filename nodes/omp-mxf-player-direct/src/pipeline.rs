@@ -84,8 +84,24 @@ use crate::presets;
 
 pub const DEFAULT_WIDTH: u32 = 1920;
 pub const DEFAULT_HEIGHT: u32 = 1080;
-pub const FRAMERATE_NUMERATOR: u32 = 25;
-pub const FRAMERATE_DENOMINATOR: u32 = 1;
+/// Standard-Bildrate des Ausgangs; gilt, wenn `OMP_FRAMERATE_NUM`/`OMP_FRAMERATE_DEN` fehlen oder ungültig sind.
+pub const DEFAULT_FRAMERATE_NUMERATOR: u32 = 25;
+pub const DEFAULT_FRAMERATE_DENOMINATOR: u32 = 1;
+
+/// Bildrate des Ausgangs (Zähler, Nenner): `OMP_FRAMERATE_NUM`/`OMP_FRAMERATE_DEN`, die der Orchestrator aus der Formatwahl der
+/// Rolle bzw. des Workflows setzt (z. B. 1080p50 → 50/1); sonst 25/1. Einmal beim ersten Zugriff gelesen.
+pub fn framerate() -> (u32, u32) {
+    static RATE: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+    *RATE.get_or_init(|| {
+        let num = std::env::var("OMP_FRAMERATE_NUM").ok().and_then(|v| v.trim().parse::<u32>().ok()).filter(|n| *n > 0);
+        let den = std::env::var("OMP_FRAMERATE_DEN").ok().and_then(|v| v.trim().parse::<u32>().ok()).filter(|n| *n > 0);
+        match (num, den) {
+            (Some(n), Some(d)) => (n, d),
+            (Some(n), None) => (n, 1),
+            _ => (DEFAULT_FRAMERATE_NUMERATOR, DEFAULT_FRAMERATE_DENOMINATOR),
+        }
+    })
+}
 pub const SAMPLE_RATE: u32 = 48000;
 
 pub struct Config {
@@ -238,7 +254,7 @@ fn video_caps(width: u32, height: u32) -> gst::Caps {
         .field("height", height as i32)
         .field(
             "framerate",
-            gst::Fraction::new(FRAMERATE_NUMERATOR as i32, FRAMERATE_DENOMINATOR as i32),
+            gst::Fraction::new(framerate().0 as i32, framerate().1 as i32),
         )
         .build()
 }
@@ -604,8 +620,8 @@ fn build(config: &Config, tx: UnboundedSender<Event>, events: std::sync::mpsc::S
         &config.label,
         config.width,
         config.height,
-        FRAMERATE_NUMERATOR,
-        FRAMERATE_DENOMINATOR,
+        framerate().0,
+        framerate().1,
         Arc::new(AtomicU64::new(0)),
     )
     .map_err(|e| format!("MxlVideoOutput: {e}"))?;

@@ -82,7 +82,7 @@ fn main() {
     h.connect_audio(1, b_id);
     std::thread::sleep(Duration::from_millis(500));
     let plan = r#"{"channels":[{"input":0,"channel":1},{"input":1,"channel":0,"gainDb":-6.0206},{"input":null},{"input":0,"channel":0}]}"#;
-    h.start_recording("apcheck.mxf".to_string(), None, Some(plan.to_string())).unwrap();
+    h.start_recording("apcheck.mxf".to_string(), None, Some(plan.to_string()), String::new()).unwrap();
     std::thread::sleep(Duration::from_secs(secs));
     println!("duration_ms={} media_ready={}", h.duration_ms(), h.media_ready());
     h.stop_recording().unwrap();

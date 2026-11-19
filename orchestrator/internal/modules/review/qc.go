@@ -371,6 +371,24 @@ func (q *qcCtx) deliveryVideo(v map[string]any, w, h float64, fo string) {
 	if len(e.VideoCodecs) > 0 {
 		q.deliv("delivery.codec", contains(e.VideoCodecs, gs(v, "codec_name")), fmt.Sprintf("Video-Codec %s, erlaubt: %s", gs(v, "codec_name"), strings.Join(e.VideoCodecs, ", ")), map[string]any{"codec": gs(v, "codec_name")}, map[string]any{"allowed": e.VideoCodecs})
 	}
+	if len(e.VideoProfiles) > 0 {
+		got := strings.ToLower(gs(v, "profile"))
+		ok := false
+		for _, want := range e.VideoProfiles {
+			if strings.Contains(got, strings.ToLower(want)) {
+				ok = true
+			}
+		}
+		q.deliv("delivery.video_profile", ok, fmt.Sprintf("Videoprofil %q, erwartet: %s", gs(v, "profile"), strings.Join(e.VideoProfiles, " / ")), map[string]any{"profile": gs(v, "profile")}, map[string]any{"profiles": e.VideoProfiles})
+	}
+	if e.Chroma != "" {
+		got := chromaOf(gs(v, "pix_fmt"))
+		q.deliv("delivery.chroma", got == e.Chroma, fmt.Sprintf("Chroma %s, erwartet %s", got, e.Chroma), map[string]any{"chroma": got}, map[string]any{"chroma": e.Chroma})
+	}
+	if e.VideoBitDepth > 0 {
+		d := bitDepth(gs(v, "pix_fmt"), gn(v, "bits_per_raw_sample"))
+		q.deliv("delivery.video_bitdepth", d >= e.VideoBitDepth, fmt.Sprintf("Bildtiefe %d Bit, mindestens %d erwartet", d, e.VideoBitDepth), map[string]any{"bitDepth": d}, map[string]any{"min": e.VideoBitDepth})
+	}
 	if e.FieldOrder != "" && e.FieldOrder != "any" {
 		q.deliv("delivery.scan", fo == e.FieldOrder, fmt.Sprintf("Halbbild-Reihenfolge %q, erwartet %q", fo, e.FieldOrder), map[string]any{"fieldOrder": fo}, map[string]any{"fieldOrder": e.FieldOrder})
 	}
@@ -412,6 +430,9 @@ func (q *qcCtx) audioFormat(audios, others []map[string]any) {
 	}
 	if e.AudioTracks > 0 {
 		q.deliv("delivery.audio_tracks", len(audios) >= e.AudioTracks, fmt.Sprintf("%d Tonspur(en), mindestens %d erwartet", len(audios), e.AudioTracks), map[string]any{"tracks": len(audios)}, map[string]any{"minTracks": e.AudioTracks})
+	}
+	if e.ExactAudioTracks > 0 {
+		q.deliv("delivery.audio_tracks_exact", len(audios) == e.ExactAudioTracks, fmt.Sprintf("%d Tonspur(en), genau %d erwartet", len(audios), e.ExactAudioTracks), map[string]any{"tracks": len(audios)}, map[string]any{"exact": e.ExactAudioTracks})
 	}
 	_ = others
 }

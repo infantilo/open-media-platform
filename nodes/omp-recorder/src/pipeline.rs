@@ -151,7 +151,7 @@ enum Command {
     DisconnectVideo,
     ConnectAudio(usize, String),
     DisconnectAudio(usize),
-    StartRecording(String, Option<String>, Option<String>, Sender<Result<(), String>>),
+    StartRecording(String, Option<String>, Option<String>, String, Sender<Result<(), String>>),
     StopRecording(Sender<Result<(), String>>),
 }
 
@@ -189,10 +189,10 @@ impl PipelineHandle {
     /// (`tiny_http`, ein Request nach dem anderen je Node-Prozess, s.
     /// `omp-node-sdk/src/server.rs`), ein kurzer Block hier ist also
     /// unbedenklich.
-    pub fn start_recording(&self, file_name: String, mca_plan: Option<String>, audio_plan: Option<String>) -> Result<(), String> {
+    pub fn start_recording(&self, file_name: String, mca_plan: Option<String>, audio_plan: Option<String>, profile: String) -> Result<(), String> {
         let (reply_tx, reply_rx) = std::sync::mpsc::channel();
         self.commands
-            .send(Command::StartRecording(file_name, mca_plan, audio_plan, reply_tx))
+            .send(Command::StartRecording(file_name, mca_plan, audio_plan, profile, reply_tx))
             .map_err(|_| "Pipeline-Thread nicht erreichbar".to_string())?;
         reply_rx
             .recv()
@@ -248,6 +248,45 @@ struct ActiveRecording {
     mca: Option<(PathBuf, omp_mxf_mca::inject::Plan)>,
 }
 
+/// Aufnahmeprofil: das bisherige H.264 (x264, lange GOP) oder AVC-Intra (nur Intraframes, 10 Bit 4:2:2, MXF mit Einzelspur-Ton).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoProfile {
+    H264,
+    /// AVC-Intra Class 50/100/200 (SMPTE RDD 32; `x264enc` mit `avcintra-class`). Class 100 gilt auch für 1080/50p (rund
+    /// 230 Mbit/s), Class 200 verdoppelt das. Die Klasse prüft x264 gegen Auflösung und Bildrate selbst.
+    AvcIntra(u32),
+}
+
+impl VideoProfile {
+    /// Anzahl der Tonspuren, wenn ohne Kanalplan aufgenommen wird: AVC-Intra-Produktionsdateien tragen 16 Einzelspuren.
+    pub const AVCI_DEFAULT_TRACKS: usize = 16;
+
+    pub fn parse(text: &str) -> Result<VideoProfile, String> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "" | "h264" => Ok(VideoProfile::H264),
+            "avci50" => Ok(VideoProfile::AvcIntra(50)),
+            "avci100" => Ok(VideoProfile::AvcIntra(100)),
+            "avci200" => Ok(VideoProfile::AvcIntra(200)),
+            other => Err(format!("unbekanntes Aufnahmeprofil {other:?} (h264, avci50, avci100, avci200)")),
+        }
+    }
+}
+
+/// Kanalplan für AVC-Intra ohne eigenen Plan: die Kanäle des ersten Audio-Eingangs der Reihe nach, der Rest Stille, insgesamt
+/// [`VideoProfile::AVCI_DEFAULT_TRACKS`] Spuren.
+fn default_avci_plan(input_channels: u32) -> AudioPlan {
+    let channels = (0..VideoProfile::AVCI_DEFAULT_TRACKS)
+        .map(|i| {
+            if (i as u32) < input_channels {
+                audio_plan::OutChannel { input: Some(0), channel: i, gain_db: 0.0 }
+            } else {
+                audio_plan::OutChannel { input: None, channel: 0, gain_db: 0.0 }
+            }
+        })
+        .collect();
+    AudioPlan { channels }
+}
+
 fn is_mxf(path: &Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mxf"))
 }
@@ -290,6 +329,41 @@ pub fn existing_clip(dirs: &[&str], file_name: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// Hängt `n` Mono-Spuren (24 Bit PCM) hinter `source` (F32LE, `n` Kanäle) an den MXF-Muxer: `tee`, je Spur eine Ein-Kanal-Matrix auf
+/// den Kanal der Spur, ein eigener `bwf_audio_sink_%u`. Die Muxer-Pads werden in Spurreihenfolge angefordert (Spur 1 = Kanal 1).
+/// Gibt den Ausgang der ersten Spur zurück (für die „es fließt“-Messung).
+fn arm_tracks(pipeline: &gst::Pipeline, muxer: &gst::Element, source: &gst::Element, n: usize) -> Result<gst::Pad, String> {
+    let tee = gst::ElementFactory::make("tee").build().map_err(|e| format!("tee (Tonspuren): {e}"))?;
+    pipeline.add(&tee).map_err(|e| format!("add tee: {e}"))?;
+    source.link(&tee).map_err(|e| format!("link Tonquelle zu tee: {e}"))?;
+    let mut first: Option<gst::Pad> = None;
+    for k in 0..n {
+        let q_in = gst::ElementFactory::make("queue").build().map_err(|e| format!("queue (Spur {}): {e}", k + 1))?;
+        let matrix = gst::ElementFactory::make("audiomixmatrix").build().map_err(|e| format!("audiomixmatrix (Spur {}): {e}", k + 1))?;
+        matrix.set_property("in-channels", n as u32);
+        matrix.set_property("out-channels", 1u32);
+        let row: Vec<f64> = (0..n).map(|c| if c == k { 1.0 } else { 0.0 }).collect();
+        matrix.set_property("matrix", gst::Array::new([gst::Array::new(row)]));
+        let convert = gst::ElementFactory::make("audioconvert").build().map_err(|e| format!("audioconvert (Spur {}): {e}", k + 1))?;
+        let pcm = gst::ElementFactory::make("capsfilter")
+            .property("caps", gst::Caps::builder("audio/x-raw").field("format", "S24LE").field("layout", "interleaved").field("channels", 1i32).build())
+            .build()
+            .map_err(|e| format!("capsfilter (Spur {}): {e}", k + 1))?;
+        let q_out = gst::ElementFactory::make("queue").build().map_err(|e| format!("queue (Spur {}): {e}", k + 1))?;
+        pipeline.add_many([&q_in, &matrix, &convert, &pcm, &q_out]).map_err(|e| format!("add Spur {}: {e}", k + 1))?;
+        let tee_pad = tee.request_pad_simple("src_%u").ok_or("tee: kein Pad")?;
+        tee_pad.link(&q_in.static_pad("sink").ok_or("queue ohne sink")?).map_err(|e| format!("link tee zu Spur {}: {e}", k + 1))?;
+        gst::Element::link_many([&q_in, &matrix, &convert, &pcm, &q_out]).map_err(|e| format!("link Spur {}: {e}", k + 1))?;
+        let mux_pad = muxer.request_pad_simple("bwf_audio_sink_%u").ok_or("muxer: kein Audio-Pad")?;
+        let out = q_out.static_pad("src").ok_or("queue ohne src")?;
+        out.link(&mux_pad).map_err(|e| format!("link Spur {} zum Muxer: {e}", k + 1))?;
+        if first.is_none() {
+            first = Some(out);
+        }
+    }
+    first.ok_or_else(|| "keine Tonspur".to_string())
+}
+
 fn build(
     context: &Arc<MxlContext>,
     video_flow_id: Option<&str>,
@@ -298,6 +372,7 @@ fn build(
     file_name: &str,
     mca_plan: Option<&str>,
     audio_plan: Option<&str>,
+    profile: &str,
     flowed: Arc<AtomicBool>,
 ) -> Result<ActiveRecording, String> {
     let target = safe_target_path(media_dir, file_name)?;
@@ -308,7 +383,11 @@ fn build(
         Some(text) => Some(omp_mxf_mca::inject::Plan::from_json(text).map_err(|e| format!("MCA-Plan: {e}"))?),
     };
 
-    let audio_plan = AudioPlan::parse(audio_plan.unwrap_or(""))?;
+    let video_profile = VideoProfile::parse(profile)?;
+    if matches!(video_profile, VideoProfile::AvcIntra(_)) && !mxf {
+        return Err("AVC-Intra braucht eine .mxf-Zieldatei".to_string());
+    }
+    let mut audio_plan = AudioPlan::parse(audio_plan.unwrap_or(""))?;
 
     let pipeline = gst::Pipeline::new();
 
@@ -357,17 +436,31 @@ fn build(
             let videoconvert = gst::ElementFactory::make("videoconvert")
                 .build()
                 .map_err(|e| format!("videoconvert: {e}"))?;
-            let x264enc = gst::ElementFactory::make("x264enc")
-                .property("bitrate", VIDEO_BITRATE_KBPS)
-                .property("key-int-max", 50u32)
+            let x264enc = if let VideoProfile::AvcIntra(class) = video_profile {
+                // AVC-Intra: Bitrate, GOP (nur I-Bilder), Slices und HRD legt x264 über `avcintra-class` selbst fest — eigene
+                // Rate-/Preset-Angaben würden dagegen arbeiten. Eingang 10 Bit 4:2:2 (s. Capsfilter unten).
+                gst::ElementFactory::make("x264enc")
+                    .property("option-string", format!("avcintra-class={class}"))
+                    .build()
+                    .map_err(|e| format!("x264enc: {e}"))?
+            } else {
+                let e = gst::ElementFactory::make("x264enc")
+                    .property("bitrate", VIDEO_BITRATE_KBPS)
+                    .property("key-int-max", 50u32)
+                    .build()
+                    .map_err(|e| format!("x264enc: {e}"))?;
+                // GEnum/GFlags — Laufzeit-Registrierung, `.property()` mit
+                // einem Rust-Wert schlägt hier fehl (bereits bekannter
+                // Fund, s. Projekt-Memory "GStreamer enum properties are
+                // runtime-only").
+                e.set_property_from_str("speed-preset", "veryfast");
+                e.set_property_from_str("tune", "zerolatency");
+                e
+            };
+            let vcaps = gst::ElementFactory::make("capsfilter")
+                .property("caps", gst::Caps::builder("video/x-raw").field("format", "I422_10LE").build())
                 .build()
-                .map_err(|e| format!("x264enc: {e}"))?;
-            // GEnum/GFlags — Laufzeit-Registrierung, `.property()` mit
-            // einem Rust-Wert schlägt hier fehl (bereits bekannter
-            // Fund, s. Projekt-Memory "GStreamer enum properties are
-            // runtime-only").
-            x264enc.set_property_from_str("speed-preset", "veryfast");
-            x264enc.set_property_from_str("tune", "zerolatency");
+                .map_err(|e| format!("capsfilter (video 10 Bit): {e}"))?;
             let h264parse = gst::ElementFactory::make("h264parse")
                 .property("config-interval", 1i32)
                 .build()
@@ -387,7 +480,10 @@ fn build(
                 .and_then(|()| pipeline.add(&h264parse))
                 .and_then(|()| pipeline.add(&queue))
                 .map_err(|e| format!("add video branch: {e}"))?;
-            if mxf {
+            if matches!(video_profile, VideoProfile::AvcIntra(_)) {
+                pipeline.add_many([&mxf_caps, &vcaps]).map_err(|e| format!("add video caps: {e}"))?;
+                gst::Element::link_many([&input.tail, &videoconvert, &vcaps, &x264enc, &h264parse, &mxf_caps, &queue])
+            } else if mxf {
                 pipeline.add(&mxf_caps).map_err(|e| format!("add video caps: {e}"))?;
                 gst::Element::link_many([&input.tail, &videoconvert, &x264enc, &h264parse, &mxf_caps, &queue])
             } else {
@@ -417,6 +513,7 @@ fn build(
             Some(p) => p.used_inputs(),
             None => audio_flow_ids.first().and_then(|f| f.as_ref()).map(|_| vec![0]).unwrap_or_default(),
         };
+        let avci = matches!(video_profile, VideoProfile::AvcIntra(_));
         let mut opened: Vec<(usize, usize)> = Vec::new(); // (Eingangsnummer, Index in audio_inputs)
         for i in &wanted {
             let flow_id = audio_flow_ids
@@ -426,6 +523,11 @@ fn build(
             let input = MxlAudioInput::new(&pipeline, context.clone(), flow_id).map_err(|e| format!("MxlAudioInput({flow_id}): {e}"))?;
             opened.push((*i, audio_inputs.len()));
             audio_inputs.push(input);
+        }
+        // AVC-Intra ohne eigenen Plan: 16 Spuren aus dem ersten Eingang (der Rest Stille)
+        if avci && audio_plan.is_none() && !audio_inputs.is_empty() {
+            audio_plan = Some(default_avci_plan(audio_inputs[0].channels));
+            opened = vec![(0, 0)];
         }
         if !audio_inputs.is_empty() {
             let audio_tail = match &audio_plan {
@@ -440,6 +542,13 @@ fn build(
                 }
                 None => audio_inputs[0].tail.clone(),
             };
+            if avci {
+                // AVC-Intra-Produktionsdateien tragen jeden Tonkanal als eigene Mono-Spur (nicht als eine Mehrkanalspur): ein
+                // `tee`, je Spur eine Ein-Kanal-Matrix auf den gewählten Kanal, 24 Bit PCM, ein eigener Muxer-Pad in Spurreihenfolge.
+                let n_ch = audio_plan.as_ref().map(|p| p.channels.len()).unwrap_or(1).max(1);
+                let first = arm_tracks(&pipeline, &muxer, &audio_tail, n_ch)?;
+                arm_flowed_probe(&first);
+            } else {
             let audioconvert = gst::ElementFactory::make("audioconvert").build().map_err(|e| format!("audioconvert: {e}"))?;
             let audioresample = gst::ElementFactory::make("audioresample").build().map_err(|e| format!("audioresample: {e}"))?;
             // `OMP_RECORDER_RAW_AUDIO=1` (Diagnose): unkomprimierter PCM-Ton statt AAC — trennt
@@ -488,6 +597,7 @@ fn build(
                 .map_err(|e| format!("link audio queue to muxer: {e}"))?;
 
             arm_flowed_probe(&queue.static_pad("src").expect("queue has src pad"));
+            }
         }
     }
 
@@ -636,7 +746,7 @@ pub fn run(
                     *slot = None;
                 }
             }
-            Ok(Command::StartRecording(file_name, mca_plan, audio_plan, reply)) => {
+            Ok(Command::StartRecording(file_name, mca_plan, audio_plan, profile, reply)) => {
                 let result = if active.is_some() {
                     Err("Aufnahme läuft bereits — erst record.stop".to_string())
                 } else if video_flow_id.is_none() && audio_flow_ids.iter().all(Option::is_none) {
@@ -651,6 +761,7 @@ pub fn run(
                         &file_name,
                         mca_plan.as_deref(),
                         audio_plan.as_deref(),
+                        &profile,
                         flowed.clone(),
                     )
                 };
@@ -699,7 +810,9 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::safe_target_path;
+    use gst::prelude::*;
+    use gstreamer as gst;
+    use super::*;
 
     #[test]
     fn existing_clip_wird_erkannt_und_leere_verzeichnisse_ignoriert() {
@@ -739,5 +852,85 @@ mod tests {
     #[test]
     fn empty_name_is_rejected() {
         assert!(safe_target_path("/data", "").is_err());
+    }
+
+    #[test]
+    fn profile_parsing() {
+        assert_eq!(VideoProfile::parse("").unwrap(), VideoProfile::H264);
+        assert_eq!(VideoProfile::parse("h264").unwrap(), VideoProfile::H264);
+        assert_eq!(VideoProfile::parse("AVCI100").unwrap(), VideoProfile::AvcIntra(100));
+        assert_eq!(VideoProfile::parse(" avci200 ").unwrap(), VideoProfile::AvcIntra(200));
+        assert!(VideoProfile::parse("avci300").is_err());
+        assert!(VideoProfile::parse("prores").is_err());
+    }
+
+    #[test]
+    fn default_avci_plan_has_16_tracks_and_pads_with_silence() {
+        let p = default_avci_plan(8);
+        assert_eq!(p.channels.len(), 16);
+        assert_eq!(p.channels[7].input, Some(0));
+        assert_eq!(p.channels[7].channel, 7);
+        assert_eq!(p.channels[8].input, None);
+        assert_eq!(p.channels[15].input, None);
+        let q = default_avci_plan(32); // mehr Kanäle als Spuren: nur die ersten 16
+        assert_eq!(q.channels.len(), 16);
+        assert!(q.channels.iter().all(|c| c.input == Some(0)));
+    }
+
+    /// Echter Lauf: AVC-Intra Class 100 (1080p50, 10 Bit 4:2:2) mit 16 Einzelspuren (24 Bit PCM) in eine MXF-Datei; `ffprobe`
+    /// (falls vorhanden) bestätigt Codec, Profil und die 16 Mono-Spuren.
+    #[test]
+    fn avc_intra_100_with_16_mono_tracks_into_mxf() {
+        gst::init().unwrap();
+        let dir = tempfile_dir();
+        let path = dir.join("avci.mxf");
+        let pipeline = gst::Pipeline::new();
+        let muxer = gst::ElementFactory::make("mxfmux").build().unwrap();
+        let sink = gst::ElementFactory::make("filesink").property("location", path.to_string_lossy().to_string()).build().unwrap();
+        pipeline.add_many([&muxer, &sink]).unwrap();
+        muxer.link(&sink).unwrap();
+        let vsrc = gst::ElementFactory::make("videotestsrc").property("num-buffers", 12i32).build().unwrap();
+        let vcaps = gst::ElementFactory::make("capsfilter")
+            .property("caps", gst::Caps::builder("video/x-raw").field("format", "I422_10LE").field("width", 1920i32).field("height", 1080i32).field("framerate", gst::Fraction::new(50, 1)).build())
+            .build()
+            .unwrap();
+        let enc = gst::ElementFactory::make("x264enc").property("option-string", "avcintra-class=100").build().unwrap();
+        let parse = gst::ElementFactory::make("h264parse").build().unwrap();
+        let bs = gst::ElementFactory::make("capsfilter")
+            .property("caps", gst::Caps::builder("video/x-h264").field("stream-format", "byte-stream").field("alignment", "au").build())
+            .build()
+            .unwrap();
+        let vq = gst::ElementFactory::make("queue").build().unwrap();
+        pipeline.add_many([&vsrc, &vcaps, &enc, &parse, &bs, &vq]).unwrap();
+        gst::Element::link_many([&vsrc, &vcaps, &enc, &parse, &bs, &vq]).unwrap();
+        vq.static_pad("src").unwrap().link(&muxer.request_pad_simple("mpeg_video_sink_%u").unwrap()).unwrap();
+        let asrc = gst::ElementFactory::make("audiotestsrc").property("num-buffers", 12i32).property("samplesperbuffer", 960i32).build().unwrap();
+        let acaps = gst::ElementFactory::make("capsfilter")
+            .property("caps", gst::Caps::builder("audio/x-raw").field("format", "F32LE").field("layout", "interleaved").field("rate", 48000i32).field("channels", 16i32).field("channel-mask", gst::Bitmask::new(0)).build())
+            .build()
+            .unwrap();
+        pipeline.add_many([&asrc, &acaps]).unwrap();
+        asrc.link(&acaps).unwrap();
+        arm_tracks(&pipeline, &muxer, &acaps, 16).unwrap();
+        pipeline.set_state(gst::State::Playing).unwrap();
+        let bus = pipeline.bus().unwrap();
+        let msg = bus.timed_pop_filtered(gst::ClockTime::from_seconds(60), &[gst::MessageType::Eos, gst::MessageType::Error]);
+        pipeline.set_state(gst::State::Null).unwrap();
+        assert!(matches!(msg.as_ref().map(|m| m.type_()), Some(gst::MessageType::Eos)), "msg = {msg:?}");
+        let size = std::fs::metadata(&path).unwrap().len();
+        assert!(size > 1_000_000, "MXF zu klein: {size}");
+        if let Ok(out) = std::process::Command::new("ffprobe").args(["-v", "error", "-show_entries", "stream=codec_type,codec_name,profile,width,height,channels,bits_per_raw_sample", "-of", "compact"]).arg(&path).output() {
+            let text = String::from_utf8_lossy(&out.stdout).to_string();
+            assert!(text.contains("profile=High 4:2:2 Intra"), "kein Intra-Profil: {text}");
+            assert!(text.contains("width=1920") && text.contains("height=1080"), "{text}");
+            assert_eq!(text.matches("codec_type=audio").count(), 16, "16 Tonspuren erwartet: {text}");
+            assert!(text.matches("channels=1").count() >= 16, "jede Spur mono: {text}");
+        }
+    }
+
+    fn tempfile_dir() -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("omp-recorder-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
     }
 }

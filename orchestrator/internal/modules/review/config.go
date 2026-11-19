@@ -112,8 +112,14 @@ type QCProfile struct {
 		AudioTracks int      `json:"audioTracks,omitempty"` // Mindestanzahl
 		SampleRate  int      `json:"sampleRate,omitempty"`
 		MinBitDepth int      `json:"minBitDepth,omitempty"`
-		Captions    bool     `json:"captions,omitempty"` // Untertitel-/Datenstrom erwartet
-		Transfer    string   `json:"transfer,omitempty"` // sdr | hlg | pq | any: erwartete Übertragungsfunktion (NMOS IS-04 transfer_characteristic)
+		// Videoprofil (ffprobe `profile`, Teilstring ohne Groß-/Kleinschreibung, z. B. „High 4:2:2 Intra“ für AVC-Intra), Chroma
+		// („4:2:2“), Bittiefe des Bildes (Mindestwert) und eine genaue Zahl von Tonspuren (AudioTracks ist nur die Mindestzahl).
+		VideoProfiles    []string `json:"videoProfiles,omitempty"`
+		Chroma           string   `json:"chroma,omitempty"`
+		VideoBitDepth    int      `json:"videoBitDepth,omitempty"`
+		ExactAudioTracks int      `json:"exactAudioTracks,omitempty"`
+		Captions         bool     `json:"captions,omitempty"` // Untertitel-/Datenstrom erwartet
+		Transfer         string   `json:"transfer,omitempty"` // sdr | hlg | pq | any: erwartete Übertragungsfunktion (NMOS IS-04 transfer_characteristic)
 	} `json:"expect"`
 	MaxAudioStreams int `json:"maxAudioStreams"` // Analyse begrenzen
 	TimeoutSec      int `json:"timeoutSec"`
@@ -161,9 +167,24 @@ func RadioShortFormProfile() QCProfile {
 	return p
 }
 
-// builtinRadioProfiles sind die mitgelieferten Radio-Profile (werden angelegt, falls sie fehlen).
+// AVCIntra100Profile: Ziel-Dateiformat der Produktion — AVC-Intra Class 100 in 1080/50p, MXF, 10 Bit 4:2:2 Intra, 16 Tonspuren
+// (Mono, 48 kHz, 24 Bit). Es prüft das FORMAT der Datei; die Lautheit gehört zum Programm, nicht zur Einzelspur, und bleibt aus.
+func AVCIntra100Profile() QCProfile {
+	p := DefaultQCProfile()
+	p.ID, p.Name = "avc-intra-100-1080p50", "AVC-Intra Class 100 (1080/50p, 16 Tonspuren)"
+	p.Loudness.Enabled = false
+	p.Expect.Width, p.Expect.Height, p.Expect.FrameRate, p.Expect.FieldOrder = 1920, 1080, "50/1", "progressive"
+	p.Expect.VideoCodecs = []string{"h264"}
+	p.Expect.VideoProfiles = []string{"High 4:2:2 Intra"}
+	p.Expect.Chroma, p.Expect.VideoBitDepth = "4:2:2", 10
+	p.Expect.Container = "mxf"
+	p.Expect.AudioTracks, p.Expect.ExactAudioTracks, p.Expect.SampleRate, p.Expect.MinBitDepth = 16, 16, 48000, 24
+	return p
+}
+
+// builtinRadioProfiles sind die mitgelieferten Profile (Radio und Dateiformat; werden angelegt, falls sie fehlen).
 func builtinRadioProfiles() []QCProfile {
-	return []QCProfile{RadioProductionProfile(), RadioShortFormProfile()}
+	return []QCProfile{RadioProductionProfile(), RadioShortFormProfile(), AVCIntra100Profile()}
 }
 
 // DefaultConfig: Standardwerte.
@@ -174,7 +195,7 @@ func DefaultConfig() Config {
 		AllowOverlap: true, AllowGaps: true, MinSegmentFrames: 1,
 		ApprovalMode: "single", AllowSelfApproval: true,
 		DefaultQCProfile: p.ID, QCProfiles: map[string]QCProfile{p.ID: p, RadioProductionProfile().ID: RadioProductionProfile(), RadioShortFormProfile().ID: RadioShortFormProfile()}, QCWorkers: 1, AutoQC: true,
-		ProxyHeight: 540, ProxyCRF: 23, ProxyMaxAudio: 8, ImportDir: "data/media", SubtitleDir: "data/subtitles",
+		ProxyHeight: 540, ProxyCRF: 23, ProxyMaxAudio: 16, ImportDir: "data/media", SubtitleDir: "data/subtitles",
 		MetadataFields: []MetaField{
 			{ID: "title", Label: "Titel", Type: "text", Required: true, Max: 200},
 			{ID: "description", Label: "Beschreibung", Type: "longtext", Max: 4000},

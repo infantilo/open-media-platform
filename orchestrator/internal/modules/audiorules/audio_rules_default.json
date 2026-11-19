@@ -112,6 +112,127 @@
           ]
         }
       ]
+    },
+    {
+      "id": "mxf-16",
+      "match": {
+        "format": "mxf",
+        "tracks": 16
+      },
+      "tracks": [
+        {
+          "n": 1,
+          "layout": "mono",
+          "tags": [
+            "pos:1"
+          ]
+        },
+        {
+          "n": 2,
+          "layout": "mono",
+          "tags": [
+            "pos:2"
+          ]
+        },
+        {
+          "n": 3,
+          "layout": "mono",
+          "tags": [
+            "pos:3"
+          ]
+        },
+        {
+          "n": 4,
+          "layout": "mono",
+          "tags": [
+            "pos:4"
+          ]
+        },
+        {
+          "n": 5,
+          "layout": "mono",
+          "tags": [
+            "pos:5"
+          ]
+        },
+        {
+          "n": 6,
+          "layout": "mono",
+          "tags": [
+            "pos:6"
+          ]
+        },
+        {
+          "n": 7,
+          "layout": "mono",
+          "tags": [
+            "pos:7"
+          ]
+        },
+        {
+          "n": 8,
+          "layout": "mono",
+          "tags": [
+            "pos:8"
+          ]
+        },
+        {
+          "n": 9,
+          "layout": "mono",
+          "tags": [
+            "pos:9"
+          ]
+        },
+        {
+          "n": 10,
+          "layout": "mono",
+          "tags": [
+            "pos:10"
+          ]
+        },
+        {
+          "n": 11,
+          "layout": "mono",
+          "tags": [
+            "pos:11"
+          ]
+        },
+        {
+          "n": 12,
+          "layout": "mono",
+          "tags": [
+            "pos:12"
+          ]
+        },
+        {
+          "n": 13,
+          "layout": "mono",
+          "tags": [
+            "pos:13"
+          ]
+        },
+        {
+          "n": 14,
+          "layout": "mono",
+          "tags": [
+            "pos:14"
+          ]
+        },
+        {
+          "n": 15,
+          "layout": "mono",
+          "tags": [
+            "pos:15"
+          ]
+        },
+        {
+          "n": 16,
+          "layout": "mono",
+          "tags": [
+            "pos:16"
+          ]
+        }
+      ]
     }
   ],
   "mappings": [

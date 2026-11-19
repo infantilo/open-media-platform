@@ -330,8 +330,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 id: Some(video_flow_id),
                 frame_width: width,
                 frame_height: height,
-                grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
-                grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
+                grain_rate_numerator: pipeline::framerate().0,
+                grain_rate_denominator: pipeline::framerate().1,
             }),
             label: Some(format!("{label} Sender")),
             // Natural Group (NMOS grouphint "<Gruppe>:<Rolle>"): Video und alle Audio-Gruppen dieses Players
@@ -346,7 +346,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tc_flow_id = omp_node_sdk::idgen::new_v4();
     let tc_ctx = if audio_only { Err("Tonbetrieb".to_string()) } else { omp_mediaio::mxl::MxlContext::new(&domain).map(Arc::new).map_err(|e| e.to_string()) };
     match tc_ctx {
-        Ok(ctx) => match omp_mediaio::mxl::MxlDataOutput::new(ctx, &tc_flow_id, &format!("{label} Zeitcode"), &label, pipeline::FRAMERATE_NUMERATOR, pipeline::FRAMERATE_DENOMINATOR) {
+        Ok(ctx) => match omp_mediaio::mxl::MxlDataOutput::new(ctx, &tc_flow_id, &format!("{label} Zeitcode"), &label, pipeline::framerate().0, pipeline::framerate().1) {
             Ok(out) => {
                 let out = Arc::new(out);
                 tc_frame.attach(out.clone());
@@ -355,8 +355,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
                     flow: Some(omp_node_sdk::node::FlowSpec::Data {
                         id: Some(tc_flow_id),
-                        grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
-                        grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
+                        grain_rate_numerator: pipeline::framerate().0,
+                        grain_rate_denominator: pipeline::framerate().1,
                         did_sdid: vec![(omp_mediaio::anc::DID_ATC, omp_mediaio::anc::SDID_ATC)],
                     }),
                     label: Some(format!("{label} Zeitcode (ANC)")),

@@ -60,8 +60,24 @@ use crate::audio::{self, AudioCtx, Distributor};
 
 pub const DEFAULT_WIDTH: u32 = 1920;
 pub const DEFAULT_HEIGHT: u32 = 1080;
-pub const FRAMERATE_NUMERATOR: u32 = 25;
-pub const FRAMERATE_DENOMINATOR: u32 = 1;
+/// Standard-Bildrate des Ausgangs; gilt, wenn `OMP_FRAMERATE_NUM`/`OMP_FRAMERATE_DEN` fehlen oder ungültig sind.
+pub const DEFAULT_FRAMERATE_NUMERATOR: u32 = 25;
+pub const DEFAULT_FRAMERATE_DENOMINATOR: u32 = 1;
+
+/// Bildrate des Ausgangs (Zähler, Nenner): `OMP_FRAMERATE_NUM`/`OMP_FRAMERATE_DEN`, die der Orchestrator aus der Formatwahl der
+/// Rolle bzw. des Workflows setzt (z. B. 1080p50 → 50/1); sonst 25/1. Einmal beim ersten Zugriff gelesen.
+pub fn framerate() -> (u32, u32) {
+    static RATE: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+    *RATE.get_or_init(|| {
+        let num = std::env::var("OMP_FRAMERATE_NUM").ok().and_then(|v| v.trim().parse::<u32>().ok()).filter(|n| *n > 0);
+        let den = std::env::var("OMP_FRAMERATE_DEN").ok().and_then(|v| v.trim().parse::<u32>().ok()).filter(|n| *n > 0);
+        match (num, den) {
+            (Some(n), Some(d)) => (n, d),
+            (Some(n), None) => (n, 1),
+            _ => (DEFAULT_FRAMERATE_NUMERATOR, DEFAULT_FRAMERATE_DENOMINATOR),
+        }
+    })
+}
 pub const SAMPLE_RATE: u32 = 48000;
 pub const CHANNELS: u32 = 2;
 /// Default-Pattern/-Ton für einen Live-Item ohne gefundenen Video- bzw.
@@ -253,7 +269,7 @@ fn video_caps(width: u32, height: u32) -> gst::Caps {
     gst::Caps::builder("video/x-raw")
         .field("width", width as i32)
         .field("height", height as i32)
-        .field("framerate", gst::Fraction::new(FRAMERATE_NUMERATOR as i32, FRAMERATE_DENOMINATOR as i32))
+        .field("framerate", gst::Fraction::new(framerate().0 as i32, framerate().1 as i32))
         .build()
 }
 
@@ -793,7 +809,7 @@ fn attach_timecode_probe(tail: &gst::Element, tc_frame: Arc<crate::tc::TcSource>
                 if let (Some(pts), Some(seg)) = (buf.pts(), segment.lock().expect("lock poisoned").as_ref())
                     && let Some(st) = seg.to_stream_time(pts)
                 {
-                    let frame = (st.nseconds() as u128 * FRAMERATE_NUMERATOR as u128 + (FRAMERATE_DENOMINATOR as u128 * 500_000_000)) / (FRAMERATE_DENOMINATOR as u128 * 1_000_000_000);
+                    let frame = (st.nseconds() as u128 * framerate().0 as u128 + (framerate().1 as u128 * 500_000_000)) / (framerate().1 as u128 * 1_000_000_000);
                     tc_frame.set(frame as i64);
                     tc_frame.note_pts(pts.nseconds(), frame as i64);
                 }
@@ -904,8 +920,8 @@ fn build(config: &Config, item: &Item, tx: UnboundedSender<Event>, events: std::
                 &config.label,
                 config.width,
                 config.height,
-                FRAMERATE_NUMERATOR,
-                FRAMERATE_DENOMINATOR,
+                framerate().0,
+                framerate().1,
                 Arc::new(AtomicU64::new(0)),
             )
             .map_err(|e| {

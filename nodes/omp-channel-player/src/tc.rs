@@ -12,7 +12,7 @@ use omp_mediaio::anc::{self, Timecode};
 use omp_mediaio::mxl::MxlDataOutput;
 use gstreamer as gst;
 
-use crate::pipeline::{FRAMERATE_DENOMINATOR, FRAMERATE_NUMERATOR};
+use crate::pipeline::framerate;
 
 /// Letzte vom Videozweig gemeldete Position (Bildnummer, Zeitpunkt der Meldung). Der Probe schreibt, der Ausgang liest.
 pub struct TcSource {
@@ -138,13 +138,13 @@ pub fn payload(frame: i64) -> Result<Vec<u8>, String> {
     if frame < 0 {
         return anc::mxl_grain(&[]);
     }
-    let tc = Timecode::from_frame_number(frame as u64, FRAMERATE_NUMERATOR, FRAMERATE_DENOMINATOR, false);
+    let tc = Timecode::from_frame_number(frame as u64, framerate().0, framerate().1, false);
     anc::mxl_grain(&[anc::atc_packet(&tc, true)])
 }
 
 pub fn spawn(out: Arc<MxlDataOutput>, source: Arc<TcSource>, shutdown: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let mut follower = Follower::new(FRAMERATE_NUMERATOR, FRAMERATE_DENOMINATOR);
+        let mut follower = Follower::new(framerate().0, framerate().1);
         let mut index = out.index_after_ns(0) + 1;
         while !shutdown.load(Ordering::Relaxed) {
             let frame = follower.frame_at(source.get(), Instant::now(), index);

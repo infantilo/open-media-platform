@@ -90,6 +90,8 @@ struct RecorderStore {
     mca_plan: std::sync::Mutex<String>,
     /// Kanalplan (JSON, s. `audio_plan.rs`) für die nächste Aufnahme; leer = Ton der Hauptquelle unverändert.
     audio_plan: std::sync::Mutex<String>,
+    /// Aufnahmeprofil (`""`/`h264` = bisher, `avci50`/`avci100`/`avci200` = AVC-Intra, s. `pipeline::VideoProfile`).
+    profile: std::sync::Mutex<String>,
 }
 
 impl RecorderStore {
@@ -138,6 +140,13 @@ impl ParamStore for RecorderStore {
             range: None,
             readonly: false,
         });
+        parameters.push(ParamSpec {
+            name: "record.profile".to_string(),
+            kind: ParamType::String,
+            unit: None,
+            range: None,
+            readonly: false,
+        });
         parameters.extend(self.monitor.param_specs("monitor"));
         let mut methods = vec![
             MethodSpec {
@@ -165,6 +174,7 @@ impl ParamStore for RecorderStore {
             // Werte (s. `omp-srt-gateway::GatewayStore::get`).
             "record.mcaPlan" => Some(serde_json::json!(self.mca_plan.lock().expect("lock poisoned").clone())),
             "record.audioPlan" => Some(serde_json::json!(self.audio_plan.lock().expect("lock poisoned").clone())),
+            "record.profile" => Some(serde_json::json!(self.profile.lock().expect("lock poisoned").clone())),
             _ => self.monitor.get("monitor", name, None, Vec::new),
         }
     }
@@ -173,6 +183,13 @@ impl ParamStore for RecorderStore {
         if name == "record.mcaPlan" {
             let text = value.as_str().ok_or(SetError::Unknown)?.to_string();
             *self.mca_plan.lock().expect("lock poisoned") = text;
+            return Ok(());
+        }
+        if name == "record.profile" {
+            let text = value.as_str().ok_or(SetError::Unknown)?.trim().to_string();
+            // Früh ablehnen: ein unbekanntes Profil soll nicht bis zum Start unbemerkt bleiben.
+            pipeline::VideoProfile::parse(&text).map_err(|_| SetError::Unknown)?;
+            *self.profile.lock().expect("lock poisoned") = text;
             return Ok(());
         }
         if name == "record.audioPlan" {
@@ -213,7 +230,7 @@ impl ParamStore for RecorderStore {
                     eprintln!("omp-recorder: record.start abgelehnt: {msg}");
                     return Err(InvokeError::Message(msg));
                 }
-                match self.pipeline.start_recording(file_name.to_string(), Some(self.mca_plan.lock().expect("lock poisoned").clone()), Some(self.audio_plan.lock().expect("lock poisoned").clone())) {
+                match self.pipeline.start_recording(file_name.to_string(), Some(self.mca_plan.lock().expect("lock poisoned").clone()), Some(self.audio_plan.lock().expect("lock poisoned").clone()), self.profile.lock().expect("lock poisoned").clone()) {
                     Ok(()) => {
                         self.monitor.activate();
                         Ok(())
@@ -371,6 +388,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         monitor: monitor.clone(),
         mca_plan: std::sync::Mutex::new(String::new()),
         audio_plan: std::sync::Mutex::new(String::new()),
+        // Standardprofil der Instanz: OMP_RECORDER_PROFILE (h264 | avci50 | avci100 | avci200); ungültig → bisheriges H.264 mit Hinweis
+        profile: std::sync::Mutex::new({
+            let v = std::env::var("OMP_RECORDER_PROFILE").unwrap_or_default().trim().to_string();
+            match pipeline::VideoProfile::parse(&v) {
+                Ok(_) => v,
+                Err(e) => {
+                    eprintln!("omp-recorder: OMP_RECORDER_PROFILE ignoriert: {e}");
+                    String::new()
+                }
+            }
+        }),
     });
 
     let handle = omp_node_sdk::start(

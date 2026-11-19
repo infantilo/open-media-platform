@@ -534,8 +534,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             id: Some(video_flow_id),
             frame_width: width,
             frame_height: height,
-            grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
-            grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
+            grain_rate_numerator: pipeline::framerate().0,
+            grain_rate_denominator: pipeline::framerate().1,
         }),
         label: Some(format!("{label} Programm")),
         ..Default::default()

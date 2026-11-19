@@ -79,7 +79,7 @@ fn main() {
     h.connect_video(vid);
     h.connect_audio(0, aid);
     std::thread::sleep(Duration::from_millis(500));
-    h.start_recording(rec_file.clone(), None, None).unwrap();
+    h.start_recording(rec_file.clone(), None, None, String::new()).unwrap();
     std::thread::sleep(Duration::from_secs(secs));
     println!("duration_ms={} flowed/media_ready={}", h.duration_ms(), h.media_ready());
     h.stop_recording().unwrap();

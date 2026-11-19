@@ -58,14 +58,20 @@ pub fn default_profile() -> OutputProfile {
     }
 }
 
-pub fn default_schemas() -> Vec<TrackSchema> {
-    vec![TrackSchema {
-        id: "mxf-8".to_string(),
-        matcher: SchemaMatch { format: Some("mxf".to_string()), tracks: Some(8), path_glob: None },
-        tracks: (1..=8)
+/// Mono-Spur-Schema für `count` Spuren (`pos:1` … `pos:count`): jede Essenzspur ein eigener Kanal.
+fn mono_schema(id: &str, count: u32) -> TrackSchema {
+    TrackSchema {
+        id: id.to_string(),
+        matcher: SchemaMatch { format: Some("mxf".to_string()), tracks: Some(count), path_glob: None },
+        tracks: (1..=count)
             .map(|n| SourceTrack { n, layout: Layout::Mono, channels: vec![], tags: vec![format!("pos:{n}")] })
             .collect(),
-    }]
+    }
+}
+
+/// `mxf-8` (Rundfunk-Bestand) und `mxf-16` (AVC-Intra-Produktionsdateien mit 16 Einzelspuren).
+pub fn default_schemas() -> Vec<TrackSchema> {
+    vec![mono_schema("mxf-8", 8), mono_schema("mxf-16", 16)]
 }
 
 /// Die 13 Standard-Presets als Zuordnungen: je Gruppe die Quellspur pro Zielkanal.

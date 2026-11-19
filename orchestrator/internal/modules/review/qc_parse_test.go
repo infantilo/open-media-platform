@@ -189,3 +189,26 @@ func TestRadioProfilesAreBuiltinAndValid(t *testing.T) {
 		t.Fatal("Radio Kurzform fehlt nach normalize")
 	}
 }
+
+// TestAVCIntra100ProfileExpectsTheTargetFormat: das mitgelieferte Profil beschreibt das Ziel-Dateiformat und gehört zu jeder
+// Konfiguration (auch einer älteren, die es noch nicht kennt).
+func TestAVCIntra100ProfileExpectsTheTargetFormat(t *testing.T) {
+	p := AVCIntra100Profile()
+	e := p.Expect
+	if e.Width != 1920 || e.Height != 1080 || e.FrameRate != "50/1" || e.FieldOrder != "progressive" || e.ExactAudioTracks != 16 || e.Chroma != "4:2:2" || e.VideoBitDepth != 10 {
+		t.Fatalf("Erwartung = %+v", e)
+	}
+	if len(e.VideoProfiles) != 1 || e.VideoProfiles[0] != "High 4:2:2 Intra" || e.Container != "mxf" {
+		t.Fatalf("Profil/Container = %+v", e)
+	}
+	c := Config{DefaultQCProfile: "x", QCProfiles: map[string]QCProfile{"x": {ID: "x", Version: 1}}}
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.QCProfiles[p.ID]; !ok {
+		t.Fatal("das AVC-Intra-Profil muss in einer älteren Konfiguration nachgetragen werden")
+	}
+	if DefaultConfig().ProxyMaxAudio < 16 {
+		t.Fatal("Review-Proxys müssen 16 Tonspuren tragen können")
+	}
+}

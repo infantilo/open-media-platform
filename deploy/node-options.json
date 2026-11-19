@@ -2368,6 +2368,16 @@
   ],
   "omp-recorder": [
     {
+      "key": "OMP_RECORDER_PROFILE",
+      "i18n": { "en": {"label": "Recording profile", "description": "h264 = the usual H.264 (Matroska or MXF). AVC-Intra (SMPTE RDD 32) writes intra-only 10-bit 4:2:2 into MXF with every audio channel as its own mono track (16 tracks by default). Class 100 covers 1080/50p at about 230 Mbit/s (about 100 GB per hour) and needs roughly 14 CPU cores for real time in software. Needs a .mxf target file."} },
+      "label": "Aufnahmeprofil",
+      "type": "enum",
+      "description": "h264 = das übliche H.264 (Matroska oder MXF). AVC-Intra (SMPTE RDD 32) schreibt reine Intra-Bilder in 10 Bit 4:2:2 in MXF, jeden Tonkanal als eigene Mono-Spur (standardmäßig 16 Spuren). Class 100 deckt 1080/50p mit rund 230 Mbit/s ab (etwa 100 GB je Stunde) und braucht für Echtzeit in Software etwa 14 CPU-Kerne. Verlangt eine .mxf-Zieldatei.",
+      "default": "h264",
+      "group": "Format",
+      "choices": [{"value": "h264"}, {"value": "avci50"}, {"value": "avci100"}, {"value": "avci200"}]
+    },
+    {
       "key": "OMP_MEDIA_DIR",
       "i18n": { "en": {"label": "Media directory", "description": "Directory that is recorded into.", "group": "Media and files"} },
       "label": "Medienverzeichnis",
