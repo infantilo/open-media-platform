@@ -10,6 +10,10 @@
 //   - verwerfen (DiscardHeldState): der jetzige Stand des Nodes gilt, die nächste Sicherung überschreibt den alten;
 //   - im Editor speichern (Pin): wie verwerfen, der jetzige Stand wird festgeschrieben.
 //
+// Ausnahme (2026-11-19): Rollen, deren Stand reine Konfiguration ist (autoRestoreNodeTypes, derzeit omp-ograf: Ebenen und
+// Layout-Bindungen `follow`), werden nach dem Neustart selbsttätig eingespielt — sonst folgte die Grafik nach einem Absturz
+// den PIPs nicht mehr. Schleifenschutz: ein zweiter Absturz binnen autoRestoreWindow lässt den Stand gehalten.
+//
 // Ein Workflow-Stop/-Start spielt den gehaltenen Stand wie jeden gespeicherten Zustand ein (das ist ein bewusster
 // Neustart). Der Merker steht im gespeicherten Eintrag und überlebt einen Orchestrator-Neustart.
 package workflows
@@ -154,6 +158,40 @@ func (s *Service) RestoreHeldState(ctx context.Context, workflowID, role string)
 		return fmt.Errorf("restore failed: %w", err)
 	}
 	return nil
+}
+
+// autoRestoreNodeTypes: Node-Typen, deren gesicherter Stand reine Konfiguration ist (Ebenen, Layout-Bindungen) und nach
+// einem Absturz-Neustart ohne Bedienerentscheidung zurückgespielt wird. Ohne das verlor z. B. OGraf nach einem Absturz
+// die PIP-Kopplung (`follow`), bis jemand den Workflow stoppte und startete.
+var autoRestoreNodeTypes = map[string]bool{"omp-ograf": true}
+
+// autoRestoreWindow: Schleifenschutz. Stürzt die Rolle binnen dieser Zeit nach dem automatischen Einspielen erneut ab,
+// kann der Stand der Grund sein — er bleibt dann gehalten (Bedienerentscheidung, wie bei allen übrigen Rollen).
+const autoRestoreWindow = 5 * time.Minute
+
+// autoRestoreAfterCrash spielt den gehaltenen Stand einer Rolle der Typen in autoRestoreNodeTypes selbsttätig ein.
+func (s *Service) autoRestoreAfterCrash(wfID, role, nodeType string) {
+	if !autoRestoreNodeTypes[nodeType] {
+		return
+	}
+	key := wfID + "\x00" + role
+	now := time.Now()
+	if prev, ok := s.autoRestored.Load(key); ok && now.Sub(prev.(time.Time)) < autoRestoreWindow {
+		slog.Warn("workflows: role crashed again shortly after an automatic state restore, keeping its saved state held for the operator",
+			"workflow", wfID, "role", role)
+		return
+	}
+	s.autoRestored.Store(key, now)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	switch err := s.RestoreHeldState(ctx, wfID, role); {
+	case err == nil:
+		slog.Info("workflows: restored saved state after crash restart", "workflow", wfID, "role", role)
+	case errors.Is(err, ErrNoHeldState):
+		// nichts gesichert: nichts einzuspielen
+	default:
+		slog.Warn("workflows: automatic state restore after crash restart failed, state stays held", "workflow", wfID, "role", role, "error", err)
+	}
 }
 
 // DiscardHeldState gibt den gehaltenen Stand auf: der jetzige Stand des Nodes gilt, die Sicherung läuft wieder.

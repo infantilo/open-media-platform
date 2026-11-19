@@ -290,6 +290,7 @@ type Service struct {
 	volatileFeeds map[string][]string // Workflow\x00Eingang → Sender, die ihn zuletzt gespeist haben (nur Laufzeit)
 	unrestoredMu  sync.Mutex
 	unrestored    map[string]int
+	autoRestored  sync.Map        // Workflow\x00Rolle → Zeitpunkt des letzten automatischen Einspielens nach Absturz (statehold.go)
 	posted        map[string]bool // s. markPosted, unter unrestoredMu
 	store         workflowStore
 	nodes         NodeLister
@@ -1461,6 +1462,7 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 	}
 	s.publish(wf)
 	slog.Info("workflows: rewired role after automatic restart", "workflow", wf.ID, "role", role, "instance", instanceID)
+	s.autoRestoreAfterCrash(wf.ID, role, roleNodeType(wf, role))
 }
 
 // stillBacks lädt den Workflow frisch nach und meldet, ob role dort

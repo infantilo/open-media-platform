@@ -107,3 +107,72 @@ func TestHeldStateSurvivesBackupAndIsRestoredOnlyOnRequest(t *testing.T) {
 		t.Fatalf("second DiscardHeldState() error = %v, want ErrNoHeldState", err)
 	}
 }
+
+// TestAutoRestoreAfterCrashForOgrafWithLoopGuard — OGraf (reine Konfiguration: Ebenen, Layout-Bindungen) bekommt seinen
+// Stand nach einem Absturz-Neustart selbsttätig zurück, andere Rollen nicht. Stürzt die Rolle binnen autoRestoreWindow
+// erneut ab, bleibt der Stand gehalten.
+func TestAutoRestoreAfterCrashForOgrafWithLoopGuard(t *testing.T) {
+	var mu sync.Mutex
+	live := `{"state":{"layers":[],"layout":[]}}`
+	posts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/state":
+			_, _ = w.Write([]byte(live))
+		case r.Method == http.MethodPost && r.URL.Path == "/state":
+			body, _ := io.ReadAll(r.Body)
+			live = string(body)
+			posts++
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	store := newFakeStore()
+	nodes := &fakeNodeLister{}
+	svc := &Service{store: store, nodes: nodes, httpClient: http.DefaultClient, migrations: newMigrationState()}
+	nodes.add(registry.NodeView{ID: "n1", InstanceID: "i1", APIBaseURL: srv.URL})
+	wf := Workflow{ID: "wf1", Name: "grafik", Status: StatusStarted,
+		Definition: Definition{Roles: []Role{{Name: "Grafik", NodeType: "omp-ograf"}, {Name: "mix", NodeType: "omp-audio-mixer"}}},
+		Runtime:    map[string]RoleRuntime{"Grafik": {InstanceID: "i1", NodeID: "n1"}}}
+	store.Put(wf)
+	good := json.RawMessage(`{"__kind":"node-state","__blob":{"state":{"layers":[{"id":"pip-wall"}],"layout":[{"kind":"follow","zone":"pip1"}]}}}`)
+	posted := func() int { mu.Lock(); defer mu.Unlock(); return posts }
+
+	// Andere Rollen: nie selbsttätig.
+	_ = store.SetRoleState(wf.ID, "mix", good)
+	svc.setStateHold(wf.ID, "mix", true)
+	svc.autoRestoreAfterCrash(wf.ID, "mix", "omp-audio-mixer")
+	if posted() != 0 {
+		t.Fatal("Rolle ohne Freigabe wurde selbsttätig eingespielt")
+	}
+
+	// OGraf: erster Absturz → eingespielt, Merker gelöst.
+	_ = store.SetRoleState(wf.ID, "Grafik", good)
+	svc.setStateHold(wf.ID, "Grafik", true)
+	svc.autoRestoreAfterCrash(wf.ID, "Grafik", "omp-ograf")
+	if posted() != 1 {
+		t.Fatalf("posts nach erstem Absturz = %d, want 1", posted())
+	}
+	if held, _ := svc.HeldStates(wf.ID); len(held) != 1 || held[0] != "mix" {
+		t.Fatalf("HeldStates = %v, want nur [mix]", held)
+	}
+
+	// Zweiter Absturz kurz danach → Schleifenschutz, Stand bleibt gehalten.
+	mu.Lock()
+	live = `{"state":{"layers":[],"layout":[]}}`
+	mu.Unlock()
+	_ = store.SetRoleState(wf.ID, "Grafik", good)
+	svc.setStateHold(wf.ID, "Grafik", true)
+	svc.autoRestoreAfterCrash(wf.ID, "Grafik", "omp-ograf")
+	if posted() != 1 {
+		t.Fatalf("Schleifenschutz hat nicht gegriffen (posts=%d)", posted())
+	}
+	if held, _ := svc.HeldStates(wf.ID); len(held) != 2 {
+		t.Fatalf("HeldStates = %v, want [Grafik mix]", held)
+	}
+}
