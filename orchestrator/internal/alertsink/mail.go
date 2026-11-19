@@ -100,8 +100,8 @@ func hostnameOr(def string) string {
 func (m *Mailer) Message(a Alert, to []string) []byte {
 	subj := sanitizeHeader(fmt.Sprintf("[OpenMediaPlatform] %s %s: %s", strings.ToUpper(a.Severity), a.Kind, firstNonEmpty(a.Name, a.Subject)))
 	var b strings.Builder
-	b.WriteString("From: " + m.From + "\r\n")
-	b.WriteString("To: " + strings.Join(to, ", ") + "\r\n")
+	b.WriteString("From: " + sanitizeHeader(m.From) + "\r\n")
+	b.WriteString("To: " + sanitizeHeader(strings.Join(to, ", ")) + "\r\n")
 	b.WriteString("Subject: " + mimeEncode(subj) + "\r\n")
 	b.WriteString("Date: " + a.Time.Format(time.RFC1123Z) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
