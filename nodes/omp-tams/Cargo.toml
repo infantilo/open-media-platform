@@ -1,0 +1,12 @@
+[package]
+name = "omp-tams"
+version = "0.1.0"
+edition = "2024"
+# Kapitel 105 (TAMS-Client). Projektlizenz wie bei den übrigen Crates: publish=false.
+publish = false
+
+[dependencies]
+# Minimal-Dependency-Regel (UMSETZUNG §0 Nr. 5): TAMS ist eine JSON-API. serde/serde_json
+# sind bereits im Abhängigkeitsbaum (omp-audio-mixer, omp-recorder), nichts Neues.
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"

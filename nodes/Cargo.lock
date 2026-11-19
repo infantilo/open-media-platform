@@ -1889,6 +1889,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-tams"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "omp-video-mixer-me"
 version = "0.1.0"
 dependencies = [
