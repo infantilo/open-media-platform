@@ -1555,6 +1555,7 @@ dependencies = [
  "gstreamer",
  "gstreamer-app",
  "gstreamer-net",
+ "gstreamer-video",
  "libc",
  "libloading",
  "mxl",

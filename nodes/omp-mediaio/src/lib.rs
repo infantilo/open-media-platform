@@ -23,6 +23,7 @@ pub mod au_ring;
 pub mod rtp;
 pub mod st2110;
 pub mod st2022_7;
+pub mod st2110_interlaced;
 pub mod kbypass;
 pub mod st2110_anc;
 pub mod scte_decode;

@@ -24,6 +24,9 @@ pub struct ParsedVideoSdp {
     pub framerate_denominator: i32,
     /// Bittiefe aus `depth=` (8 oder 10); fehlt sie, gilt 8 (bisheriges Verhalten).
     pub depth: u8,
+    /// `interlace` im `a=fmtp` (RFC 4175): Halbbildstrom. Die Bildrate (`exactframerate`) ist bei Halbbild die Bildrate
+    /// (25/1 für 1080i50), nicht die Halbbildrate.
+    pub interlaced: bool,
 }
 
 pub fn parse_video_sdp(sdp: &str) -> Result<ParsedVideoSdp, String> {
@@ -34,6 +37,7 @@ pub fn parse_video_sdp(sdp: &str) -> Result<ParsedVideoSdp, String> {
     let mut framerate_numerator: Option<i32> = None;
     let mut framerate_denominator: Option<i32> = None;
     let mut depth: Option<u8> = None;
+    let mut interlaced = false;
 
     for line in sdp.lines() {
         let line = line.trim();
@@ -56,6 +60,10 @@ pub fn parse_video_sdp(sdp: &str) -> Result<ParsedVideoSdp, String> {
             for pair in params.split(';') {
                 let pair = pair.trim();
                 let Some((key, value)) = pair.split_once('=') else {
+                    // Flags ohne Wert: `interlace`, `segmented` (Halbbild und psF), hier nur `interlace` ausgewertet
+                    if pair == "interlace" {
+                        interlaced = true;
+                    }
                     continue;
                 };
                 let key = key.trim();
@@ -82,6 +90,7 @@ pub fn parse_video_sdp(sdp: &str) -> Result<ParsedVideoSdp, String> {
         height: height.ok_or("SDP: kein height in a=fmtp gefunden")?,
         framerate_numerator: framerate_numerator.ok_or("SDP: kein exactframerate in a=fmtp gefunden")?,
         framerate_denominator: framerate_denominator.unwrap_or(1),
+        interlaced,
         depth: match depth.unwrap_or(8) {
             d @ (8 | 10) => d,
             d => return Err(format!("SDP: depth={d} nicht unterstützt (8 oder 10)")),
@@ -103,12 +112,15 @@ pub struct ParsedAudioSdp {
     pub port: u16,
     pub sample_rate: i32,
     pub channels: i32,
+    /// 16 (`L16`) oder 24 (`L24`).
+    pub bits: u8,
 }
 
 pub fn parse_audio_sdp(sdp: &str) -> Result<ParsedAudioSdp, String> {
     let mut host: Option<String> = None;
     let mut port: Option<u16> = None;
     let mut sample_rate: Option<i32> = None;
+    let mut bits: u8 = 24;
     let mut channels: Option<i32> = None;
 
     for line in sdp.lines() {
@@ -126,9 +138,11 @@ pub fn parse_audio_sdp(sdp: &str) -> Result<ParsedAudioSdp, String> {
             let Some((_, encoding)) = rest.split_once(' ') else { continue };
             let mut parts = encoding.trim().split('/');
             let codec = parts.next().unwrap_or("");
-            if codec != "L24" {
-                continue;
-            }
+            bits = match codec {
+                "L24" => 24,
+                "L16" => 16,
+                _ => continue,
+            };
             sample_rate = parts.next().and_then(|v| v.parse().ok());
             channels = parts.next().and_then(|v| v.parse().ok());
         }
@@ -137,8 +151,9 @@ pub fn parse_audio_sdp(sdp: &str) -> Result<ParsedAudioSdp, String> {
     Ok(ParsedAudioSdp {
         host: host.ok_or("SDP: keine c=IN IP4-Zeile gefunden")?,
         port: port.ok_or("SDP: keine m=audio-Zeile gefunden")?,
-        sample_rate: sample_rate.ok_or("SDP: kein a=rtpmap:...L24/<rate>/<channels> gefunden")?,
+        sample_rate: sample_rate.ok_or("SDP: kein a=rtpmap:...L16|L24/<rate>/<channels> gefunden")?,
         channels: channels.unwrap_or(2),
+        bits,
     })
 }
 
@@ -162,7 +177,7 @@ mod tests {
         let parsed = parse_audio_sdp(sdp).expect("parse_audio_sdp");
         assert_eq!(
             parsed,
-            ParsedAudioSdp { host: "127.0.0.1".to_string(), port: 6100, sample_rate: 48000, channels: 2 }
+            ParsedAudioSdp { host: "127.0.0.1".to_string(), port: 6100, sample_rate: 48000, channels: 2, bits: 24 }
         );
     }
 
@@ -207,8 +222,27 @@ mod tests {
                 framerate_numerator: 25,
                 framerate_denominator: 1,
                 depth: 8,
+                interlaced: false,
             }
         );
+    }
+
+    #[test]
+    fn audio_sdp_reads_l16_and_l24() {
+        let mk = |codec: &str| format!("c=IN IP4 239.1.1.2/16\r\nm=audio 5006 RTP/AVP 97\r\na=rtpmap:97 {codec}/48000/8\r\n");
+        let a = parse_audio_sdp(&mk("L16")).unwrap();
+        assert_eq!((a.bits, a.channels, a.sample_rate), (16, 8, 48000));
+        assert_eq!(parse_audio_sdp(&mk("L24")).unwrap().bits, 24);
+        assert!(parse_audio_sdp(&mk("opus")).is_err());
+    }
+
+    #[test]
+    fn interlace_flag_is_read() {
+        let base = "c=IN IP4 239.1.1.1/16\r\nm=video 5004 RTP/AVP 96\r\n";
+        let i = format!("{base}a=fmtp:96 sampling=YCbCr-4:2:2; depth=10; width=1920; height=1080; exactframerate=25/1; interlace; PM=2110GPM\r\n");
+        assert!(parse_video_sdp(&i).unwrap().interlaced);
+        let p = format!("{base}a=fmtp:96 sampling=YCbCr-4:2:2; depth=10; width=1920; height=1080; exactframerate=25/1\r\n");
+        assert!(!parse_video_sdp(&p).unwrap().interlaced);
     }
 
     #[test]

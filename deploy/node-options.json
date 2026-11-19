@@ -529,6 +529,26 @@
   ],
   "omp-2110-gateway-ingest": [
     {
+      "key": "OMP_2110_GATEWAY_INTERLACED",
+      "i18n": { "en": {"label": "Video: interlaced (TFF)", "description": "1 = interlaced stream, top field first (1080i). The frame rate below is then the frame rate (1080i50 = 25/1). With a supplied SDP its `interlace` token decides."} },
+      "label": "Video: Halbbild (TFF)",
+      "type": "enum",
+      "description": "1 = Halbbildstrom, oberes Halbbild zuerst (1080i). Die Bildrate unten ist dann die Bildrate (1080i50 = 25/1). Bei gereichtem SDP entscheidet dessen Token `interlace`.",
+      "default": "0",
+      "group": "Video",
+      "choices": [{"value": "0"}, {"value": "1"}]
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_BITS",
+      "i18n": { "en": {"label": "Audio: sample depth", "description": "16 (L16) or 24 (L24) bit. With a supplied SDP its rtpmap line decides."} },
+      "label": "Audio: Abtasttiefe",
+      "type": "enum",
+      "description": "16 (L16) oder 24 (L24) Bit. Bei gereichtem SDP entscheidet dessen rtpmap-Zeile.",
+      "default": "24",
+      "group": "Audio",
+      "choices": [{"value": "16"}, {"value": "24"}]
+    },
+    {
       "key": "OMP_2110_GATEWAY_DEPTH",
       "i18n": { "en": {"label": "Video: bit depth", "description": "8 or 10 bit on the wire. 10 bit is the broadcast standard and the default; 8 bit only for peers that accept nothing else. A supplied SDP (depth=) takes precedence.", "group": "Video"} },
       "label": "Video: Bittiefe",
@@ -704,6 +724,36 @@
     }
   ],
   "omp-2110-gateway-output": [
+    {
+      "key": "OMP_2110_GATEWAY_INTERLACED",
+      "i18n": { "en": {"label": "Video: interlaced (TFF)", "description": "1 = interlaced stream, top field first (1080i). The frame rate below is then the frame rate (1080i50 = 25/1). With a supplied SDP its `interlace` token decides."} },
+      "label": "Video: Halbbild (TFF)",
+      "type": "enum",
+      "description": "1 = Halbbildstrom, oberes Halbbild zuerst (1080i). Die Bildrate unten ist dann die Bildrate (1080i50 = 25/1). Bei gereichtem SDP entscheidet dessen Token `interlace`.",
+      "default": "0",
+      "group": "Video",
+      "choices": [{"value": "0"}, {"value": "1"}]
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_BITS",
+      "i18n": { "en": {"label": "Audio: sample depth", "description": "16 (L16) or 24 (L24) bit. With a supplied SDP its rtpmap line decides."} },
+      "label": "Audio: Abtasttiefe",
+      "type": "enum",
+      "description": "16 (L16) oder 24 (L24) Bit. Bei gereichtem SDP entscheidet dessen rtpmap-Zeile.",
+      "default": "24",
+      "group": "Audio",
+      "choices": [{"value": "16"}, {"value": "24"}]
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_PTIME_US",
+      "i18n": { "en": {"label": "Audio: packet time (µs)", "description": "Packet time of the sent audio: 1000 µs is AES67 level A; 125 µs lowers latency (ST 2110-30 level B/C)."} },
+      "label": "Audio: Paketzeit (µs)",
+      "type": "enum",
+      "description": "Paketzeit des gesendeten Audios: 1000 µs ist AES67-Stufe A; 125 µs senkt die Latenz (ST 2110-30 Stufe B/C).",
+      "default": "1000",
+      "group": "Audio",
+      "choices": [{"value": "125"}, {"value": "250"}, {"value": "333"}, {"value": "1000"}, {"value": "4000"}]
+    },
     {
       "key": "OMP_2110_GATEWAY_DEPTH",
       "i18n": { "en": {"label": "Video: bit depth", "description": "8 or 10 bit on the wire. 10 bit is the broadcast standard and the default; 8 bit only for peers that accept nothing else.", "group": "Video"} },

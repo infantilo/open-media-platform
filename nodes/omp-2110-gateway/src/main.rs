@@ -581,6 +581,7 @@ struct IngestParams {
     fps_num: i32,
     fps_den: i32,
     depth: u8,
+    interlaced: bool,
 }
 
 /// Liest die Ingest-Konfiguration bevorzugt aus einem gereichten SDP
@@ -604,6 +605,7 @@ fn resolve_ingest_params() -> Result<IngestParams, String> {
             fps_num: parsed.framerate_numerator,
             fps_den: parsed.framerate_denominator,
             depth: parsed.depth,
+            interlaced: parsed.interlaced,
         });
     }
 
@@ -625,6 +627,7 @@ fn resolve_ingest_params() -> Result<IngestParams, String> {
             .parse()
             .map_err(|e| format!("OMP_2110_GATEWAY_FPS_DEN: {e}"))?,
         depth: pipeline::wire_depth()?,
+        interlaced: pipeline::wire_interlaced(),
     })
 }
 
@@ -633,6 +636,7 @@ struct AudioIngestParams {
     multicast_group: Option<String>,
     sample_rate: i32,
     channels: i32,
+    bits: u8,
 }
 
 /// D21: Audio-Pendant zu `resolve_ingest_params` — bewusst OHNE SAP (s.
@@ -652,6 +656,7 @@ fn resolve_audio_ingest_params() -> Result<AudioIngestParams, String> {
             multicast_group,
             sample_rate: parsed.sample_rate,
             channels: parsed.channels,
+            bits: parsed.bits,
         });
     }
 
@@ -666,6 +671,7 @@ fn resolve_audio_ingest_params() -> Result<AudioIngestParams, String> {
         channels: env_or("OMP_2110_GATEWAY_AUDIO_CHANNELS", "2")
             .parse()
             .map_err(|e| format!("OMP_2110_GATEWAY_AUDIO_CHANNELS: {e}"))?,
+        bits: pipeline::audio_wire()?.0,
     })
 }
 
@@ -695,13 +701,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     match direction {
         Direction::Ingest => {
-            let IngestParams { listen_port, multicast_group, width, height, fps_num, fps_den, depth } =
+            let IngestParams { listen_port, multicast_group, width, height, fps_num, fps_den, depth, interlaced } =
                 resolve_ingest_params()?;
             let AudioIngestParams {
                 listen_port: audio_listen_port,
                 multicast_group: audio_multicast_group,
                 sample_rate: audio_sample_rate,
                 channels: audio_channels,
+                bits: audio_bits,
             } = resolve_audio_ingest_params()?;
             let flow_id = omp_node_sdk::idgen::new_v4();
             let audio_flow_id = omp_node_sdk::idgen::new_v4();
@@ -729,6 +736,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 audio_sample_rate,
                 audio_channels,
                 depth,
+                audio_bits,
+                interlaced,
             };
 
             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -819,6 +828,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 grain_rate_numerator: fps_num as u32,
                                 grain_rate_denominator: fps_den as u32,
                             }),
+                            interlaced_tff: interlaced,
                             ..Default::default()
                         },
                         SenderSpec {

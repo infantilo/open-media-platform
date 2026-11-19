@@ -75,6 +75,12 @@ fn video_pacing_bitrate(width: i32, height: i32, depth: u8, fnum: i32, fden: i32
     (width as f64 * height as f64 * bits_per_pixel * fps * 1.04 / 0.9).ceil() as u64
 }
 
+/// Markiert einen Puffer als Halbbild-Vollbild, oberes Halbbild zuerst.
+fn mark_tff(buffer: &mut gst::BufferRef) {
+    use gstreamer_video::prelude::VideoBufferExt;
+    buffer.set_video_flags(gstreamer_video::VideoBufferFlags::INTERLACED | gstreamer_video::VideoBufferFlags::TFF);
+}
+
 /// Colorimetrie für `a=fmtp`: HD und größer BT.709, darunter BT.601 (ST 2110-20 / RFC 4175).
 fn sdp_colorimetry(height: i32) -> &'static str {
     if height >= 720 { "BT709" } else { "BT601-5" }
@@ -98,6 +104,8 @@ pub struct St2110VideoOutput {
     framerate_denominator: i32,
     /// Bittiefe auf dem Draht: 8 (`UYVY`) oder 10 (`UYVP`, RFC 4175 YCbCr-4:2:2 10 bit).
     depth: u8,
+    /// Halbbildstrom (TFF): SDP-Token `interlace`.
+    interlaced: bool,
     flowed: Arc<AtomicBool>,
 }
 
@@ -131,6 +139,24 @@ impl St2110VideoOutput {
         framerate_denominator: i32,
         depth: u8,
     ) -> Result<Self, String> {
+        Self::new_full(pipeline, upstream, initial_host, initial_port, width, height, framerate_numerator, framerate_denominator, depth, false)
+    }
+
+    /// Wie [`Self::new_with_depth`]; `interlaced`: Halbbildstrom, oberes Halbbild zuerst (RFC 4175 `interlace`, SDP-Token
+    /// `interlace`). Der Aufrufer liefert ganze Bilder mit verschränkten Zeilen; Bildrate = Bild-, nicht Halbbildrate.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_full(
+        pipeline: &gst::Pipeline,
+        upstream: &gst::Element,
+        initial_host: &str,
+        initial_port: u16,
+        width: i32,
+        height: i32,
+        framerate_numerator: i32,
+        framerate_denominator: i32,
+        depth: u8,
+        interlaced: bool,
+    ) -> Result<Self, String> {
         if depth != 8 && depth != 10 {
             return Err(format!("ST 2110-20: Bittiefe {depth} nicht unterstützt (8 oder 10)"));
         }
@@ -158,9 +184,59 @@ impl St2110VideoOutput {
             )
             .build()
             .map_err(|e| format!("capsfilter(UYVY/UYVP): {e}"))?;
+        // Halbbild: Caps auf `interleaved`/TFF umetikettieren und die Puffer als TFF markieren (der Payloader sendet dann
+        // zwei Halbbilder mit F-Bit). Progressiv: kein zusätzliches Element.
+        let interlace_tag = if interlaced {
+            let el = gst::ElementFactory::make("capssetter")
+                .property(
+                    "caps",
+                    gst::Caps::builder("video/x-raw")
+                        .field("interlace-mode", "interleaved")
+                        .field("field-order", "top-field-first")
+                        .build(),
+                )
+                .property("join", true)
+                .property("replace", false)
+                .build()
+                .map_err(|e| format!("capssetter (interlace): {e}"))?;
+            if let Some(pad) = el.static_pad("src") {
+                pad.add_probe(gst::PadProbeType::BUFFER, |_pad, info| {
+                    if let Some(gst::PadProbeData::Buffer(b)) = &mut info.data {
+                        mark_tff(b.make_mut());
+                    }
+                    gst::PadProbeReturn::Ok
+                });
+            }
+            Some(el)
+        } else {
+            None
+        };
         let payloader = gst::ElementFactory::make("rtpvrawpay")
             .build()
             .map_err(|e| format!("rtpvrawpay: {e}"))?;
+        if interlaced && let Some(pad) = payloader.static_pad("src") {
+            // GStreamer trägt Vollbild-Zeilennummern ein, RFC 4175 verlangt Halbbild-Zeilen — vor dem Senden korrigieren.
+            pad.add_probe(gst::PadProbeType::BUFFER | gst::PadProbeType::BUFFER_LIST, |_pad, info| {
+                fn fix(b: &mut gst::BufferRef) {
+                    if let Ok(mut m) = b.map_writable() {
+                        crate::st2110_interlaced::fix_payloader_line_numbers(&mut m);
+                    }
+                }
+                match &mut info.data {
+                    Some(gst::PadProbeData::Buffer(b)) => fix(b.make_mut()),
+                    Some(gst::PadProbeData::BufferList(l)) => {
+                        let l = l.make_mut();
+                        for i in 0..l.len() {
+                            if let Some(b) = l.get_mut(i) {
+                                fix(b);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                gst::PadProbeReturn::Ok
+            });
+        }
         let valve = gst::ElementFactory::make("valve")
             .name("st2110_video_valve")
             .property("drop", true)
@@ -181,18 +257,15 @@ impl St2110VideoOutput {
             .and_then(|()| pipeline.add(&valve))
             .and_then(|()| pipeline.add(&udpsink))
             .map_err(|e| format!("add st2110 output elements: {e}"))?;
-
-        gst::Element::link_many([
-            upstream,
-            &videoconvert,
-            &videoscale,
-            &videorate,
-            &caps,
-            &payloader,
-            &valve,
-            &udpsink,
-        ])
-        .map_err(|e| format!("link st2110 output chain: {e}"))?;
+        if let Some(el) = &interlace_tag {
+            pipeline.add(el).map_err(|e| format!("add capssetter: {e}"))?;
+        }
+        let mut chain: Vec<&gst::Element> = vec![upstream, &videoconvert, &videoscale, &videorate, &caps];
+        if let Some(el) = &interlace_tag {
+            chain.push(el);
+        }
+        chain.extend([&payloader, &valve, &udpsink]);
+        gst::Element::link_many(chain).map_err(|e| format!("link st2110 output chain: {e}"))?;
 
         // Probe auf dem Src-Pad des Valve, nicht dem Sink-Pad — gleiche
         // Begründung wie bei RtpVideoOutput (rtp.rs): ein `drop=true`
@@ -216,6 +289,7 @@ impl St2110VideoOutput {
             framerate_numerator,
             framerate_denominator,
             depth,
+            interlaced,
             flowed,
         })
     }
@@ -254,11 +328,12 @@ impl St2110VideoOutput {
                  {clock}\
                  a=rtpmap:96 raw/90000\r\n\
                  a=fmtp:96 sampling=YCbCr-4:2:2; depth={depth}; width={w}; height={h}; \
-                 exactframerate={num}/{den}; colorimetry={colorimetry}; PM=2110GPM; \
+                 exactframerate={num}/{den}; colorimetry={colorimetry}; {interlace}PM=2110GPM; \
                  SSN=ST2110-20:2017; TP=2110TPW; TCS=SDR\r\n{mid}",
                 clock = clock_lines(host),
                 colorimetry = sdp_colorimetry(self.height as i32),
                 depth = self.depth,
+                interlace = if self.interlaced { "interlace; " } else { "" },
                 w = self.width,
                 h = self.height,
                 num = self.framerate_numerator,
@@ -330,6 +405,104 @@ impl St2110VideoInput {
         crate::st2022_7::add_rx_leg(pipeline, &self.jitterbuffer, "st2110_video_src_b", port, &self.rtp_caps, group)
     }
 
+    /// Halbbild-Empfang: GStreamers `rtpvrawdepay` kann das nicht (1.22), deshalb `jitterbuffer → appsink`, der eigene
+    /// Entpacker ([`crate::st2110_interlaced`]) setzt die Halbbilder zusammen, ein `appsrc` liefert die Vollbilder
+    /// (verschränkt, TFF) an `tail`. Zeitstempel: Ankunftszeit des Vollbilds (`do-timestamp`).
+    #[cfg(feature = "mxl")]
+    #[allow(clippy::too_many_arguments)]
+    fn build_interlaced(
+        pipeline: &gst::Pipeline,
+        udpsrc: gst::Element,
+        jitterbuffer: gst::Element,
+        rtp_caps: gst::Caps,
+        width: i32,
+        height: i32,
+        fnum: i32,
+        fden: i32,
+        depth: u8,
+    ) -> Result<Self, String> {
+        use gstreamer_app as gst_app;
+        let asm = Arc::new(Mutex::new(crate::st2110_interlaced::InterlacedAssembler::new(width as usize, height as usize, depth)?));
+        let raw_caps = gst::Caps::builder("video/x-raw")
+            .field("format", if depth == 10 { "UYVP" } else { "UYVY" })
+            .field("width", width)
+            .field("height", height)
+            .field("framerate", gst::Fraction::new(fnum, fden))
+            .field("interlace-mode", "interleaved")
+            .field("field-order", "top-field-first")
+            .build();
+        let appsrc = gst_app::AppSrc::builder()
+            .caps(&raw_caps)
+            .format(gst::Format::Time)
+            .is_live(true)
+            .do_timestamp(true)
+            .max_bytes(8 * 1024 * 1024)
+            .build();
+        let appsink = gst_app::AppSink::builder()
+            .caps(&gst::Caps::builder("application/x-rtp").build())
+            .sync(false)
+            .max_buffers(4096)
+            .build();
+        // Kein Preroll am appsink: sonst blockiert der erste Puffer den Jitterbuffer, bis die Pipeline PLAYING ist.
+        appsink.set_property("async", false);
+        let videoconvert = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert: {e}"))?;
+        let src_push = appsrc.clone();
+        appsink.set_callbacks(
+            gst_app::AppSinkCallbacks::builder()
+                .new_sample(move |sink| {
+                    let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                    let mut frames: Vec<Vec<u8>> = Vec::new();
+                    let mut feed = |b: &gst::BufferRef| {
+                        if let Ok(map) = b.map_readable()
+                            && let Some(f) = asm.lock().expect("lock poisoned").push(&map)
+                        {
+                            frames.push(f);
+                        }
+                    };
+                    if let Some(list) = sample.buffer_list() {
+                        list.iter().for_each(|b| feed(b));
+                    } else if let Some(b) = sample.buffer() {
+                        feed(b);
+                    }
+                    for f in frames {
+                        let _ = src_push.push_buffer(gst::Buffer::from_mut_slice(f));
+                    }
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
+        pipeline
+            .add_many([&udpsrc, &jitterbuffer, appsink.upcast_ref::<gst::Element>(), appsrc.upcast_ref::<gst::Element>(), &videoconvert])
+            .map_err(|e| format!("add st2110 interlaced input elements: {e}"))?;
+        gst::Element::link_many([&udpsrc, &jitterbuffer, appsink.upcast_ref::<gst::Element>()])
+            .map_err(|e| format!("link st2110 interlaced input (net): {e}"))?;
+        gst::Element::link_many([appsrc.upcast_ref::<gst::Element>(), &videoconvert])
+            .map_err(|e| format!("link st2110 interlaced input (video): {e}"))?;
+        let flowed = Arc::new(AtomicBool::new(false));
+        let fp = flowed.clone();
+        appsrc.static_pad("src").expect("appsrc has a src pad").add_probe(gst::PadProbeType::BUFFER, move |_p, _i| {
+            fp.store(true, Ordering::Relaxed);
+            gst::PadProbeReturn::Remove
+        });
+        Ok(St2110VideoInput { tail: videoconvert, flowed, jitterbuffer, rtp_caps })
+    }
+
+    #[cfg(not(feature = "mxl"))]
+    #[allow(clippy::too_many_arguments)]
+    fn build_interlaced(
+        _pipeline: &gst::Pipeline,
+        _udpsrc: gst::Element,
+        _jitterbuffer: gst::Element,
+        _rtp_caps: gst::Caps,
+        _width: i32,
+        _height: i32,
+        _fnum: i32,
+        _fden: i32,
+        _depth: u8,
+    ) -> Result<Self, String> {
+        Err("Halbbild-Empfang braucht das Feature `mxl` von omp-mediaio".to_string())
+    }
+
     /// `multicast_group`: `Some("239.x.x.x")` bindet `udpsrc` an eine
     /// Multicast-Gruppe statt an alle Interfaces (Kapitel 19 Teil 1,
     /// `docs/END-GOAL-FEATURES.md` §19.3a Punkt 2) — reine
@@ -362,10 +535,27 @@ impl St2110VideoInput {
         multicast_group: Option<&str>,
         depth: u8,
     ) -> Result<Self, String> {
+        Self::new_full(pipeline, listen_port, width, height, framerate_numerator, framerate_denominator, multicast_group, depth, false)
+    }
+
+    /// Wie [`Self::new_with_depth`]; `interlaced`: der ankommende Strom ist ein Halbbildstrom (SDP-Token `interlace`). Die
+    /// Bilder kommen als ganze verschränkte Bilder (Bildrate = Halbbildrate / 2) heraus.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_full(
+        pipeline: &gst::Pipeline,
+        listen_port: u16,
+        width: i32,
+        height: i32,
+        framerate_numerator: i32,
+        framerate_denominator: i32,
+        multicast_group: Option<&str>,
+        depth: u8,
+        interlaced: bool,
+    ) -> Result<Self, String> {
         if depth != 8 && depth != 10 {
             return Err(format!("ST 2110-20: Bittiefe {depth} nicht unterstützt (8 oder 10)"));
         }
-        let rtp_caps = gst::Caps::builder("application/x-rtp")
+        let mut caps_builder = gst::Caps::builder("application/x-rtp")
             .field("media", "video")
             .field("clock-rate", 90000)
             .field("encoding-name", "RAW")
@@ -373,13 +563,19 @@ impl St2110VideoInput {
             .field("depth", depth.to_string())
             .field("width", width.to_string())
             .field("height", height.to_string())
-            .field("payload", 96)
-            .build();
+            .field("payload", 96);
+        if interlaced {
+            caps_builder = caps_builder.field("interlace", "true");
+        }
+        let rtp_caps = caps_builder.build();
 
         let (udpsrc, _) = crate::kbypass::make_src("st2110_video_src", listen_port, &rtp_caps, multicast_group)?;
         let jitterbuffer = gst::ElementFactory::make("rtpjitterbuffer")
             .build()
             .map_err(|e| format!("rtpjitterbuffer: {e}"))?;
+        if interlaced {
+            return Self::build_interlaced(pipeline, udpsrc, jitterbuffer, rtp_caps, width, height, framerate_numerator, framerate_denominator, depth);
+        }
         let depayloader = gst::ElementFactory::make("rtpvrawdepay")
             .build()
             .map_err(|e| format!("rtpvrawdepay: {e}"))?;
@@ -485,10 +681,38 @@ pub struct St2110AudioOutput {
     leg_b: Mutex<Option<(String, u16)>>,
     sample_rate: i32,
     channels: i32,
+    /// 16 (L16) oder 24 (L24).
+    bits: u8,
+    /// Paketzeit in Mikrosekunden (125, 250, 333, 1000, 4000).
+    ptime_us: u32,
     flowed: Arc<AtomicBool>,
 }
 
+/// Erlaubte Paketzeiten nach ST 2110-30 / AES67 in Mikrosekunden (Stufe A: 1 ms; 125 µs, 250 µs, 333 µs, 4 ms).
+pub const AUDIO_PTIMES_US: [u32; 5] = [125, 250, 333, 1000, 4000];
+
+fn check_audio_format(bits: u8, ptime_us: u32) -> Result<(), String> {
+    if bits != 16 && bits != 24 {
+        return Err(format!("ST 2110-30: {bits} Bit nicht unterstützt (16 oder 24)"));
+    }
+    if !AUDIO_PTIMES_US.contains(&ptime_us) {
+        return Err(format!("ST 2110-30: Paketzeit {ptime_us} µs nicht unterstützt ({AUDIO_PTIMES_US:?})"));
+    }
+    Ok(())
+}
+
+/// `a=ptime` in Millisekunden, wie AES67 es schreibt (`1`, `0.125`, `0.25`, `0.33`, `4`).
+fn ptime_sdp(ptime_us: u32) -> String {
+    match ptime_us {
+        125 => "0.125".into(),
+        250 => "0.25".into(),
+        333 => "0.33".into(),
+        us => format!("{}", us / 1000),
+    }
+}
+
 impl St2110AudioOutput {
+    /// L24, 1 ms (unverändertes Verhalten aller bisherigen Aufrufer), s. [`Self::new_with_format`].
     pub fn new(
         pipeline: &gst::Pipeline,
         upstream: &gst::Element,
@@ -497,6 +721,24 @@ impl St2110AudioOutput {
         sample_rate: i32,
         channels: i32,
     ) -> Result<Self, String> {
+        Self::new_with_format(pipeline, upstream, initial_host, initial_port, sample_rate, channels, 24, 1000)
+    }
+
+    /// `bits` 16 oder 24 (`L16`/`L24`), `ptime_us` ∈ [`AUDIO_PTIMES_US`]. Kurze Pakete (125 µs) senken die Latenz und sind
+    /// bei ST 2110-30 Stufe B/C üblich; 1 ms ist die Stufe-A-Pflicht.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_format(
+        pipeline: &gst::Pipeline,
+        upstream: &gst::Element,
+        initial_host: &str,
+        initial_port: u16,
+        sample_rate: i32,
+        channels: i32,
+        bits: u8,
+        ptime_us: u32,
+    ) -> Result<Self, String> {
+        check_audio_format(bits, ptime_us)?;
+        let ptime_ns = ptime_us as i64 * 1000;
         let audioconvert = gst::ElementFactory::make("audioconvert")
             .build()
             .map_err(|e| format!("audioconvert: {e}"))?;
@@ -507,19 +749,20 @@ impl St2110AudioOutput {
             .property(
                 "caps",
                 gst::Caps::builder("audio/x-raw")
-                    .field("format", "S24BE")
+                    .field("format", if bits == 16 { "S16BE" } else { "S24BE" })
                     .field("layout", "interleaved")
                     .field("rate", sample_rate)
                     .field("channels", channels)
                     .build(),
             )
             .build()
-            .map_err(|e| format!("capsfilter(S24BE): {e}"))?;
-        let payloader = gst::ElementFactory::make("rtpL24pay")
-            .property("min-ptime", AES67_PTIME_NS)
-            .property("max-ptime", AES67_PTIME_NS)
+            .map_err(|e| format!("capsfilter(S16BE/S24BE): {e}"))?;
+        let pay_name = if bits == 16 { "rtpL16pay" } else { "rtpL24pay" };
+        let payloader = gst::ElementFactory::make(pay_name)
+            .property("min-ptime", ptime_ns)
+            .property("max-ptime", ptime_ns)
             .build()
-            .map_err(|e| format!("rtpL24pay: {e}"))?;
+            .map_err(|e| format!("{pay_name}: {e}"))?;
         let valve = gst::ElementFactory::make("valve")
             .name("st2110_audio_valve")
             .property("drop", true)
@@ -557,6 +800,8 @@ impl St2110AudioOutput {
             leg_b: Mutex::new(None),
             sample_rate,
             channels,
+            bits,
+            ptime_us,
             flowed,
         })
     }
@@ -582,10 +827,12 @@ impl St2110AudioOutput {
             format!(
                 "m=audio {port} RTP/AVP 96\r\n\
                  c=IN IP4 {host}\r\n\
-                 a=rtpmap:96 L24/{rate}/{channels}\r\n\
-                 a=ptime:1\r\n\
+                 a=rtpmap:96 L{bits}/{rate}/{channels}\r\n\
+                 a=ptime:{ptime}\r\n\
                  {clock}{mid}",
                 clock = clock_lines(host),
+                bits = self.bits,
+                ptime = ptime_sdp(self.ptime_us),
                 rate = self.sample_rate,
                 channels = self.channels,
                 mid = mid.map(|m| format!("a=mid:{m}\r\n")).unwrap_or_default(),
@@ -651,10 +898,23 @@ impl St2110AudioInput {
         channels: i32,
         multicast_group: Option<&str>,
     ) -> Result<Self, String> {
+        Self::new_with_bits(pipeline, listen_port, sample_rate, channels, multicast_group, 24)
+    }
+
+    /// `bits` 16 (`L16`) oder 24 (`L24`): muss zur SDP des Senders passen. Die Paketzeit braucht der Empfänger nicht.
+    pub fn new_with_bits(
+        pipeline: &gst::Pipeline,
+        listen_port: u16,
+        sample_rate: i32,
+        channels: i32,
+        multicast_group: Option<&str>,
+        bits: u8,
+    ) -> Result<Self, String> {
+        check_audio_format(bits, 1000)?;
         let rtp_caps = gst::Caps::builder("application/x-rtp")
             .field("media", "audio")
             .field("clock-rate", sample_rate)
-            .field("encoding-name", "L24")
+            .field("encoding-name", if bits == 16 { "L16" } else { "L24" })
             .field("channels", channels)
             .field("payload", 96)
             .build();
@@ -663,9 +923,10 @@ impl St2110AudioInput {
         let jitterbuffer = gst::ElementFactory::make("rtpjitterbuffer")
             .build()
             .map_err(|e| format!("rtpjitterbuffer: {e}"))?;
-        let depayloader = gst::ElementFactory::make("rtpL24depay")
+        let depay_name = if bits == 16 { "rtpL16depay" } else { "rtpL24depay" };
+        let depayloader = gst::ElementFactory::make(depay_name)
             .build()
-            .map_err(|e| format!("rtpL24depay: {e}"))?;
+            .map_err(|e| format!("{depay_name}: {e}"))?;
         let audioconvert = gst::ElementFactory::make("audioconvert")
             .build()
             .map_err(|e| format!("audioconvert: {e}"))?;
@@ -1141,6 +1402,102 @@ mod tests {
         wp.set_state(gst::State::Null).unwrap();
         rp.set_state(gst::State::Null).unwrap();
         assert!(got.load(Ordering::Relaxed), "kein Bild über den gepacten Sender");
+    }
+
+    #[test]
+    fn audio_ptime_sdp_notation() {
+        assert_eq!(ptime_sdp(1000), "1");
+        assert_eq!(ptime_sdp(125), "0.125");
+        assert_eq!(ptime_sdp(250), "0.25");
+        assert_eq!(ptime_sdp(333), "0.33");
+        assert_eq!(ptime_sdp(4000), "4");
+        assert!(check_audio_format(24, 1000).is_ok());
+        assert!(check_audio_format(32, 1000).is_err());
+        assert!(check_audio_format(24, 500).is_err());
+    }
+
+    /// L16 mit 125-µs-Paketen: SDP nennt `L16` und `ptime:0.125`; echte Pakete kommen an und sind kurz (48 kHz · 125 µs =
+    /// 6 Abtastwerte je Kanal = 6·2·2 Byte Nutzdaten + 12 Byte RTP-Kopf = 36 Byte).
+    #[test]
+    fn l16_125us_roundtrip() {
+        gst::init().expect("gst::init");
+        let wp = gst::Pipeline::new();
+        let src = gst::ElementFactory::make("audiotestsrc").property("is-live", true).build().unwrap();
+        wp.add(&src).unwrap();
+        let out = St2110AudioOutput::new_with_format(&wp, &src, "127.0.0.1", 52380, 48000, 2, 16, 125).unwrap();
+        let sdp = out.sdp();
+        assert!(sdp.contains("a=rtpmap:96 L16/48000/2") && sdp.contains("a=ptime:0.125"), "sdp = {sdp}");
+        out.set_active(true);
+        let rp = gst::Pipeline::new();
+        let input = St2110AudioInput::new_with_bits(&rp, 52380, 48000, 2, None, 16).unwrap();
+        let got = Arc::new(AtomicBool::new(false));
+        let g = got.clone();
+        input.tail.static_pad("src").unwrap().add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+            g.store(true, Ordering::Relaxed);
+            gst::PadProbeReturn::Remove
+        });
+        let sink = gst::ElementFactory::make("fakesink").property("sync", false).build().unwrap();
+        rp.add(&sink).unwrap();
+        input.tail.link(&sink).unwrap();
+        rp.set_state(gst::State::Playing).unwrap();
+        wp.set_state(gst::State::Playing).unwrap();
+        for _ in 0..40 {
+            if got.load(Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        wp.set_state(gst::State::Null).unwrap();
+        rp.set_state(gst::State::Null).unwrap();
+        assert!(got.load(Ordering::Relaxed), "kein L16-Ton angekommen");
+    }
+
+    /// Halbbild über die echte Strecke: SDP trägt `interlace`, die Bilder kommen als verschränkte Vollbilder an.
+    #[test]
+    fn interlaced_roundtrip_keeps_interleaved_caps() {
+        gst::init().expect("gst::init");
+        let wp = gst::Pipeline::new();
+        let src = gst::ElementFactory::make("videotestsrc").property("is-live", true).build().unwrap();
+        wp.add(&src).unwrap();
+        let out = St2110VideoOutput::new_full(&wp, &src, "127.0.0.1", 52390, 320, 180, 25, 1, 10, true).unwrap();
+        assert!(out.sdp().contains("interlace; "), "sdp = {}", out.sdp());
+        out.set_active(true);
+        let rp = gst::Pipeline::new();
+        let input = St2110VideoInput::new_full(&rp, 52390, 320, 180, 25, 1, None, 10, true).unwrap();
+        let seen = Arc::new(Mutex::new(None::<String>));
+        let sn = seen.clone();
+        input.tail.static_pad("src").unwrap().add_probe(gst::PadProbeType::BUFFER, move |pad, _| {
+            if let Some(c) = pad.current_caps()
+                && let Some(st) = c.structure(0)
+            {
+                *sn.lock().unwrap() = Some(st.to_string());
+            }
+            gst::PadProbeReturn::Remove
+        });
+        let sink = gst::ElementFactory::make("fakesink").property("sync", false).build().unwrap();
+        rp.add(&sink).unwrap();
+        input.tail.link(&sink).unwrap();
+        rp.set_state(gst::State::Playing).unwrap();
+        wp.set_state(gst::State::Playing).unwrap();
+        for _ in 0..40 {
+            if seen.lock().unwrap().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        wp.set_state(gst::State::Null).unwrap();
+        rp.set_state(gst::State::Null).unwrap();
+        let mode = seen.lock().unwrap().clone();
+        for (n, pl) in [("sender", &wp), ("receiver", &rp)] {
+            if let Some(b) = pl.bus() {
+                while let Some(m) = b.pop_filtered(&[gst::MessageType::Error]) {
+                    if let gst::MessageView::Error(e) = m.view() {
+                        eprintln!("BUSFEHLER {n}: {} ({:?})", e.error(), e.debug());
+                    }
+                }
+            }
+        }
+        assert!(mode.as_deref().is_some_and(|m| m.contains("interlace-mode=(string)interleaved") || m.contains("interlace-mode=(string)mixed")), "caps = {mode:?}");
     }
 
     #[test]

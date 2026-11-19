@@ -124,6 +124,41 @@ pub struct IngestConfig {
     pub audio_channels: i32,
     /// Bittiefe des ankommenden ST-2110-20-Stroms (8 oder 10).
     pub depth: u8,
+    /// Abtasttiefe des ankommenden ST-2110-30-Stroms (16 oder 24).
+    pub audio_bits: u8,
+    /// Halbbildstrom (oberes Halbbild zuerst): SDP-Token `interlace` bzw. `OMP_2110_GATEWAY_INTERLACED`.
+    pub interlaced: bool,
+}
+
+/// Halbbild (TFF) auf dem Draht für den Ausgang und für den Ingest ohne SDP: `OMP_2110_GATEWAY_INTERLACED=1`.
+/// Die Bildrate (`OMP_2110_GATEWAY_FPS_NUM/DEN`) ist dann die BILDrate (1080i50 = 25/1).
+pub fn wire_interlaced() -> bool {
+    std::env::var("OMP_2110_GATEWAY_INTERLACED").is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes"))
+}
+
+/// Audio auf dem Draht (Ausgang und Ingest ohne SDP): `OMP_2110_GATEWAY_AUDIO_BITS` (16|24, Standard 24) und
+/// `OMP_2110_GATEWAY_AUDIO_PTIME_US` (125|250|333|1000|4000, Standard 1000 = AES67-Stufe A). Gibt `(Bits, Paketzeit µs)` zurück.
+pub fn audio_wire() -> Result<(u8, u32), String> {
+    let bits = match std::env::var("OMP_2110_GATEWAY_AUDIO_BITS") {
+        Err(_) => 24,
+        Ok(v) => match v.trim() {
+            "16" => 16,
+            "24" | "" => 24,
+            o => return Err(format!("OMP_2110_GATEWAY_AUDIO_BITS={o:?} ungültig (16 oder 24)")),
+        },
+    };
+    let ptime = match std::env::var("OMP_2110_GATEWAY_AUDIO_PTIME_US") {
+        Err(_) => 1000,
+        Ok(v) if v.trim().is_empty() => 1000,
+        Ok(v) => {
+            let n: u32 = v.trim().parse().map_err(|e| format!("OMP_2110_GATEWAY_AUDIO_PTIME_US: {e}"))?;
+            if !omp_mediaio::st2110::AUDIO_PTIMES_US.contains(&n) {
+                return Err(format!("OMP_2110_GATEWAY_AUDIO_PTIME_US={n} ungültig ({:?})", omp_mediaio::st2110::AUDIO_PTIMES_US));
+            }
+            n
+        }
+    };
+    Ok((bits, ptime))
 }
 
 /// Bittiefe auf dem Draht für den Ausgang und für den Ingest ohne SDP: `OMP_2110_GATEWAY_DEPTH` (8 oder 10),
@@ -259,7 +294,7 @@ pub fn run_ingest(
 
     let pipeline = gst::Pipeline::new();
 
-    let input = match St2110VideoInput::new_with_depth(
+    let input = match St2110VideoInput::new_full(
         &pipeline,
         config.listen_port,
         config.width,
@@ -268,6 +303,7 @@ pub fn run_ingest(
         config.framerate_denominator,
         config.multicast_group.as_deref(),
         config.depth,
+        config.interlaced,
     ) {
         Ok(i) => i,
         Err(e) => {
@@ -292,7 +328,8 @@ pub fn run_ingest(
         }
     }
 
-    let output = match MxlVideoOutput::new(
+    let new_mxl_video = if config.interlaced { MxlVideoOutput::new_interlaced_tff } else { MxlVideoOutput::new };
+    let output = match new_mxl_video(
         &pipeline,
         &input.tail,
         context.clone(),
@@ -331,12 +368,13 @@ pub fn run_ingest(
     // Pipeline, eigener Port/eigener RTP-Jitterbuffer, `audiomixmatrix`
     // für IS-08 zwischen Eingang und MXL-Ausgang (identisches Muster wie
     // `omp-aes67-gateway::pipeline::run_sink`).
-    let audio_input = match St2110AudioInput::new(
+    let audio_input = match St2110AudioInput::new_with_bits(
         &pipeline,
         config.audio_listen_port,
         config.audio_sample_rate,
         config.audio_channels,
         config.audio_multicast_group.as_deref(),
+        config.audio_bits,
     ) {
         Ok(i) => i,
         Err(e) => {
@@ -554,7 +592,7 @@ fn build_output(
         None => None,
     };
 
-    let output = St2110VideoOutput::new_with_depth(
+    let output = St2110VideoOutput::new_full(
         &pipeline,
         &input.tail,
         destination_host,
@@ -564,6 +602,7 @@ fn build_output(
         framerate_numerator,
         framerate_denominator,
         wire_depth()?,
+        wire_interlaced(),
     )?;
     if let Some((host, port)) = redundant_tx("OMP_2110_GATEWAY_DEST")? {
         output.add_redundant_leg(&pipeline, &host, port)?;
@@ -825,7 +864,10 @@ fn build_audio_output(
     *mixmatrix_cell.lock().expect("lock poisoned") = Some(mixmatrix.clone());
 
     let output =
-        St2110AudioOutput::new(&pipeline, &mixmatrix, destination_host, destination_port, sample_rate, channels)?;
+        {
+            let (bits, ptime_us) = audio_wire()?;
+            St2110AudioOutput::new_with_format(&pipeline, &mixmatrix, destination_host, destination_port, sample_rate, channels, bits, ptime_us)?
+        };
     if let Some((host, port)) = redundant_tx("OMP_2110_GATEWAY_AUDIO_DEST")? {
         output.add_redundant_leg(&pipeline, &host, port)?;
     }
