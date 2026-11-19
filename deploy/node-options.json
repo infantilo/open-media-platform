@@ -511,6 +511,48 @@
   ],
   "omp-2110-gateway-ingest": [
     {
+      "key": "OMP_2110_GATEWAY_DEPTH",
+      "i18n": { "en": {"label": "Video: bit depth", "description": "8 or 10 bit on the wire. 10 bit is the broadcast standard and the default; 8 bit only for peers that accept nothing else. A supplied SDP (depth=) takes precedence.", "group": "Video"} },
+      "label": "Video: Bittiefe",
+      "type": "enum",
+      "description": "8 oder 10 Bit auf dem Draht. 10 Bit ist Broadcast-Standard und der Standard hier; 8 Bit nur für Gegenstellen, die nichts anderes annehmen. Ein gereichtes SDP (depth=) hat Vorrang.",
+      "default": "10",
+      "group": "Video",
+      "choices": [{"value": "8"}, {"value": "10"}]
+    },
+    {
+      "key": "OMP_2110_GATEWAY_LISTEN_B_PORT",
+      "i18n": { "en": {"label": "Video: second leg (2022-7), port", "description": "ST 2022-7: UDP port of the second network leg. Empty = no redundancy. Duplicate packets from both legs are dropped; if a leg fails the stream continues without a gap.", "group": "Redundancy"} },
+      "label": "Video: zweiter Schenkel (2022-7), Port",
+      "type": "port",
+      "description": "ST 2022-7: UDP-Port des zweiten Netzschenkels. Leer = keine Redundanz. Doppelte Pakete beider Schenkel verwirft der Empfänger; fällt ein Schenkel aus, läuft der Strom ohne Lücke weiter.",
+      "group": "Redundanz"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_LISTEN_B_GROUP",
+      "i18n": { "en": {"label": "Video: second leg (2022-7), multicast group", "description": "Multicast group of the second leg (a different network than the first leg).", "group": "Redundancy"} },
+      "label": "Video: zweiter Schenkel (2022-7), Multicast-Gruppe",
+      "type": "host",
+      "description": "Multicast-Gruppe des zweiten Schenkels (anderes Netz als der erste Schenkel).",
+      "group": "Redundanz"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_LISTEN_B_PORT",
+      "i18n": { "en": {"label": "Audio: second leg (2022-7), port", "description": "ST 2022-7: UDP port of the second audio leg. Empty = no redundancy.", "group": "Redundancy"} },
+      "label": "Audio: zweiter Schenkel (2022-7), Port",
+      "type": "port",
+      "description": "ST 2022-7: UDP-Port des zweiten Audio-Schenkels. Leer = keine Redundanz.",
+      "group": "Redundanz"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_LISTEN_B_GROUP",
+      "i18n": { "en": {"label": "Audio: second leg (2022-7), multicast group", "description": "Multicast group of the second audio leg.", "group": "Redundancy"} },
+      "label": "Audio: zweiter Schenkel (2022-7), Multicast-Gruppe",
+      "type": "host",
+      "description": "Multicast-Gruppe des zweiten Audio-Schenkels.",
+      "group": "Redundanz"
+    },
+    {
       "key": "OMP_2110_GATEWAY_LISTEN_PORT",
       "i18n": { "en": {"label": "Video: receive port", "description": "UDP port on which the 2110-20 video arrives."} },
       "label": "Video: Empfangsport",
@@ -644,6 +686,48 @@
     }
   ],
   "omp-2110-gateway-output": [
+    {
+      "key": "OMP_2110_GATEWAY_DEPTH",
+      "i18n": { "en": {"label": "Video: bit depth", "description": "8 or 10 bit on the wire. 10 bit is the broadcast standard and the default; 8 bit only for peers that accept nothing else.", "group": "Video"} },
+      "label": "Video: Bittiefe",
+      "type": "enum",
+      "description": "8 oder 10 Bit auf dem Draht. 10 Bit ist Broadcast-Standard und der Standard hier; 8 Bit nur für Gegenstellen, die nichts anderes annehmen.",
+      "default": "10",
+      "group": "Video",
+      "choices": [{"value": "8"}, {"value": "10"}]
+    },
+    {
+      "key": "OMP_2110_GATEWAY_DEST_B_HOST",
+      "i18n": { "en": {"label": "Video: second destination (2022-7), address", "description": "ST 2022-7: destination of the second network leg (a different network). Empty = no redundancy. The SDP then lists both legs (group DUP).", "group": "Redundancy"} },
+      "label": "Video: zweites Ziel (2022-7), Adresse",
+      "type": "host",
+      "description": "ST 2022-7: Zieladresse des zweiten Netzschenkels (anderes Netz). Leer = keine Redundanz. Das SDP nennt dann beide Schenkel (Gruppe DUP).",
+      "group": "Redundanz"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_DEST_B_PORT",
+      "i18n": { "en": {"label": "Video: second destination (2022-7), port", "description": "Destination port of the second leg; only together with the address.", "group": "Redundancy"} },
+      "label": "Video: zweites Ziel (2022-7), Port",
+      "type": "port",
+      "description": "Zielport des zweiten Schenkels; nur zusammen mit der Adresse.",
+      "group": "Redundanz"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_DEST_B_HOST",
+      "i18n": { "en": {"label": "Audio: second destination (2022-7), address", "description": "ST 2022-7: destination of the second audio leg.", "group": "Redundancy"} },
+      "label": "Audio: zweites Ziel (2022-7), Adresse",
+      "type": "host",
+      "description": "ST 2022-7: Zieladresse des zweiten Audio-Schenkels.",
+      "group": "Redundanz"
+    },
+    {
+      "key": "OMP_2110_GATEWAY_AUDIO_DEST_B_PORT",
+      "i18n": { "en": {"label": "Audio: second destination (2022-7), port", "description": "Destination port of the second audio leg; only together with the address.", "group": "Redundancy"} },
+      "label": "Audio: zweites Ziel (2022-7), Port",
+      "type": "port",
+      "description": "Zielport des zweiten Audio-Schenkels; nur zusammen mit der Adresse.",
+      "group": "Redundanz"
+    },
     {
       "key": "OMP_2110_GATEWAY_DEST_HOST",
       "i18n": { "en": {"label": "Video: destination address", "description": "Destination (unicast/multicast) of the sent video."} },

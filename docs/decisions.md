@@ -30806,3 +30806,18 @@ LDAP-Bind“ aus 2026-07-10).
 **Entscheidung:** Für Node-Typen in `autoRestoreNodeTypes` (derzeit nur `omp-ograf`; Stand = reine Konfiguration, kein plausibler Absturzgrund) wird der gehaltene Stand nach `rewireAfterRestart` selbsttätig eingespielt. Die Absturzschleife, wegen der Kap. 100 das Einspielen unterband, wird durch `autoRestoreWindow` (5 min) verhindert: stürzt die Rolle in dieser Zeit erneut ab, bleibt der Stand gehalten (Bedienerentscheidung wie bisher). Alle anderen Rollen unverändert.
 
 **Offen:** Die Absturzursache selbst (WPE-FDO: „Cannot find surface with bridgeId 1 in view backend map“, Web-Prozess endet vorzeitig) ist nicht behoben; die Web-Engine liegt außerhalb dieses Codes. Ebenso fehlen weiter die UI-Knöpfe Einspielen/Verwerfen für gehaltene Stände.
+
+## Nachtrag 2026-11-19: Gateway-Abgleich — Halbbild, 10 Bit, ST 2022-7, ST 2059, ehrliche SDP
+
+**Anlass:** Abgleich der Capture-Card- und 2110-Gateway-Nodes gegen zwei öffentlich gebaute MXL-Gateways (nur im Chat verglichen, nicht im Repo dokumentiert). Gefundene Lücken und Fehler, hier behoben:
+
+- **SDP war unehrlich:** feste, erfundene Großmeister-ID in `a=ts-refclk`, `colorimetry=BT601-5` auch für HD, `TP=2110TPN` (schmales Pacing) für einen Software-Sender, Audio-SDP ohne Uhrenbezug. Jetzt: `ptp=IEEE1588-2008:traceable` mit PTP-Zeitbasis, sonst `localmac=` bzw. `local`; BT.709 ab 720 Zeilen; `TP=2110TPW`.
+- **10 Bit:** Draht über `UYVP` (`rtpvrawpay`/`rtpvrawdepay` am echten Lauf bestätigt); Gateway-Standard 10 Bit (`OMP_2110_GATEWAY_DEPTH`), `depth=` im Fremd-SDP wird gelesen.
+- **ST 2022-7 in Software:** `tee` zwei `udpsink`; Empfang `funnel` in den `rtpjitterbuffer`, der Duplikate verwirft. Tests (echte Loopback-Pakete): beide Schenkel liefern jedes Bild einmal; mit totem Schenkel A kommt der Strom über B. Grenzen: Kernel-UDP, kein ST-2110-21-Pacing.
+- **ST 2059-1:** Bei synchroner PTP-Uhr wird die Pipeline-Basiszeit auf die PTP-Zeit gesetzt (`start_time = NONE`) und `timestamp-offset` daraus berechnet; Test mit der Systemuhr als Ersatz.
+- **Halbbild (1080i50/5994/60, TFF):** Capture-Card-Modustabelle, MXL-Flow `interlaced_tff` (`MxlVideoOutput::new_interlaced_tff`), IS-04-Flow über `SenderSpec::interlaced_tff`; am Kartenausgang `capssetter` + TFF-Pufferflags. Bottom Field First (SD 576i) wird nicht angeboten. Zusätzliche Progressiv-Modi (24/2398/30/5994/60).
+- **Audio-Flow:** `sample_rate` mit explizitem `denominator`.
+
+**Nicht belegt:** Alles ohne Karte und ohne zweites Netz (VM). Die Halbbild-Kette gegen echte Hardware, ein echtes 2022-7-Netz mit zwei Schenkeln und die Ausrichtung auf einen echten PTP-Großmeister müssen auf Zielhardware geprüft werden. Hardware-Pacing (ST 2110-21, Intel-MTL) bleibt offen.
+
+**Berichtigung zur Analyse:** Signalverlust meldet der Capture-Card-Node bereits (Parameter `in<n>.signal`, Alarm, Health); das war keine Lücke.
