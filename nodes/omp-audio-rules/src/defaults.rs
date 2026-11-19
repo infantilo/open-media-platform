@@ -60,7 +60,7 @@ pub fn default_profile() -> OutputProfile {
 
 pub fn default_schemas() -> Vec<TrackSchema> {
     vec![TrackSchema {
-        id: "orf-mxf-8".to_string(),
+        id: "mxf-8".to_string(),
         matcher: SchemaMatch { format: Some("mxf".to_string()), tracks: Some(8), path_glob: None },
         tracks: (1..=8)
             .map(|n| SourceTrack { n, layout: Layout::Mono, channels: vec![], tags: vec![format!("pos:{n}")] })
@@ -70,7 +70,7 @@ pub fn default_schemas() -> Vec<TrackSchema> {
 
 /// Die 13 Standard-Presets als Zuordnungen: je Gruppe die Quellspur pro Zielkanal.
 pub fn default_mappings() -> Vec<Mapping> {
-    let old: OldSettings = serde_json::from_str(include_str!("../defaults/orf-mxf-player.json")).expect("eingebettetes Preset-JSON ist gültig");
+    let old: OldSettings = serde_json::from_str(include_str!("../defaults/mxf-player-presets.json")).expect("eingebettetes Preset-JSON ist gültig");
     old.presets
         .into_iter()
         .map(|p| {

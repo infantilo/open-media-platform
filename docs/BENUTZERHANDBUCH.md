@@ -2604,7 +2604,7 @@ Szene aktiv (**— nur manuell —** schaltet das ab). Freie Mehrfach-Zuordnunge
 
 ## 10d-2. Demo-Kanal „Demo-Kanal“ mit den Audioprogrammgruppen
 
-`python3 tools/demo-orf1/setup.py --start` (bei vorhandener Demo zusätzlich `--recreate`) legt den Workflow **Demo Playout**, den Channel **ORF1** und eine Beispiel-Playlist an (Sendungskennung mit Uhr, Magazin-Clip, Live-Schalte mit Lower Third, zwei Werbeblöcke, Trailer).
+`python3 tools/demo-playout/setup.py --start` (bei vorhandener Demo zusätzlich `--recreate`) legt den Workflow **Demo Playout**, den Channel **Kanal 1** und eine Beispiel-Playlist an (Sendungskennung mit Uhr, Magazin-Clip, Live-Schalte mit Lower Third, zwei Werbeblöcke, Trailer).
 
 Am **Tonmischer** entstehen vier Ausgänge (Gruppen-Busse, je ein eigener Sender): **Stereo Programmton**, **5.1 Programmton**, **Stereo Originalton**, **Stereo Audiodescription**. Je Gruppe und Kanal-Player gibt es einen Kanalzug (Quelle = Gruppen-Sender des Players, folgt dem Bild, nicht auf dem Master) — im Programm hörbar ist immer nur der Player, der gerade sendet. Der Magazin-Clip `Demo-12ch.mxf` hat 12 Spuren (je Spur ein eigener Ton) und nutzt die Zuordnung **„komplett“**: Spuren 1–2 Stereo-PT, 3–8 5.1-PT, 9–10 Stereo-OT, 11–12 Stereo-AD.
 

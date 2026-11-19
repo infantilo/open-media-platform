@@ -49,7 +49,7 @@
   },
   "trackSchemas": [
     {
-      "id": "orf-mxf-8",
+      "id": "mxf-8",
       "match": {
         "format": "mxf",
         "tracks": 8

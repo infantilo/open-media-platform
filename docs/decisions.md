@@ -14881,18 +14881,18 @@ Build, `/dev/shm/omp-mxl` zurückgesetzt — keine Leichen hinterlassen.
 `orchestrator/internal/launcher/{catalog,podman}.go`,
 `ui/graph/flow-canvas.ts`.
 
-## 2026-08-06 (Nachtrag 120) — Neuer Node `omp-mxf-player`: MXF-Player mit ORF-Programmgruppen-Audio-Shuffle, live gegen echte MXF-Datei verifiziert
+## 2026-08-06 (Nachtrag 120) — Neuer Node `omp-mxf-player`: MXF-Player mit Sender-Programmgruppen-Audio-Shuffle, live gegen echte MXF-Datei verifiziert
 
 Nutzerauftrag aus der Vorsitzung (2026-08-05, unkommittiert
 hinterlassen): eigenständiger MXF-Player nach `Audio Tonspurerweiterung
-Q3 2026 PD.pdf` (ORF-intern, `/home/infantilo/`) — 8 MXF-Mono-
+Q3 2026 PD.pdf` (Sender-intern, `/home/infantilo/`) — 8 MXF-Mono-
 Tonspuren werden je nach gewähltem Preset (13 offizielle "PCMS
 ausspielen als"-Status ab 15.9.2026, PDF S.3+4/5) auf fünf
 gleichzeitig aktive MXL-Sender verteilt: Programmton, Hörfilm/AD,
 Originalton, Dolby E (bit-exakter Durchgriff), 5.1 diskret. Kein
 Zusammenhang mit dem am 2026-07-14 recherchierten "K2 Teil 2 (MXF)"
 (dortige MPEG-2-Codec-Frage bleibt für den regulären `omp-player`-
-Phasenplan offen — dieser Node ist ein separater, ORF-spezifischer
+Phasenplan offen — dieser Node ist ein separater, senderspezifischer
 Ad-hoc-Auftrag, keine Umsetzung von K2 Teil 2).
 
 Diese Sitzung: den bereits geschriebenen, aber unverifizierten Code
@@ -14904,7 +14904,7 @@ vollständig gegengelesen und live verifiziert.
 A/B-Slot-Cue/Take 1:1 übernommen, aber auf MEHRERE gleichzeitig aktive
 Audio-Ausgänge verallgemeinert (ein `input-selector` je Programmgruppe
 statt nur einem für Audio). `filesrc ! mxfdemux` statt
-`uridecodebin` — reale ORF-MXF-Dateien tragen die 8 Tonspuren als 8
+`uridecodebin` — reale Sender-MXF-Dateien tragen die 8 Tonspuren als 8
 separate Mono-Essenzspuren (`ffprobe` gegen `/home/infantilo/PIPELINE
 CONTROLLER/media/ET270438.mxf` bestätigt: 8× `pcm_s24le, channels=1`,
 diese Sitzung erneut nachgeprüft), `uridecodebin` liefert dagegen nur
@@ -14985,7 +14985,7 @@ Nutzerauftrag: "als i hate hardcoding, we should be able to define
 shuffle presets and output groups dynamically in player settings for
 easier future adaptions" — die in Nachtrag 120 gerade erst verifizierten
 5 Programmgruppen/13 Presets aus `nodes/omp-mxf-player/src/presets.rs`
-sollten nicht länger eine Rust-Neukompilierung für jede ORF-Anpassung
+sollten nicht länger eine Rust-Neukompilierung für jede Sender-Anpassung
 erfordern. Zwei Vorentscheidungen per Rückfrage geklärt: Speicherung in
 Postgres (nicht Datei — konsistent mit D1, "PostgreSQL für Layouts/
 Snapshots statt Datei-Backend"), Programmgruppen-Änderungen dürfen einen
@@ -15010,7 +15010,7 @@ bleibt übrig). Routen: `GET /api/v1/node-types/omp-mxf-player/settings`
 Start), `PUT` admin-only (`requireVerbGlobal(authz.VerbAdmin, ...)`,
 dieselbe Schwelle wie `POST /api/v1/catalog`) mit Ganz-Dokument-Ersatz
 (kein PATCH-per-Feld, `feedback_editors_need_explicit_save`). Fehlt der
-Postgres-Eintrag (nie gespeichert), liefert GET die ORF-Standardwerte
+Postgres-Eintrag (nie gespeichert), liefert GET die Sender-Standardwerte
 aus Nachtrag 120 unverändert.
 
 Node-Seite (`nodes/omp-mxf-player/src/orchestrator_settings.rs`, neu):
@@ -15048,8 +15048,8 @@ angezeigt.
 
 **Live-Verifikation** (echter Orchestrator-Neustart mit der neuen
 Migration, echte Postgres-Instanz, echter Headless-Chromium/CDP-
-Browser-Test für die UI, echte ORF-Testdatei):
-- `GET .../settings` liefert vor jedem Speichern die 5/13 ORF-Standard-
+Browser-Test für die UI, echte Sender-Testdatei):
+- `GET .../settings` liefert vor jedem Speichern die 5/13 Sender-Standard-
   werte exakt wie zuvor hartcodiert.
 - Realer Browser-Test (CDP, kein curl): Parameter-Panel für eine
   omp-mxf-player-Instanz geöffnet, "Programmgruppen/Presets bearbeiten"
@@ -15065,7 +15065,7 @@ Browser-Test für die UI, echte ORF-Testdatei):
   reine Logiktests für `matrix_for`/`find_preset`/`default_settings`)
   grün, `go test ./internal/{launcher,httpapi,db}/...` grün (4 neue
   Handler-Tests inkl. zweier Validierungs-Ablehnungen).
-- Am Ende der Sitzung auf die reinen ORF-Standardwerte zurückgesetzt
+- Am Ende der Sitzung auf die reinen Sender-Standardwerte zurückgesetzt
   (Test-Gruppe aus der Sitzung nicht als produktiver Endzustand
   belassen).
 
@@ -19459,7 +19459,7 @@ die schon vorher keinen sauberen Start hatten. `playheadPositionMs`
 sprang aber sofort auf die volle Datei-Dauer (10000ms) und blieb dort
 über 12 aufeinanderfolgende Sekunden-Checks unverändert stehen; ein
 echtes JPEG-Frame über den verbundenen Viewer zeigte NICHT Schwarzbild,
-sondern echten, erkennbaren Programminhalt (ORF-Bauchbinde, Person im
+sondern echten, erkennbaren Programminhalt (Sender-Bauchbinde, Person im
 Bild) — vier Snapshots über mehrere Sekunden hinweg exakt identisch
 (`md5sum`-gleich). Also: mindestens ein echter, dekodierter Frame kam
 diesmal nachweislich durch die GESAMTE neue Preroll-Kette bis zum
@@ -19533,7 +19533,7 @@ korrekt getaktete Frames (`gst_base_sink_do_sync`: `reset rc_time`
 wanderte im Gleichschritt mit der Wanduhrzeit von `0:00:00.140` bis
 `0:00:10.100`, sauberes EOS+Flush danach) — die Testdatei zeigt über
 weite Strecken schlicht ein optisch (nahezu) unverändertes Bild
-(ORF-Standbild/Bauchbinde), weshalb identische Snapshots ALLEIN kein
+(Sender-Standbild/Bauchbinde), weshalb identische Snapshots ALLEIN kein
 Freeze-Beweis sind. **Neue, robuste Verifikationsmethode ab hier:**
 `mxl-info --domain /dev/shm/omp-mxl -f <flow>` im Sekundentakt, `Head
 index` beobachten — ein GENUINER Live-Zähler, unabhängig von

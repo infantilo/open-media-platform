@@ -9,7 +9,7 @@ Legt an (gegen einen LAUFENDEN Stack, nur Standardbibliothek):
 Mit --start wird der Workflow gestartet und die Playlist befüllt; ohne --start nur angelegt.
 Gesendet wird erst mit TAKE (Operator-Konsole / Panel der Automation).
 
-  python3 tools/demo-orf1/setup.py [--base http://localhost:8000] [--start] [--recreate]
+  python3 tools/demo-playout/setup.py [--base http://localhost:8000] [--start] [--recreate]
 """
 import argparse, json, sys, time, urllib.error, urllib.request
 
@@ -21,7 +21,7 @@ ap.add_argument("--start", action="store_true")
 ap.add_argument("--recreate", action="store_true", help="vorhandenen Workflow/Channel „Demo-Kanal“ vorher löschen")
 a = ap.parse_args()
 BASE, TOKEN = a.base.rstrip("/"), ""
-WF_NAME, CH_NAME, AUTO = "Demo Playout", "ORF1", "Playout-Automation"
+WF_NAME, CH_NAME, AUTO = "Demo Playout", "Kanal 1", "Playout-Automation"
 
 
 def call(method, path, body=None):
@@ -97,9 +97,9 @@ m("setChildren", {"itemId": items["Sendungskennung"]["id"], "childrenJson": json
     {"id": "logo", "type": "LOGO", "timing": "FULL_PRIMARY", "templateId": "top-left-digital-clock", "data": {}}])})
 m("setChildren", {"itemId": items["Live-Schalte"]["id"], "childrenJson": json.dumps([
     {"id": "lt", "type": "GRAPHIC", "timing": "RELATIVE_TO_START", "delayMs": 1000, "durationMs": 5000,
-     "templateId": "lower-third-material-design", "data": {"name": "Studio Wien", "title": "Schalte ins Studio", "location": "ORF1 Live"}}])})
+     "templateId": "lower-third-material-design", "data": {"name": "Studio Wien", "title": "Schalte ins Studio", "location": "Live"}}])})
 # Audioprogrammgruppen: Stereo PT (1-2), 5.1 PT (3-8), Stereo OT (9-10), Stereo AD (11-12)
-m("updateItem", {"itemId": items["Magazin (MXF-Clip)"]["id"], "patchJson": json.dumps({"audioMapping": "orf-komplett"})})
+m("updateItem", {"itemId": items["Magazin (MXF-Clip)"]["id"], "patchJson": json.dumps({"audioMapping": "komplett"})})
 m("setTransition", {"itemId": items["Magazin (MXF-Clip)"]["id"], "transition": "mix", "transitionRateFrames": 12})
 m("setTransition", {"itemId": items["Werbeblock 1"]["id"], "transition": "vfade", "transitionRateFrames": 25})
 # Tonmischer: je Programmgruppe ein Ausgang (Gruppen-Bus = eigener MXL-Sender) + je Gruppe und

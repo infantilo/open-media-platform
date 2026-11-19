@@ -422,7 +422,7 @@ mod tests {
 
     /// Jedes der 13 importierten Standard-Presets liefert exakt die Matrix der alten Routen.
     #[test]
-    fn imported_orf_presets_match_the_old_routes() {
+    fn imported_presets_match_the_old_routes() {
         #[derive(serde::Deserialize)]
         struct Old {
             presets: Vec<P>,
@@ -440,7 +440,7 @@ mod tests {
             #[serde(rename = "groupChannel")]
             group_channel: usize,
         }
-        let old: Old = serde_json::from_str(include_str!("../defaults/orf-mxf-player.json")).unwrap();
+        let old: Old = serde_json::from_str(include_str!("../defaults/mxf-player-presets.json")).unwrap();
         let profile = default_profile();
         let mappings = default_mappings();
         assert_eq!(mappings.len(), 13);

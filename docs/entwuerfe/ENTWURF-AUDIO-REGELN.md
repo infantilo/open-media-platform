@@ -38,7 +38,7 @@ wählbar (`key:value`); jede Zielgruppe wird ein eigener MXL-Audio-Flow mit dies
 **Spurschema** (`trackSchema`): beschreibt, was die Spuren einer Quellklasse bedeuten.
 
 ```json
-{ "id": "orf-mxf-8", "match": { "format": "mxf", "tracks": 8 },
+{ "id": "mxf-8", "match": { "format": "mxf", "tracks": 8 },
   "tracks": [ {"n":1,"layout":"mono","tags":["pos:1"]}, … ] }
 ```
 
