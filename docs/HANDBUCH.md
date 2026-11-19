@@ -1017,6 +1017,13 @@ Oberfläche mit; `GET /api/v1/modules` zeigt Stand und Oberfläche (die Shell ba
 seine Routen antworten dann mit 404 und der Tab fehlt — der Kern (Nodes, Graph, Hosts, Workflows, Rechte) läuft unverändert. Ein Modul,
 dessen Start oder Migration scheitert, steht als `failed` im Manifest, die übrigen laufen weiter. Eigene Module: `docs/entwicklung/MODULE-SCHREIBEN.md`.
 
+### 9.9a Zugriffsregeln, Dateiübertragung und AVC-Intra (neu)
+
+- **Zugriffsregeln für Quellen und Senken** (`internal/accessrules`, Tabelle `access_rules`, Migration 0064): wer welche Quellen/Senken sehen und schalten darf, je Nutzer, Gruppe oder global; Sperren gewinnt, jede Erlauben-Regel schaltet auf Freigabeliste, Schalten setzt Sehen voraus. Durchgesetzt in `GET /api/v1/sources|sinks|graph` (gefiltert), `POST/DELETE /api/v1/graph/edges` und dem Schalten auf Workflow-Eingänge (403 mit Begründung); Verwaltung unter `/api/v1/access-rules` (Recht `configure`, Änderungsprotokoll), Vorschau `GET /api/v1/access-rules/effective?user=…`. Ausgenommen: `configure`, Dienst-Konten der Nodes, Support-Zugang. Bedienung: Benutzerhandbuch 10c-3b.
+- **Dateien kopieren und verschieben** (Modul `files`, Recht `files.transfer`): blockweise über die jobwire-Operationen `read-chunk`, `write-chunk`, `commit`, `abort`, `move`, `mkdir` (384 KiB je Block, SHA-256 je Block, Zieldatei als `.omp-part` bis zum atomaren `commit`); Endpunkte `POST /api/v1/files/transfer/preview`, `POST /api/v1/files/transfer`, `GET /api/v1/files/transfers`, `POST /api/v1/files/transfers/{id}/cancel`; Fortschritt in `file_transfers`. **Host-Agenten müssen auf die neue Version aktualisiert werden** (Abschnitt 5b), sonst melden sie „unbekannte Operation“. Hintergrund: `docs/decisions.md`, Nachtrag „Dateien kopieren und verschieben“.
+- **Workflow-Import mit Prüfung:** `POST /api/v1/workflows/import/preview` (Katalog, Definition, Hosts, Gruppen, Version der Datei, unbekannte Felder, vorhandener Workflow samt Unterschieden) und `POST /api/v1/workflows/import?replace=<id>`; Exportdateien tragen `meta.orchestratorVersion`, Rollenbindungen `subjectType`/`subjectName`.
+- **AVC-Intra Class 100 (1080/50p, 16 Tonspuren):** Recorder-Profil `record.profile` bzw. `OMP_RECORDER_PROFILE` (`avci50|100|200`, nur `.mxf`); MXF-Player und Kanal-Player folgen der Bildrate des Workflows (`OMP_FRAMERATE_NUM/DEN`); QC-Profil `avc-intra-100-1080p50`; Audio-Regeln-Schema `mxf-16`. Rechenbedarf und offene Punkte: Benutzerhandbuch 5d-2.
+
 ### 9.10 Stream Deck (WebHID, Browser-Bedienpult)
 
 Rein clientseitig (`ui/shell/streamdeck/`), kein Server-Anteil. Modelle (Hersteller-HID-Beschreibung, `docs/entwuerfe/ENTWURF-STREAMDECK.md` §1): XL und XL 2022

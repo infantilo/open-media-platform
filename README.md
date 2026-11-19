@@ -338,6 +338,15 @@ Full walkthroughs and context for every screen above are in
   tiles; connecting two ports creates a real IS-05 connection.
 - Reusable workflow objects (named role→role templates), snapshots/
   presets, grouping tiles into collapsible macro blocks, import/export.
+- Workflow cards with fixed action fields (start/stop/pause and tools stay
+  in the same place however many roles a workflow has), status pills with
+  counts, collapsible role/host plan. **Export** asks which role bindings
+  (shown by group/user name) and alert rules go along; **import** checks
+  the file first (unknown node types, invalid definition, unknown hosts and
+  groups, newer orchestrator version, fields this version does not know) and,
+  if a workflow of that name exists, offers **replace** (with a diff) or
+  create-new; **duplicate** asks for the new name and renames the roles
+  accordingly
 - A scheduler tab for time-driven start/stop of whole workflows
   (day/week/month view). Drag a bar to move it, drag its edges to
   lengthen/shorten it, or drag on an empty spot of a row to create a
@@ -592,7 +601,16 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   file, or to MXF (H.264 + 24-bit PCM) when the name ends in `.mxf`, with
   optional SMPTE ST 377-4/-41 MCA labels (`record.mcaPlan`) and an
   optional channel plan across several audio inputs (`record.audioPlan`);
-  MXL-only input, no capture-card dependency
+  MXL-only input, no capture-card dependency. Recording profile
+  `record.profile` / `OMP_RECORDER_PROFILE`: besides the usual H.264,
+  **AVC-Intra Class 50/100/200** (intra-only 10-bit 4:2:2, x264
+  `avcintra-class`) into MXF with every audio channel as its own **mono
+  track — 16 by default** (the target file format 1080/50p, Class 100).
+  The MXF players follow the workflow's frame rate (`OMP_FRAMERATE_*`, no
+  longer fixed to 25 fps), a built-in QC profile checks the format, and the
+  audio-rules defaults know a 16-track schema. Software encoding of Class
+  100 at 1080/50p needs roughly 14 cores for real time (measured: ~28 fps
+  on 8); the MXF mapping is not yet checked against a third-party system
 - **omp-device-hub** — detects the host's local video (V4L2) and audio
   (ALSA/USB) devices with a stable ID and capabilities; each device can be
   switched on to be offered as an MXL flow + NMOS sender (default off, the
@@ -766,6 +784,17 @@ containers report their CPU and RAM like native ones.
   stays shared across organizations by design, same as the rest of the
   control plane — this is access scoping for a multi-team/multi-client
   install, not a hard per-tenant data silo.
+- **Who may see and switch which sources and destinations.** Rules per
+  user, group or everyone: allow/deny × see/route × sources/destinations,
+  matched by node, endpoint, workflow, tag, media type or name pattern.
+  Deny always wins; any allow rule for a kind and action turns that
+  dimension into an allow list (lists of several scopes combine); routing
+  requires seeing. Enforced where it counts — the source/destination lists,
+  the graph (hidden ports and their edges disappear) and the switching calls
+  (403 with the deciding rule) — with a per-user effect preview in the admin
+  UI. Engineering accounts, node service accounts and support access are
+  exempt. Not covered: direct access to a node's own UI and listings that
+  enumerate nodes themselves
 - **Measurement you can act on, not just monitoring.** Every MXL read
   path already carries the origin timestamp the *writer* stamped onto a
   grain (`timestamp/x-mxl-tai`). `omp-scope` reads it and turns it into
