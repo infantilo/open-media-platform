@@ -139,6 +139,25 @@ pub fn wire_depth() -> Result<u8, String> {
     }
 }
 
+/// ST 2022-7 Empfang: zweiter Schenkel aus `<prefix>_B_PORT` und optional `<prefix>_B_GROUP` (z. B. Präfix
+/// `OMP_2110_GATEWAY_LISTEN`, `OMP_2110_GATEWAY_AUDIO_LISTEN`). `None` = kein zweiter Schenkel.
+fn redundant_rx(prefix: &str) -> Result<Option<(u16, Option<String>)>, String> {
+    let Ok(port) = std::env::var(format!("{prefix}_B_PORT")) else { return Ok(None) };
+    let port = port.trim().parse::<u16>().map_err(|e| format!("{prefix}_B_PORT: {e}"))?;
+    let group = std::env::var(format!("{prefix}_B_GROUP")).ok().filter(|g| !g.trim().is_empty());
+    Ok(Some((port, group)))
+}
+
+/// ST 2022-7 Senden: zweites Ziel aus `<prefix>_B_HOST` + `<prefix>_B_PORT` (Präfix `OMP_2110_GATEWAY_DEST`,
+/// `OMP_2110_GATEWAY_AUDIO_DEST`). Nur `HOST` ohne `PORT` (oder umgekehrt) ist ein Fehler.
+fn redundant_tx(prefix: &str) -> Result<Option<(String, u16)>, String> {
+    match (std::env::var(format!("{prefix}_B_HOST")), std::env::var(format!("{prefix}_B_PORT"))) {
+        (Ok(h), Ok(p)) => Ok(Some((h, p.trim().parse::<u16>().map_err(|e| format!("{prefix}_B_PORT: {e}"))?))),
+        (Err(_), Err(_)) => Ok(None),
+        _ => Err(format!("{prefix}_B_HOST und {prefix}_B_PORT müssen zusammen gesetzt sein")),
+    }
+}
+
 /// Griff auf die laufende Ingest-Pipeline — hält `pipeline`/`_input`/
 /// `_output` am Leben (gleiche Drop-Reihenfolge-Überlegung wie
 /// `omp-viewer::pipeline::ActivePipeline`: Pipeline zuerst auf Null,
@@ -246,6 +265,21 @@ pub fn run_ingest(
             return;
         }
     };
+    match redundant_rx("OMP_2110_GATEWAY_LISTEN") {
+        Ok(Some((port, group))) => {
+            if let Err(e) = input.add_redundant_leg(&pipeline, port, group.as_deref()) {
+                let _ = tx.send(Event::Error(e.clone()));
+                let _ = ready.send(Err(e));
+                return;
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            let _ = tx.send(Event::Error(e.clone()));
+            let _ = ready.send(Err(e));
+            return;
+        }
+    }
 
     let output = match MxlVideoOutput::new(
         &pipeline,
@@ -300,6 +334,21 @@ pub fn run_ingest(
             return;
         }
     };
+    match redundant_rx("OMP_2110_GATEWAY_AUDIO_LISTEN") {
+        Ok(Some((port, group))) => {
+            if let Err(e) = audio_input.add_redundant_leg(&pipeline, port, group.as_deref()) {
+                let _ = tx.send(Event::Error(e.clone()));
+                let _ = ready.send(Err(e));
+                return;
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            let _ = tx.send(Event::Error(e.clone()));
+            let _ = ready.send(Err(e));
+            return;
+        }
+    }
     let audio_mixmatrix = match build_channel_matrix(&pipeline, &audio_input.tail, config.audio_channels) {
         Ok(e) => e,
         Err(e) => {
@@ -505,6 +554,9 @@ fn build_output(
         framerate_denominator,
         wire_depth()?,
     )?;
+    if let Some((host, port)) = redundant_tx("OMP_2110_GATEWAY_DEST")? {
+        output.add_redundant_leg(&pipeline, &host, port)?;
+    }
     output.set_active(true);
 
     pipeline
@@ -762,6 +814,9 @@ fn build_audio_output(
 
     let output =
         St2110AudioOutput::new(&pipeline, &mixmatrix, destination_host, destination_port, sample_rate, channels)?;
+    if let Some((host, port)) = redundant_tx("OMP_2110_GATEWAY_AUDIO_DEST")? {
+        output.add_redundant_leg(&pipeline, &host, port)?;
+    }
     output.set_active(true);
 
     pipeline.set_state(gst::State::Playing).map_err(|e| format!("set state playing: {e}"))?;
@@ -883,4 +938,25 @@ pub fn run_audio_output(
     }
 
     drop(active);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redundant_env_parsing() {
+        unsafe {
+            std::env::set_var("T7_RX_B_PORT", "6001");
+            std::env::set_var("T7_RX_B_GROUP", "239.9.9.2");
+            std::env::set_var("T7_TX_B_HOST", "239.9.9.3");
+            std::env::set_var("T7_TX_B_PORT", "6002");
+            std::env::set_var("T7_BAD_B_HOST", "239.9.9.4");
+        }
+        assert_eq!(redundant_rx("T7_RX").unwrap(), Some((6001, Some("239.9.9.2".to_string()))));
+        assert_eq!(redundant_rx("T7_NONE").unwrap(), None);
+        assert_eq!(redundant_tx("T7_TX").unwrap(), Some(("239.9.9.3".to_string(), 6002)));
+        assert_eq!(redundant_tx("T7_NONE").unwrap(), None);
+        assert!(redundant_tx("T7_BAD").is_err());
+    }
 }

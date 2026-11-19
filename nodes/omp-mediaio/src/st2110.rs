@@ -78,6 +78,8 @@ pub struct St2110VideoOutput {
     valve: gst::Element,
     udpsink: gst::Element,
     destination: Mutex<(String, u16)>,
+    /// ST 2022-7: zweiter Sendeschenkel (Ziel), falls eingerichtet.
+    leg_b: Mutex<Option<(String, u16)>>,
     width: i32,
     height: i32,
     framerate_numerator: i32,
@@ -192,6 +194,7 @@ impl St2110VideoOutput {
             valve,
             udpsink,
             destination: Mutex::new((initial_host.to_string(), initial_port)),
+            leg_b: Mutex::new(None),
             width,
             height,
             framerate_numerator,
@@ -228,26 +231,38 @@ impl St2110VideoOutput {
         let (host, port) = self.destination();
         // `TP=2110TPW`: dieser Sender paced in Software (Kernel-UDP), nicht schmal (TPN) — frühere Fassung
         // behauptete TPN. Ein Empfänger darf nur ein ehrliches Profil erwarten.
-        format!(
-            "v=0\r\n\
-             o=- 0 0 IN IP4 {host}\r\n\
-             s=OpenMediaPlatform ST2110\r\n\
-             t=0 0\r\n\
-             m=video {port} RTP/AVP 96\r\n\
-             c=IN IP4 {host}\r\n\
-             {clock}\
-             a=rtpmap:96 raw/90000\r\n\
-             a=fmtp:96 sampling=YCbCr-4:2:2; depth={depth}; width={w}; height={h}; \
-             exactframerate={num}/{den}; colorimetry={colorimetry}; PM=2110GPM; \
-             SSN=ST2110-20:2017; TP=2110TPW; TCS=SDR\r\n",
-            clock = clock_lines(&host),
-            colorimetry = sdp_colorimetry(self.height as i32),
-            depth = self.depth,
-            w = self.width,
-            h = self.height,
-            num = self.framerate_numerator,
-            den = self.framerate_denominator,
-        )
+        let media = |host: &str, port: u16, mid: Option<&str>| {
+            format!(
+                "m=video {port} RTP/AVP 96\r\n\
+                 c=IN IP4 {host}\r\n\
+                 {clock}\
+                 a=rtpmap:96 raw/90000\r\n\
+                 a=fmtp:96 sampling=YCbCr-4:2:2; depth={depth}; width={w}; height={h}; \
+                 exactframerate={num}/{den}; colorimetry={colorimetry}; PM=2110GPM; \
+                 SSN=ST2110-20:2017; TP=2110TPW; TCS=SDR\r\n{mid}",
+                clock = clock_lines(host),
+                colorimetry = sdp_colorimetry(self.height as i32),
+                depth = self.depth,
+                w = self.width,
+                h = self.height,
+                num = self.framerate_numerator,
+                den = self.framerate_denominator,
+                mid = mid.map(|m| format!("a=mid:{m}\r\n")).unwrap_or_default(),
+            )
+        };
+        let head = format!("v=0\r\no=- 0 0 IN IP4 {host}\r\ns=OpenMediaPlatform ST2110\r\nt=0 0\r\n");
+        match self.leg_b.lock().expect("lock poisoned").clone() {
+            // ST 2022-7 / RFC 7104: Gruppe DUP, zwei Medienabschnitte (primary/secondary)
+            Some((bh, bp)) => format!("{head}a=group:DUP primary secondary\r\n{}{}", media(&host, port, Some("primary")), media(&bh, bp, Some("secondary"))),
+            None => format!("{head}{}", media(&host, port, None)),
+        }
+    }
+
+    /// ST 2022-7: zweiten Sendeschenkel (anderes Ziel/Netz) einbauen. Vor dem Start der Pipeline aufrufen.
+    pub fn add_redundant_leg(&self, pipeline: &gst::Pipeline, host: &str, port: u16) -> Result<(), String> {
+        crate::st2022_7::add_tx_leg(pipeline, &self.valve, &self.udpsink, "st2110_video_sink_b", host, port)?;
+        *self.leg_b.lock().expect("lock poisoned") = Some((host.to_string(), port));
+        Ok(())
     }
 }
 
@@ -290,9 +305,15 @@ pub struct St2110VideoInput {
     /// GStreamers `rtpjitterbuffer` gemessene Paketverlust-/Verspätungs-
     /// Zähler statt eines erfundenen Werts.
     jitterbuffer: gst::Element,
+    rtp_caps: gst::Caps,
 }
 
 impl St2110VideoInput {
+    /// ST 2022-7: zweiten Empfangsschenkel einbauen (s. [`St2110AudioInput::add_redundant_leg`]).
+    pub fn add_redundant_leg(&self, pipeline: &gst::Pipeline, port: u16, group: Option<&str>) -> Result<(), String> {
+        crate::st2022_7::add_rx_leg(pipeline, &self.jitterbuffer, "st2110_video_src_b", port, &self.rtp_caps, group)
+    }
+
     /// `multicast_group`: `Some("239.x.x.x")` bindet `udpsrc` an eine
     /// Multicast-Gruppe statt an alle Interfaces (Kapitel 19 Teil 1,
     /// `docs/END-GOAL-FEATURES.md` §19.3a Punkt 2) — reine
@@ -400,6 +421,7 @@ impl St2110VideoInput {
             tail: videoconvert,
             flowed,
             jitterbuffer,
+            rtp_caps,
         })
     }
 
@@ -443,6 +465,8 @@ pub struct St2110AudioOutput {
     valve: gst::Element,
     udpsink: gst::Element,
     destination: Mutex<(String, u16)>,
+    /// ST 2022-7: zweiter Sendeschenkel (Ziel), falls eingerichtet.
+    leg_b: Mutex<Option<(String, u16)>>,
     sample_rate: i32,
     channels: i32,
     flowed: Arc<AtomicBool>,
@@ -514,6 +538,7 @@ impl St2110AudioOutput {
             valve,
             udpsink,
             destination: Mutex::new((initial_host.to_string(), initial_port)),
+            leg_b: Mutex::new(None),
             sample_rate,
             channels,
             flowed,
@@ -537,20 +562,31 @@ impl St2110AudioOutput {
     /// node-spezifisch.
     pub fn sdp(&self) -> String {
         let (host, port) = self.destination();
-        format!(
-            "v=0\r\n\
-             o=- 0 0 IN IP4 {host}\r\n\
-             s=OpenMediaPlatform ST2110-30/AES67\r\n\
-             c=IN IP4 {host}\r\n\
-             t=0 0\r\n\
-             m=audio {port} RTP/AVP 96\r\n\
-             a=rtpmap:96 L24/{rate}/{channels}\r\n\
-             a=ptime:1\r\n\
-             {clock}",
-            clock = clock_lines(&host),
-            rate = self.sample_rate,
-            channels = self.channels,
-        )
+        let media = |host: &str, port: u16, mid: Option<&str>| {
+            format!(
+                "m=audio {port} RTP/AVP 96\r\n\
+                 c=IN IP4 {host}\r\n\
+                 a=rtpmap:96 L24/{rate}/{channels}\r\n\
+                 a=ptime:1\r\n\
+                 {clock}{mid}",
+                clock = clock_lines(host),
+                rate = self.sample_rate,
+                channels = self.channels,
+                mid = mid.map(|m| format!("a=mid:{m}\r\n")).unwrap_or_default(),
+            )
+        };
+        let head = format!("v=0\r\no=- 0 0 IN IP4 {host}\r\ns=OpenMediaPlatform ST2110-30/AES67\r\nt=0 0\r\n");
+        match self.leg_b.lock().expect("lock poisoned").clone() {
+            Some((bh, bp)) => format!("{head}a=group:DUP primary secondary\r\n{}{}", media(&host, port, Some("primary")), media(&bh, bp, Some("secondary"))),
+            None => format!("{head}{}", media(&host, port, None)),
+        }
+    }
+
+    /// ST 2022-7: zweiten Sendeschenkel einbauen (s. [`St2110VideoOutput::add_redundant_leg`]).
+    pub fn add_redundant_leg(&self, pipeline: &gst::Pipeline, host: &str, port: u16) -> Result<(), String> {
+        crate::st2022_7::add_tx_leg(pipeline, &self.valve, &self.udpsink, "st2110_audio_sink_b", host, port)?;
+        *self.leg_b.lock().expect("lock poisoned") = Some((host.to_string(), port));
+        Ok(())
     }
 }
 
@@ -580,9 +616,16 @@ pub struct St2110AudioInput {
     /// Muster (BCP-008-01 `connectionStatus`, `docs/decisions.md`
     /// BCP-008-Nachtrag).
     jitterbuffer: gst::Element,
+    rtp_caps: gst::Caps,
 }
 
 impl St2110AudioInput {
+    /// ST 2022-7: zweiten Empfangsschenkel (andere Gruppe/anderer Port, anderes Netz) einbauen. Vor dem Start der
+    /// Pipeline aufrufen; doppelt ankommende Pakete verwirft der Jitterbuffer.
+    pub fn add_redundant_leg(&self, pipeline: &gst::Pipeline, port: u16, group: Option<&str>) -> Result<(), String> {
+        crate::st2022_7::add_rx_leg(pipeline, &self.jitterbuffer, "st2110_audio_src_b", port, &self.rtp_caps, group)
+    }
+
     /// `multicast_group`: s. `St2110VideoInput::new`-Doku, identisches
     /// Muster.
     pub fn new(
@@ -632,7 +675,7 @@ impl St2110AudioInput {
             gst::PadProbeReturn::Remove
         });
 
-        Ok(St2110AudioInput { tail: audioconvert, flowed, jitterbuffer })
+        Ok(St2110AudioInput { tail: audioconvert, flowed, jitterbuffer, rtp_caps })
     }
 
     /// S. `St2110VideoInput::jitterbuffer_stats`-Doku, identisches
@@ -999,6 +1042,46 @@ mod tests {
         wp.set_state(gst::State::Null).unwrap();
         rp.set_state(gst::State::Null).unwrap();
         assert!(got.load(Ordering::Relaxed), "kein 10-Bit-Bild angekommen");
+    }
+
+    /// ST 2022-7 mit den echten Typen: Sender mit zwei Zielen (SDP trägt die DUP-Gruppe), Empfänger mit zwei Schenkeln;
+    /// Schenkel A des Senders geht ins Leere — das Bild kommt über Schenkel B an.
+    #[test]
+    fn redundant_legs_end_to_end() {
+        gst::init().expect("gst::init");
+        let wp = gst::Pipeline::new();
+        let src = gst::ElementFactory::make("videotestsrc").property("is-live", true).build().unwrap();
+        wp.add(&src).unwrap();
+        let out = St2110VideoOutput::new_with_depth(&wp, &src, "127.0.0.1", 52360, 320, 180, 25, 1, 10).unwrap();
+        out.add_redundant_leg(&wp, "127.0.0.1", 52361).unwrap();
+        let sdp = out.sdp();
+        assert!(sdp.contains("a=group:DUP primary secondary") && sdp.contains("a=mid:secondary"), "sdp = {sdp}");
+        assert_eq!(sdp.matches("m=video").count(), 2, "sdp = {sdp}");
+        out.set_active(true);
+        let rp = gst::Pipeline::new();
+        // Empfänger: Schenkel A lauscht auf dem toten Port 52360 (dort sendet Schenkel A, kommt an), B auf 52361.
+        let input = St2110VideoInput::new_with_depth(&rp, 52361, 320, 180, 25, 1, None, 10).unwrap();
+        input.add_redundant_leg(&rp, 52362, None).unwrap(); // zweiter Schenkel lauscht auf einem Port ohne Sender
+        let got = Arc::new(AtomicBool::new(false));
+        let g = got.clone();
+        input.tail.static_pad("src").unwrap().add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+            g.store(true, Ordering::Relaxed);
+            gst::PadProbeReturn::Remove
+        });
+        let sink = gst::ElementFactory::make("fakesink").property("sync", false).build().unwrap();
+        rp.add(&sink).unwrap();
+        input.tail.link(&sink).unwrap();
+        rp.set_state(gst::State::Playing).unwrap();
+        wp.set_state(gst::State::Playing).unwrap();
+        for _ in 0..40 {
+            if got.load(Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        wp.set_state(gst::State::Null).unwrap();
+        rp.set_state(gst::State::Null).unwrap();
+        assert!(got.load(Ordering::Relaxed), "kein Bild über den intakten Schenkel");
     }
 
     #[test]
