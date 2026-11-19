@@ -26,6 +26,7 @@ import { AuditPanel } from "./audit-panel.ts";
 import { DiagnosePanel } from "./diagnose-panel.ts";
 import { SupportPanel } from "./support-panel.ts";
 import { ClientsPanel } from "./clients-panel.ts";
+import { AccessRulesPanel } from "./access-rules-panel.ts";
 import { MxlFlowsPanel } from "./mxl-flows-panel.ts";
 import { TimelinePanel } from "./timeline-panel.ts";
 import { ensureBundle, getModules } from "./modules-registry.ts";
@@ -286,6 +287,7 @@ const ADMIN_SUB_TAB_GROUPS: { id: string; labelKey: I18nKey; tabs: { id: AdminTa
       { id: "organizations", labelKey: "admin.tab.organizations", clusterKey: "admin.cluster.access" },
       { id: "groups", labelKey: "admin.tab.groups", clusterKey: "admin.cluster.access" },
       { id: "bindings", labelKey: "admin.tab.bindings", clusterKey: "admin.cluster.access" },
+      { id: "accessrules", labelKey: "admin.tab.accessrules", clusterKey: "admin.cluster.access" },
       { id: "clients", labelKey: "admin.tab.clients", clusterKey: "admin.cluster.access" },
       { id: "catalog", labelKey: "admin.tab.catalog", clusterKey: "admin.cluster.operations" },
       { id: "nodeversions", labelKey: "admin.tab.nodeversions", clusterKey: "admin.cluster.operations" },
@@ -361,6 +363,7 @@ class AdminView extends HTMLElement {
   #diagnosePanel = new DiagnosePanel();
   #supportPanel = new SupportPanel();
   #clientsPanel = new ClientsPanel();
+  #accessRulesPanel = new AccessRulesPanel();
   #mxlFlowsPanel = new MxlFlowsPanel();
   #timelinePanel = new TimelinePanel();
   #logPollHandle: number | undefined;
@@ -2616,6 +2619,10 @@ class AdminView extends HTMLElement {
       case "mxlflows":
         this.appendChild(this.#mxlFlowsPanel.el);
         this.#mxlFlowsPanel.start();
+        break;
+      case "accessrules":
+        this.appendChild(this.#accessRulesPanel.el);
+        this.#accessRulesPanel.start();
         break;
       case "clients":
         this.appendChild(this.#clientsPanel.el);

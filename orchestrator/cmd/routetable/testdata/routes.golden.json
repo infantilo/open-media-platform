@@ -7,6 +7,41 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/access-rules",
+    "auth": "verb:Configure",
+    "when": "access != nil",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/access-rules",
+    "auth": "verb:Configure",
+    "when": "access != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/access-rules/effective",
+    "auth": "verb:Configure",
+    "when": "access != nil",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/access-rules/{id}",
+    "auth": "verb:Configure",
+    "when": "access != nil",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/access-rules/{id}",
+    "auth": "verb:Configure",
+    "when": "access != nil",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/admin/audit-log",
     "auth": "verb:Admin",
     "domain": "core"

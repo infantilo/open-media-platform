@@ -30,6 +30,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/accessrules"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alarmacks"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/assetlinks"
@@ -778,6 +779,19 @@ func main() {
 	// Var-Gate wie bei den Storage-Backends, da Gruppen kein Secret
 	// verschlüsseln und keine externe Infrastruktur brauchen).
 	groupStore := groups.NewStore(database)
+	// Zugriffsregeln: wer welche Quellen/Senken sehen und schalten darf (Whitelist/Blacklist je Nutzer, Gruppe, global)
+	accessRuleStore := accessrules.NewStore(database)
+	accessEngine := &accessrules.Engine{Store: accessRuleStore, GroupIDs: func(username string) []string {
+		gs, err := groupStore.GroupsForUser(username)
+		if err != nil {
+			return nil
+		}
+		ids := make([]string, 0, len(gs))
+		for _, g := range gs {
+			ids = append(ids, g.ID)
+		}
+		return ids
+	}}
 	groupStore.OnChange = authzStore.Invalidate // Audit H7: Mitgliedschaftsänderung verwirft den Rechte-Cache sofort
 	auditStore := audit.NewStore(database, hub)
 	// S5 (docs/berichte/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Startup- + täglicher
@@ -1753,7 +1767,7 @@ func main() {
 	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
 	go timelineRec.Run(ctx, hub, timelineSink)
 	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithDirectory(dirMgr, dirMap), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithMXLDomains(mxlDomainStore), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithHostSoftware(hostSoftwareSvc), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithAlertStatus(alertStatusFn), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithAccessRules(accessRuleStore, accessEngine), httpapi.WithDirectory(dirMgr, dirMap), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithMXLDomains(mxlDomainStore), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithHostSoftware(hostSoftwareSvc), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithAlertStatus(alertStatusFn), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
 		h, err := housekeeping.CheckHealth(ctx, database)
 		housekeeping.AddVolume(&h, os.Getenv("OMP_DB_VOLUME_PATH"))
 		return h, err

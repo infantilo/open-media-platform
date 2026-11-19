@@ -41,6 +41,8 @@ type handlerOptions struct {
 	storageBackends     StorageBackendService
 	organizations       OrganizationService
 	groups              GroupService
+	accessStore         AccessRuleStore
+	accessEngine        AccessEngine
 	sourceTags          SourceTagStore
 	ffmpegTools         FFmpegToolsService
 	updates             UpdateService

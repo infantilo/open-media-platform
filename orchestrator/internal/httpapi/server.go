@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/accessrules"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/assetlinks"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
@@ -455,17 +456,30 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authSvc, auditLogger, loginLockout, loginLimits{ip: auth.NewLoginLockoutN(30), name: auth.NewLoginLockoutN(50)}))
 	mux.HandleFunc("POST /api/v1/auth/session", handleSession(authSvc))
 	mux.HandleFunc("POST /api/v1/auth/logout", handleLogout())
+	// Zugriffsregeln für Quellen/Senken (Sichtbarkeit und Schalten); nil = alles offen
+	var access *accessChecker
+	if options.accessEngine != nil {
+		access = &accessChecker{engine: options.accessEngine, nodes: nodes, tags: options.sourceTags, roles: workflowSvc.FindRoleForNode, authz: authzStore}
+	}
+	guard := func(wrap func(http.HandlerFunc) http.HandlerFunc, h http.HandlerFunc) http.HandlerFunc {
+		if access == nil {
+			return h
+		}
+		return wrap(h)
+	}
 	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc, authzStore, supportVerifier(options.supportAccess)))
 	mux.HandleFunc("POST /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleCreateUser(authSvc, authzStore)))
 	mux.HandleFunc("GET /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleListUsers(authSvc, authzStore, options.groups)))
-	mux.HandleFunc("DELETE /api/v1/auth/users/{name}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteUser(authSvc, authzStore, options.groups)))
+	mux.HandleFunc("DELETE /api/v1/auth/users/{name}", g.requireVerbGlobal(authz.VerbAdmin, afterDelete(handleDeleteUser(authSvc, authzStore, options.groups), func(r *http.Request) {
+		cleanAccessRules(options.accessStore, accessrules.SubjectUser, r.PathValue("name"))
+	})))
 	mux.HandleFunc("PUT /api/v1/auth/users/{name}/password", g.requireVerbGlobal(authz.VerbAdmin, handleResetPassword(authSvc)))
 	mux.HandleFunc("PUT /api/v1/auth/users/{name}/org", g.requireVerbGlobal(authz.VerbAdmin, handleUpdateUserOrg(authSvc)))
 	mux.HandleFunc("POST /api/v1/auth/users/{name}/revoke-sessions", g.requireVerbGlobal(authz.VerbAdmin, handleRevokeSessions(authSvc)))
 
 	mux.HandleFunc("GET /api/v1/nodes", g.requireAuth(handleNodes(nodes)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}/interface", g.requireAuth(handleWorkflowInterface(workflowSvc)))
-	mux.HandleFunc("POST /api/v1/workflows/{id}/interface/inputs/{name}/connect", g.requireVerbGlobal(authz.VerbOperate, handleWorkflowInterfaceConnect(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/interface/inputs/{name}/connect", g.requireVerbGlobal(authz.VerbOperate, guard(func(h http.HandlerFunc) http.HandlerFunc { return access.guardInterfaceConnect(h) }, handleWorkflowInterfaceConnect(workflowSvc))))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/interface/inputs/{name}/disconnect", g.requireVerbGlobal(authz.VerbOperate, handleWorkflowInterfaceDisconnect(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}/plan", g.requireAuth(handleWorkflowPlan(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}/drift", g.requireAuth(handleWorkflowDrift(workflowSvc)))
@@ -545,10 +559,17 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/nodes/{id}/invites/qr", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/invites/qr", nodeLogs)))
 	// HTTPS-Adresse des Nodes (OMP_HTTPS=1, omp-node-sdk https.rs) — Handy-Kamera-Seite braucht HTTPS.
 	mux.HandleFunc("GET /api/v1/nodes/{id}/https-info", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/https-info", nodeLogs)))
-	mux.HandleFunc("GET /api/v1/graph", g.requireAuth(handleGraph(graphSvc)))
+	if access != nil {
+		mux.HandleFunc("GET /api/v1/access-rules", g.requireVerbGlobal(authz.VerbConfigure, handleListAccessRules(options.accessStore)))
+		mux.HandleFunc("POST /api/v1/access-rules", g.requireVerbGlobal(authz.VerbConfigure, handleCreateAccessRule(options.accessStore, options.domainAudit)))
+		mux.HandleFunc("PUT /api/v1/access-rules/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleUpdateAccessRule(options.accessStore, options.domainAudit)))
+		mux.HandleFunc("DELETE /api/v1/access-rules/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteAccessRule(options.accessStore, options.domainAudit)))
+		mux.HandleFunc("GET /api/v1/access-rules/effective", g.requireVerbGlobal(authz.VerbConfigure, handleEffectiveAccess(access)))
+	}
+	mux.HandleFunc("GET /api/v1/graph", g.requireAuth(guard(func(h http.HandlerFunc) http.HandlerFunc { return access.filterGraph(h) }, handleGraph(graphSvc))))
 	mux.HandleFunc("GET /api/v1/graph/network", g.requireAuth(handleGraphNetwork(hostRegistry, hostMetrics, launcherSvc, placementThresholds)))
-	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbOnReceiver(authz.VerbOperate, handlePostGraphEdge(graphSvc, launcherSvc)))
-	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", g.requireVerbOnReceiver(authz.VerbOperate, handleDeleteGraphEdge(graphSvc)))
+	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbOnReceiver(authz.VerbOperate, guard(func(h http.HandlerFunc) http.HandlerFunc { return access.guardEdgePost(h) }, handlePostGraphEdge(graphSvc, launcherSvc))))
+	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", g.requireVerbOnReceiver(authz.VerbOperate, guard(func(h http.HandlerFunc) http.HandlerFunc { return access.guardEdgeDelete(h) }, handleDeleteGraphEdge(graphSvc))))
 	mux.HandleFunc("GET /api/v1/layouts/{name}", g.requireAuth(handleGetLayout(layoutStore)))
 	mux.HandleFunc("PUT /api/v1/layouts/{name}", g.requireVerbGlobal(authz.VerbConfigure, handlePutLayout(layoutStore)))
 	mux.HandleFunc("GET /api/v1/snapshots", g.requireAuth(handleListSnapshots(snapshotSvc)))
@@ -942,9 +963,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Active-Directory-Anbindung) — global VerbAdmin, dieselbe Stufe wie
 	// Rollenbindungen/Organisationen/Nutzerverwaltung selbst.
 	if options.sourceTags != nil {
-		mux.HandleFunc("GET /api/v1/sources", g.requireAuth(handleListSources(nodes, options.sourceTags, workflowSvc.FindRoleForNode)))
+		mux.HandleFunc("GET /api/v1/sources", g.requireAuth(guard(func(h http.HandlerFunc) http.HandlerFunc { return access.filterSources(h) }, handleListSources(nodes, options.sourceTags, workflowSvc.FindRoleForNode))))
 		mux.HandleFunc("PUT /api/v1/sources/{senderId}/tags", g.requireVerbGlobal(authz.VerbConfigure, handlePutSourceTags(nodes, options.sourceTags, options.domainAudit)))
-		mux.HandleFunc("GET /api/v1/sinks", g.requireAuth(handleListSinks(nodes, options.sourceTags, workflowSvc.FindRoleForNode)))
+		mux.HandleFunc("GET /api/v1/sinks", g.requireAuth(guard(func(h http.HandlerFunc) http.HandlerFunc { return access.filterSinks(h) }, handleListSinks(nodes, options.sourceTags, workflowSvc.FindRoleForNode))))
 		mux.HandleFunc("PUT /api/v1/sinks/{receiverId}/tags", g.requireVerbGlobal(authz.VerbConfigure, handlePutSinkTags(nodes, options.sourceTags, options.domainAudit)))
 	}
 	if options.groups != nil {
@@ -952,7 +973,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("POST /api/v1/groups", g.requireVerbGlobal(authz.VerbAdmin, handleCreateGroup(options.groups, options.domainAudit)))
 		mux.HandleFunc("GET /api/v1/groups/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleGetGroup(options.groups)))
 		mux.HandleFunc("PUT /api/v1/groups/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleUpdateGroup(options.groups, options.domainAudit)))
-		mux.HandleFunc("DELETE /api/v1/groups/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteGroup(options.groups, authzStore, options.domainAudit)))
+		mux.HandleFunc("DELETE /api/v1/groups/{id}", g.requireVerbGlobal(authz.VerbAdmin, afterDelete(handleDeleteGroup(options.groups, authzStore, options.domainAudit), func(r *http.Request) {
+			cleanAccessRules(options.accessStore, accessrules.SubjectGroup, r.PathValue("id"))
+		})))
 		mux.HandleFunc("GET /api/v1/groups/{id}/members", g.requireVerbGlobal(authz.VerbAdmin, handleListGroupMembers(options.groups)))
 		mux.HandleFunc("POST /api/v1/groups/{id}/members", g.requireVerbGlobal(authz.VerbAdmin, handleAddGroupMember(options.groups, options.domainAudit)))
 		mux.HandleFunc("DELETE /api/v1/groups/{id}/members/{username}", g.requireVerbGlobal(authz.VerbAdmin, handleRemoveGroupMember(options.groups, options.domainAudit)))

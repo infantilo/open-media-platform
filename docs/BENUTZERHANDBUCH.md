@@ -2502,6 +2502,19 @@ Der Node **X/Y-Panel (Kreuzschiene)** ist ein Bedienpanel ohne eigene Ports: Er 
 
 ![X/Y-Panel in der Konsole-2-Optik](screenshots/xy-panel-konsole2.png)
 
+## 10c-3b. Zugriff auf Quellen und Senken (wer sieht und schaltet was)
+
+Unter **Administration → Zugriff → Quellen und Senken** legen Sie fest, welche Quellen (Sender) und Senken (Empfänger) ein Nutzer **sehen** und **schalten** darf — für **alle**, für eine **Gruppe** oder für einen einzelnen **Nutzer**. Ohne Regeln bleibt alles wie bisher offen.
+
+- **Eine Regel** besteht aus: *Wer* (alle, Gruppe, Nutzer), *Art* (Quellen oder Senken), *Handlung* (Sehen oder Schalten), *Wirkung* (**Sperren** oder **Erlauben**) und einem *Ziel*. Als Ziel lassen sich alles, ein **Node**, ein einzelner **Endpunkt**, ein **Workflow**, ein **Tag**, ein **Medientyp** (Video/Audio/Daten) oder ein **Name mit Platzhalter** (`Kamera*`, `*/ Video*` für Node / Port) wählen. Beim Anlegen lassen sich *Sehen* und *Schalten* zugleich ankreuzen (es entstehen zwei Regeln).
+- **Sperren = Blacklist.** Eine Sperre gewinnt immer. **Erlauben = Freigabeliste:** Sobald es für Art und Handlung mindestens eine Erlauben-Regel gibt, ist nur noch erlaubt, was eine Erlauben-Regel trifft. Freigabelisten verschiedener Bereiche (alle, Gruppe, Nutzer) **vereinigen** sich — eine globale Liste plus eine Gruppenliste ergibt die Summe. Die Chips über der Tabelle zeigen je Art und Handlung, ob sie *offen*, *nur Sperren* oder *Freigabeliste* ist.
+- **Schalten setzt Sehen voraus:** Was ein Nutzer nicht sieht, schaltet er nicht. Umgekehrt lässt sich Schalten sperren, obwohl Sehen erlaubt bleibt (der Nutzer sieht die Senke, kann aber nichts darauf schalten).
+- **Wo es wirkt:** in den Listen der Quellen und Senken (X/Y-Panel, Kreuzschiene, Bouquets, Tag-Schaltung), im Graph des Flow-Editors (nicht sichtbare Ein- und Ausgänge und deren Kanten fehlen) und beim Schalten und Trennen selbst (die Antwort ist *403 forbidden* mit Begründung) — auch beim Schalten auf einen Workflow-Eingang.
+- **Wer ausgenommen ist:** Konten mit dem Recht *configure* (Engineering), die Dienst-Konten der Nodes und der Support-Zugang unterliegen den Regeln nicht — sonst könnte man sich aussperren oder Nodes in ihrer Arbeit behindern.
+- **Wirkung prüfen:** Unten im Reiter zeigt die Vorschau für einen gewählten Nutzer, welche Quellen und Senken er sieht und schaltet, **mit der Regel, die entscheidet**. Das ist der schnellste Weg, eine neue Regel zu kontrollieren.
+- Löscht man einen Nutzer oder eine Gruppe, verschwinden ihre Regeln mit. Änderungen an den Regeln stehen im Änderungsprotokoll.
+- **Grenzen:** Die Regeln gelten für die Listen der Quellen/Senken, den Graph und das Schalten. Andere Ansichten, die Nodes direkt auflisten (z. B. die Instanzen-Übersicht), blenden nichts aus. Ein Nutzer mit direktem Zugriff auf die Node-Oberfläche (Panel eines Nodes) wird davon nicht gebremst — dafür bleiben die Rollenbindungen zuständig.
+
 ## 10c-4. Video folgt Audio (Kamera schaltet auf den Sprecher)
 
 Für Studios mit mehreren Kameras und mehreren Personen: Wer spricht, wird im Bild gezeigt. Dazu gehören zwei Dienste, die Sie über den Katalog starten: **Video folgt Audio** (Bedienung und Schaltlogik) und **Gesichtserkennung (Video folgt Audio)** (zählt Gesichter je Kamera, erkennt keine Personen). Beide gehören in denselben Workflow wie Bild- und Tonmischer. Erscheint eine Kachel nicht im Flow-Editor, hilft ein Neustart der Instanz (löschen und neu aus dem Katalog starten); beide Dienste wählen ihren Port beim Start selbst.
