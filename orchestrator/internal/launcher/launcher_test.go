@@ -114,9 +114,9 @@ func stubbornCatalog() []CatalogEntry {
 // Neustart-Goroutine über den Testlauf hinaus weiterläuft.
 func disableAutoRestart(t *testing.T) {
 	t.Helper()
-	originalMax := maxCrashRestarts
-	maxCrashRestarts = 0
-	t.Cleanup(func() { maxCrashRestarts = originalMax })
+	originalMax := maxCrashRestarts.Load()
+	maxCrashRestarts.Store(0)
+	t.Cleanup(func() { maxCrashRestarts.Store(originalMax) })
 }
 
 // podmanCatalog (Kapitel 17 Teil 4): startet ein echtes, kurzlebiges
@@ -1035,9 +1035,9 @@ func TestLauncherAutoRestartsCrashedInstanceInPlace(t *testing.T) {
 // Versuchen innerhalb des Fensters bleibt die Instanz crashed stehen.
 func TestLauncherCrashLoopBrakeStopsAutoRestarting(t *testing.T) {
 	shortCrashRestartTiming(t, 10*time.Millisecond, time.Minute)
-	origMax := maxCrashRestarts
-	maxCrashRestarts = 2
-	t.Cleanup(func() { maxCrashRestarts = origMax })
+	origMax := maxCrashRestarts.Load()
+	maxCrashRestarts.Store(2)
+	t.Cleanup(func() { maxCrashRestarts.Store(origMax) })
 
 	crashing := []CatalogEntry{{
 		Type:    "loopy",
@@ -1070,7 +1070,7 @@ func TestLauncherCrashLoopBrakeStopsAutoRestarting(t *testing.T) {
 	// Neustarts) — bei maxCrashRestarts=2 sind das 2 Neustarts plus der
 	// 3. Absturz, bei dem countInWindow die Grenze überschreitet und
 	// eskaliert wird.
-	wantRestartCount := maxCrashRestarts + 1
+	wantRestartCount := int(maxCrashRestarts.Load()) + 1
 	if list[0].RestartCount != wantRestartCount {
 		t.Errorf("List()[0].RestartCount = %d, want %d", list[0].RestartCount, wantRestartCount)
 	}
@@ -1264,9 +1264,9 @@ func TestHandleRemoteExitRestartsInPlaceAndNotifiesObserver(t *testing.T) {
 // Remote-Pendant zu TestLauncherCrashLoopBrakeStopsAutoRestarting.
 func TestHandleRemoteExitCrashLoopBrakeStopsAutoRestarting(t *testing.T) {
 	shortCrashRestartTiming(t, time.Millisecond, time.Minute)
-	origMax := maxCrashRestarts
-	maxCrashRestarts = 2
-	t.Cleanup(func() { maxCrashRestarts = origMax })
+	origMax := maxCrashRestarts.Load()
+	maxCrashRestarts.Store(2)
+	t.Cleanup(func() { maxCrashRestarts.Store(origMax) })
 
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 1111}}
 	pub := &recordingPublisher{}

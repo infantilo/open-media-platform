@@ -77,10 +77,13 @@ const crashStderrLines = 5
 // var statt const: Tests verkürzen Fenster/Backoff, um nicht real 60s
 // warten zu müssen (gleiches Muster wie stopGracePeriod).
 var (
-	maxCrashRestarts    = 5
+	// atomic: Supervise-Goroutinen lesen den Wert, während Tests ihn setzen.
+	maxCrashRestarts    atomic.Int64
 	crashRestartWindow  = 60 * time.Second
 	crashRestartBackoff = 2 * time.Second
 )
+
+func init() { maxCrashRestarts.Store(5) }
 
 var (
 	// ErrUnknownType wird geliefert, wenn Start() mit einem Typ
@@ -1703,7 +1706,7 @@ func (l *Launcher) superviseWait(id, nodeType string, entry CatalogEntry, label 
 			current.Crashed = true
 			current.CrashMessage = fmt.Sprintf(
 				"%s (Crash-Loop erkannt: %d Neustarts in %s — Auto-Restart gestoppt)",
-				msg, maxCrashRestarts, crashRestartWindow)
+				msg, maxCrashRestarts.Load(), crashRestartWindow)
 			current.RestartCount = restartCount
 			l.instances[id] = current
 			if err := l.persistInstanceLocked(id); err != nil {
@@ -1884,7 +1887,7 @@ func (l *Launcher) supervisePodman(id, nodeType string, entry CatalogEntry, labe
 			current.Crashed = true
 			current.CrashMessage = fmt.Sprintf(
 				"%s (Crash-Loop erkannt: %d Neustarts in %s — Auto-Restart gestoppt)",
-				msg, maxCrashRestarts, crashRestartWindow)
+				msg, maxCrashRestarts.Load(), crashRestartWindow)
 			current.RestartCount = restartCount
 			l.instances[id] = current
 			if err := l.persistInstanceLocked(id); err != nil {
@@ -1989,7 +1992,7 @@ func (l *Launcher) recordRestartLocked(id string) (shouldRestart bool, totalRest
 	st.countInWindow++
 	st.total++
 	l.totalRestarts.Add(1)
-	if st.countInWindow > maxCrashRestarts {
+	if int64(st.countInWindow) > maxCrashRestarts.Load() {
 		return false, st.total
 	}
 	return true, st.total
@@ -2218,7 +2221,7 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 		current.Crashed = true
 		current.CrashMessage = fmt.Sprintf(
 			"%s (Crash-Loop erkannt: %d Neustarts in %s — Auto-Restart gestoppt)",
-			msg, maxCrashRestarts, crashRestartWindow)
+			msg, maxCrashRestarts.Load(), crashRestartWindow)
 		current.RestartCount = restartCount
 		l.instances[ev.InstanceID] = current
 		if err := l.persistInstanceLocked(ev.InstanceID); err != nil {

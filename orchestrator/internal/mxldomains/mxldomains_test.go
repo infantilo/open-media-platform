@@ -49,6 +49,15 @@ func TestStoreLifecycle(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "omp-mxl")
 	s := NewStore(db, base)
 
+	// Die Test-DB überlebt Läufe: Reste früherer Läufe vorab und am Ende entfernen.
+	cleanup := func() {
+		for _, n := range []string{"test", "sicher"} {
+			_ = s.Delete(n)
+		}
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
 	l, err := s.List()
 	if err != nil || len(l) != 1 || !l[0].Default || l[0].Path != base {
 		t.Fatalf("leere Liste = %+v, %v", l, err)
