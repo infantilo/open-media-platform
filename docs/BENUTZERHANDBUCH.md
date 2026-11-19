@@ -327,6 +327,11 @@ derselben Verkabelung":
 
 **Aufbau der Kachel (feste Felder):** Oben stehen Titel und Status (mit Leuchtpunkt, pulsierend bei laufenden Zuständen), darunter Kennzahlen als Chips (Rollen, Hosts, Kategorie, Format, Zeitpläne, Tags), die Beschreibung und — falls vorhanden — Fehler und gehaltene Rollen. Der **Plan** (Rollen und Hosts) ist eingeklappt und öffnet sich per Klick; er streckt die Karte nicht. Unten stehen immer an derselben Stelle **Start/Fortsetzen, Stop und Pausieren** in drei gleich breiten Feldern und darunter **Bearbeiten, Grafisch, Duplizieren, Exportieren, Löschen**. Nicht mögliche Aktionen sind abgedunkelt, bleiben aber an ihrem Platz. Oben im Reiter filtern **Status-Pillen mit Zähler** (Läuft/Gestoppt/Pausiert/Fehler), die Suche und die Kategorie.
 
+**Exportieren, Importieren, Duplizieren (mit Dialog):**
+- **Exportieren** öffnet einen Dialog mit den **Rollen**, den **Rollenbindungen** (Nutzer — Rolle — Recht) und den **Alarmregeln** des Workflows. Zwei Haken entscheiden getrennt, ob Rollenbindungen und/oder Alarmregeln in die Datei mitgehen (die frühere Checkbox oben im Reiter entfällt). Rollenbindungen nennen Nutzerkonten, Alarmregeln enthalten Empfängeradressen; ohne Haken verlässt nichts davon die Datei.
+- **Importieren** zeigt vor dem Anlegen, was in der Datei steckt (Rollen, Rollenbindungen, Alarmregeln), und fragt, ob Bindungen und/oder Alarmregeln mit angelegt werden. Beide entstehen neu und gelten nur für den neuen Workflow.
+- **Duplizieren** fragt nach dem **Namen des neuen Workflows** und danach, ob die **Rollen (Nodes) entsprechend umbenannt** werden. Enthält ein Rollenname den alten Workflow-Namen, wird er ersetzt; alle anderen bekommen den neuen Namen angehängt. Die vorgeschlagenen Namen stehen Zeile für Zeile im Dialog und lassen sich ändern; leere oder doppelte Namen werden abgelehnt. Verbindungen und die Ein-/Ausgänge des Workflows folgen den neuen Rollennamen. Ein Duplikat erbt keine Rollenbindungen und Alarmregeln.
+
 Jede Workflow-Kachel zeigt Namen, Status und — nach Hosts gruppiert — ihre
 Rollen: je Host ein Block mit den Rollen, die dort laufen (bei einem
 gestoppten Workflow: laufen würden), Node-Typ, ob der Host fest vorgegeben

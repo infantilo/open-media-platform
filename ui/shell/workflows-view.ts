@@ -19,6 +19,15 @@ import { demandText, groupByHost, loadText, type StartPlan } from "./workflow-pl
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import {
+  applyExportChoices,
+  describeAlertRoute,
+  describeBinding,
+  type IoExport,
+  proposeRoleNames,
+  renameRolesInExport,
+  validateRoleNames,
+} from "./workflow-io-logic.ts";
 // Reiner Seiteneffekt-Import (registriert nur customElements.define,
 // gleicher Grund wie bei den übrigen Custom-Element-Importen in
 // shell.ts) — Kapitel 12 Teil 6, §22.3 Punkt 1: grafischer
@@ -192,7 +201,7 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
 // types.go ExportedWorkflow.Bindings-Doku): bewusst NICHT Teil des
 // portablen Standard-Exports (der Grundfall — ein Regieplatz wandert
 // zwischen Systemen mit potenziell anderen Nutzerkonten) — nur wenn die
-// UI explizit `?includeBindings=true` anfragt (s. #exportWithBindings),
+// UI explizit `?includeBindings=true` anfragt (Export-Dialog, #askWhatGoesAlong),
 // für den engeren "gleiches System"-Fall (Export→Löschen→Import mit
 // denselben Rechten).
 interface ExportedBinding {
@@ -291,6 +300,101 @@ function ensureWorkflowStyles() {
   document.head.appendChild(style);
 }
 
+// Einfacher Dialog (Overlay + Karte) für Export, Import und Duplizieren: `build` füllt den Inhalt und ruft `done(wert)` auf;
+// Abbrechen/Escape/Klick daneben liefert null. Hängt an document.body, nicht an die Ansicht — die baut sich bei jedem
+// Neuzeichnen neu auf und würde den offenen Dialog mitreißen.
+function showDialog<T>(title: string, build: (body: HTMLElement, done: (v: T | null) => void) => void, wide = false): Promise<T | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "omp-modal-overlay";
+    const modal = document.createElement("div");
+    modal.className = "omp-modal";
+    modal.style.maxWidth = wide ? "680px" : "560px";
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-3);";
+    const h = document.createElement("span");
+    h.className = "omp-h1";
+    h.textContent = title;
+    const x = document.createElement("button");
+    x.textContent = "✕";
+    x.setAttribute("aria-label", tt("wf.8311b9"));
+    head.append(h, x);
+    const body = document.createElement("div");
+    modal.append(head, body);
+    overlay.appendChild(modal);
+    let closed = false;
+    const done = (v: T | null) => {
+      if (closed) return;
+      closed = true;
+      document.removeEventListener("keydown", onKey, true);
+      overlay.remove();
+      resolve(v);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") done(null);
+    };
+    document.addEventListener("keydown", onKey, true);
+    overlay.addEventListener("mousedown", (ev) => {
+      if (ev.target === overlay) done(null);
+    });
+    x.addEventListener("click", () => done(null));
+    build(body, done);
+    document.body.appendChild(overlay);
+    queueMicrotask(() => (body.querySelector("input[type=text]") as HTMLInputElement | null)?.focus());
+  });
+}
+
+/** Eine beschriftete Liste (Überschrift mit Zähler + Zeilen); leer → Hinweis „keine“. */
+function listBlock(title: string, rows: string[], emptyText: string): HTMLElement {
+  const box = document.createElement("div");
+  box.style.cssText = "margin-bottom:var(--omp-space-3);";
+  const h = document.createElement("div");
+  h.style.cssText = "font-size:12px;font-weight:600;margin-bottom:4px;";
+  h.textContent = `${title} (${rows.length})`;
+  box.appendChild(h);
+  const list = document.createElement("div");
+  list.style.cssText =
+    "max-height:130px;overflow:auto;border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:4px 8px;font-size:12px;background:var(--omp-bg);";
+  if (rows.length === 0) {
+    list.style.color = "var(--omp-text-dim)";
+    list.textContent = emptyText;
+  } else {
+    for (const r of rows) {
+      const line = document.createElement("div");
+      line.style.cssText = "padding:1px 0;overflow-wrap:anywhere;";
+      line.textContent = r;
+      list.appendChild(line);
+    }
+  }
+  box.appendChild(list);
+  return box;
+}
+
+function checkRow(label: string, checked: boolean, disabled: boolean): { row: HTMLElement; box: HTMLInputElement } {
+  const row = document.createElement("label");
+  row.style.cssText = `display:flex;align-items:center;gap:8px;font-size:13px;margin:0 0 6px;${disabled ? "opacity:.5;" : "cursor:pointer;"}`;
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = checked && !disabled;
+  box.disabled = disabled;
+  row.append(box, label);
+  return { row, box };
+}
+
+function buttonRow(confirmLabel: string, onOk: () => void, onCancel: () => void): HTMLElement {
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:var(--omp-space-3);";
+  const cancel = document.createElement("button");
+  cancel.textContent = tt("kit.cancel");
+  cancel.addEventListener("click", onCancel);
+  const ok = document.createElement("button");
+  ok.className = "omp-btn-primary";
+  ok.textContent = confirmLabel;
+  ok.addEventListener("click", onOk);
+  row.append(cancel, ok);
+  return row;
+}
+
 class WorkflowsView extends HTMLElement {
   #pollHandle: number | undefined;
   #catalog: CatalogEntry[] = [];
@@ -310,7 +414,6 @@ class WorkflowsView extends HTMLElement {
   // der "gleiches System"-Fall (s. ExportedBinding-Doku) ist die
   // Ausnahme, portabler Export ohne Bindungen soll der unauffällige
   // Default bleiben, auch nach einem Seiten-Reload.
-  #exportWithBindings = false;
   // Aufgeklappte Pläne (je Workflow-ID) — überleben jedes Neuzeichnen (SSE/Poll baut die Karten neu).
   #openPlans = new Set<string>();
   // Kapitel 12 Teil 6 (§22.3 Punkte 4/7): rein darstellungsbezogen,
@@ -767,18 +870,49 @@ class WorkflowsView extends HTMLElement {
     await this.#poll();
   }
 
-  // Kapitel 12 Teil 3 (§12.3d): lädt die Datei über den normalen
-  // Browser-Download-Mechanismus herunter (Blob + <a download>), keine
-  // eigene Dialog-UI nötig.
+  // Holt den vollständigen Export (mit Rollenbindungen und Alarmregeln, soweit das Konto sie sehen darf) für die
+  // Anzeige im Dialog; fehlt das Recht, kommt der Standard-Export ohne beides.
+  async #fetchFullExport(wf: Workflow): Promise<IoExport> {
+    let res = await apiFetch(`/api/v1/workflows/${wf.id}/export?includeBindings=true`);
+    if (!res.ok) res = await apiFetch(`/api/v1/workflows/${wf.id}/export`);
+    if (!res.ok) throw new Error(await res.text());
+    return (await res.json()) as IoExport;
+  }
+
+  // Zeigt Rollen, Rollenbindungen und Alarmregeln einer Datei und fragt, was davon mitgehen soll. `verb`: Beschriftung des
+  // Bestätigen-Knopfs, `intro`: erster Satz. Liefert die Wahl oder null bei Abbruch.
+  #askWhatGoesAlong(exp: IoExport, title: string, verb: string, intro: string): Promise<{ bindings: boolean; alerts: boolean } | null> {
+    return showDialog<{ bindings: boolean; alerts: boolean }>(title, (body, done) => {
+      const p = document.createElement("div");
+      p.style.cssText = "font-size:13px;margin-bottom:var(--omp-space-3);";
+      p.textContent = intro;
+      body.appendChild(p);
+      const roles = exp.definition.roles.map((r) => `${r.name} — ${r.nodeType}`);
+      const bindings = (exp.bindings ?? []).map((b) => describeBinding(b, tt("wf.io.wholeWorkflow")));
+      const alerts = (exp.alertRules ?? []).map(describeAlertRoute);
+      body.appendChild(listBlock(tt("wf.io.roles"), roles, tt("wf.io.none")));
+      body.appendChild(listBlock(tt("wf.io.bindings"), bindings, tt("wf.io.noneBindings")));
+      const bindRow = checkRow(tt("wf.io.withBindings"), true, bindings.length === 0);
+      body.appendChild(bindRow.row);
+      body.appendChild(listBlock(tt("wf.io.alerts"), alerts, tt("wf.io.noneAlerts")));
+      const alertRow = checkRow(tt("wf.io.withAlerts"), true, alerts.length === 0);
+      body.appendChild(alertRow.row);
+      const note = document.createElement("div");
+      note.style.cssText = "font-size:11px;color:var(--omp-text-dim);";
+      note.textContent = tt("wf.io.note");
+      body.appendChild(note);
+      body.appendChild(buttonRow(verb, () => done({ bindings: bindRow.box.checked, alerts: alertRow.box.checked }), () => done(null)));
+    }, true);
+  }
+
+  // Kapitel 12 Teil 3 (§12.3d): lädt die Datei über den normalen Browser-Download-Mechanismus herunter (Blob + <a download>).
+  // Vorher fragt ein Dialog, ob Rollenbindungen und/oder Alarmregeln mitgehen sollen (ersetzt die frühere Checkbox oben im Tab).
   async #exportWorkflow(wf: Workflow) {
     try {
-      const query = this.#exportWithBindings ? "?includeBindings=true" : "";
-      const res = await apiFetch(`/api/v1/workflows/${wf.id}/export${query}`);
-      if (!res.ok) {
-        showToast(tt("wf.43069e", { p0: await res.text() }));
-        return;
-      }
-      const exported = (await res.json()) as ExportedWorkflow;
+      const full = await this.#fetchFullExport(wf);
+      const choice = await this.#askWhatGoesAlong(full, tt("wf.io.exportTitle", { p0: wf.name }), tt("wf.8721fc"), tt("wf.io.exportIntro"));
+      if (!choice) return;
+      const exported = applyExportChoices(full, choice);
       const blob = new Blob([JSON.stringify(exported, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -792,29 +926,103 @@ class WorkflowsView extends HTMLElement {
     }
   }
 
-  // Nutzerwunsch 2026-09-11 ("Möglichkeit, einen Workflow zu 'clonen'
-  // — ein Workflow wäre z. B. ein Regieplatz, zweiter Regieplatz mit
-  // derselben Config"): GET export + POST import intern verkettet,
-  // ohne den Umweg über eine heruntergeladene/wieder hochgeladene
-  // Datei (#exportWorkflow/#importWorkflowFile). Bewusst OHNE
-  // Rollenbindungen (gleicher Default wie ein Export ohne die "inkl.
-  // Rollenbindungen"-Option, s. #exportWithBindings) — ein Klon soll
-  // erst mal nur dieselbe Definition sein, nicht automatisch dieselben
-  // Bedienrechte erben. workflows.Service.Import löst eine
-  // Namenskollision bereits selbst auf (uniqueWorkflowName), kein
-  // eigener Vorab-Check hier nötig.
+  // Nutzerwunsch 2026-09-11: Ein-Klick-Klon, jetzt mit Dialog (Nutzerwunsch 2026-11-19): neuer Name und die Frage, ob die
+  // Rollen (= Nodes) entsprechend umbenannt werden. Die Rollenliste steht mit den vorgeschlagenen neuen Namen im Dialog und
+  // lässt sich Zeile für Zeile ändern. Ohne Rollenbindungen/Alarmregeln (ein Klon erbt keine Rechte).
+  // workflows.Service.Import löst eine Namenskollision selbst auf (uniqueWorkflowName).
   async #duplicateWorkflow(wf: Workflow) {
+    let exported: IoExport;
     try {
       const res = await apiFetch(`/api/v1/workflows/${wf.id}/export`);
       if (!res.ok) {
         showToast(tt("wf.8a7bae", { p0: await res.text() }));
         return;
       }
-      const exported = (await res.json()) as ExportedWorkflow;
+      exported = (await res.json()) as IoExport;
+    } catch (err) {
+      showToast(tt("wf.8a7bae", { p0: err }));
+      return;
+    }
+    const picked = await showDialog<{ name: string; map: Record<string, string> }>(tt("wf.io.dupTitle", { p0: wf.name }), (body, done) => {
+      const roles = exported.definition.roles;
+      const nameLabel = document.createElement("label");
+      nameLabel.style.cssText = "display:block;font-size:12px;font-weight:600;margin-bottom:4px;";
+      nameLabel.textContent = tt("wf.io.newName");
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.value = tt("wf.io.copyOf", { p0: wf.name });
+      nameInput.style.cssText = "width:100%;box-sizing:border-box;margin-bottom:var(--omp-space-3);";
+      body.append(nameLabel, nameInput);
+
+      const renameRow = checkRow(tt("wf.io.renameRoles"), true, roles.length === 0);
+      body.appendChild(renameRow.row);
+      const hint = document.createElement("div");
+      hint.style.cssText = "font-size:11px;color:var(--omp-text-dim);margin-bottom:6px;";
+      hint.textContent = tt("wf.io.renameHint");
+      body.appendChild(hint);
+
+      const table = document.createElement("div");
+      table.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;max-height:220px;overflow:auto;align-items:center;margin-bottom:6px;";
+      body.appendChild(table);
+      const err = document.createElement("div");
+      err.style.cssText = "color:var(--omp-error);font-size:12px;min-height:16px;";
+      body.appendChild(err);
+
+      // Zeilen: alter Name (nur Anzeige) und neuer Name (änderbar). `touched`: der Nutzer hat die Zeile selbst geändert —
+      // ein späterer Wechsel des Workflow-Namens überschreibt sie dann nicht mehr.
+      const inputs = new Map<string, HTMLInputElement>();
+      const touched = new Set<string>();
+      for (const r of roles) {
+        const old = document.createElement("span");
+        old.style.cssText = "font-size:12px;color:var(--omp-text-dim);overflow-wrap:anywhere;";
+        old.textContent = r.name;
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.style.cssText = "width:100%;box-sizing:border-box;";
+        inp.addEventListener("input", () => touched.add(r.name));
+        inputs.set(r.name, inp);
+        table.append(old, inp);
+      }
+      const refill = () => {
+        const prop = proposeRoleNames(roles, wf.name, nameInput.value, renameRow.box.checked);
+        for (const r of roles) {
+          const inp = inputs.get(r.name)!;
+          if (!touched.has(r.name) || !renameRow.box.checked) inp.value = prop[r.name];
+          inp.disabled = !renameRow.box.checked;
+        }
+      };
+      nameInput.addEventListener("input", refill);
+      renameRow.box.addEventListener("change", () => {
+        if (!renameRow.box.checked) touched.clear();
+        refill();
+      });
+      refill();
+
+      body.appendChild(
+        buttonRow(tt("wf.529fdd"), () => {
+          const name = nameInput.value.trim();
+          if (!name) {
+            err.textContent = tt("wf.io.errName");
+            return;
+          }
+          const map: Record<string, string> = {};
+          for (const r of roles) map[r.name] = inputs.get(r.name)!.value.trim() || r.name;
+          const bad = validateRoleNames(map);
+          if (bad) {
+            err.textContent = bad === "empty" ? tt("wf.io.errEmpty") : tt("wf.io.errDup");
+            return;
+          }
+          done({ name, map });
+        }, () => done(null)),
+      );
+    }, true);
+    if (!picked) return;
+    try {
+      const renamed = renameRolesInExport({ ...exported, name: picked.name }, picked.map);
       const importRes = await apiFetch("/api/v1/workflows/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(exported),
+        body: JSON.stringify(renamed),
       });
       if (!importRes.ok) {
         showToast(tt("wf.8a7bae", { p0: await importRes.text() }));
@@ -829,23 +1037,33 @@ class WorkflowsView extends HTMLElement {
     await this.#poll();
   }
 
-  // Kapitel 12 Teil 3 (§12.3d): liest die vom Nutzer gewählte Datei,
-  // schickt sie unverändert an POST /api/v1/workflows/import — die
-  // eigentliche Validierung (Katalog-Abgleich, Namenskollision) macht
-  // der Orchestrator (workflows.Service.Import).
+  // Kapitel 12 Teil 3 (§12.3d): liest die vom Nutzer gewählte Datei. Enthält sie Rollenbindungen oder Alarmregeln, zeigt ein
+  // Dialog sie an und fragt, ob sie mit angelegt werden sollen; die eigentliche Validierung (Katalog-Abgleich,
+  // Namenskollision) macht der Orchestrator (workflows.Service.Import).
   async #importWorkflowFile(file: File) {
-    let exported: ExportedWorkflow;
+    let exported: IoExport;
     try {
       exported = JSON.parse(await file.text());
     } catch (err) {
       showToast(tt("wf.e7dba3", { p0: err }));
       return;
     }
+    if (!exported?.definition?.roles) {
+      showToast(tt("wf.e7dba3", { p0: tt("wf.io.notAWorkflow") }));
+      return;
+    }
+    const choice = await this.#askWhatGoesAlong(
+      exported,
+      tt("wf.io.importTitle", { p0: exported.name ?? file.name }),
+      tt("wf.5af5fb"),
+      tt("wf.io.importIntro"),
+    );
+    if (!choice) return;
     try {
       const res = await apiFetch("/api/v1/workflows/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(exported),
+        body: JSON.stringify(applyExportChoices(exported, choice)),
       });
       if (!res.ok) {
         showToast(tt("wf.6cdb17", { p0: await res.text() }));
@@ -1090,19 +1308,6 @@ class WorkflowsView extends HTMLElement {
       });
       bar.appendChild(categorySelect);
     }
-
-    // Feature-Wunsch 2026-08-13: Rollenbindungen im Export (Service.Export includeBindings) — #exportWorkflow() liest es.
-    const bindingsLabel = document.createElement("label");
-    bindingsLabel.className = "wf-bind";
-    bindingsLabel.title = tt("wf.b7d029") + tt("wf.196e31");
-    const bindingsCheckbox = document.createElement("input");
-    bindingsCheckbox.type = "checkbox";
-    bindingsCheckbox.checked = this.#exportWithBindings;
-    bindingsCheckbox.addEventListener("change", () => {
-      this.#exportWithBindings = bindingsCheckbox.checked;
-    });
-    bindingsLabel.append(bindingsCheckbox, tt("wf.937351"));
-    bar.appendChild(bindingsLabel);
 
     return bar;
   }
