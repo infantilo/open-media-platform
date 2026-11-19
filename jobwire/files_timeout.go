@@ -35,7 +35,7 @@ const (
 // OpTimeout liefert die Frist einer Operation.
 func OpTimeout(op string) time.Duration {
 	switch op {
-	case FileOpTrash, FileOpRestore, FileOpPurge:
+	case FileOpTrash, FileOpRestore, FileOpPurge, FileOpReadChunk, FileOpWriteChunk, FileOpCommit, FileOpAbort, FileOpMove, FileOpMkdir:
 		return WriteOpTimeout
 	}
 	return ReadOpTimeout

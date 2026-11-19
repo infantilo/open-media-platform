@@ -40,3 +40,31 @@ const schemaV2 = `
 ALTER TABLE file_roots ADD COLUMN IF NOT EXISTS shared BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE file_roots ADD COLUMN IF NOT EXISTS hosts_json TEXT NOT NULL DEFAULT '[]';
 `
+
+// Version 3: Übertragungen (Kopieren/Verschieben zwischen Orten und Hosts) mit Fortschritt.
+const schemaV3 = `
+CREATE TABLE IF NOT EXISTS file_transfers (
+    id            TEXT PRIMARY KEY,
+    mode          TEXT NOT NULL,
+    src_root_id   TEXT NOT NULL,
+    dst_root_id   TEXT NOT NULL,
+    src_paths     TEXT NOT NULL DEFAULT '[]',
+    dst_dir       TEXT NOT NULL DEFAULT '',
+    conflict      TEXT NOT NULL DEFAULT 'rename',
+    status        TEXT NOT NULL,
+    total_bytes   BIGINT NOT NULL DEFAULT 0,
+    done_bytes    BIGINT NOT NULL DEFAULT 0,
+    files_total   INT NOT NULL DEFAULT 0,
+    files_done    INT NOT NULL DEFAULT 0,
+    files_skipped INT NOT NULL DEFAULT 0,
+    error         TEXT NOT NULL DEFAULT '',
+    items_json    TEXT NOT NULL DEFAULT '[]',
+    tmp_root_id   TEXT NOT NULL DEFAULT '',
+    tmp_rel       TEXT NOT NULL DEFAULT '',
+    created_by    TEXT NOT NULL DEFAULT '',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at    TIMESTAMPTZ,
+    finished_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS file_transfers_created_idx ON file_transfers (created_at DESC);
+`

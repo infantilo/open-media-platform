@@ -53,6 +53,13 @@ type FileOp struct {
 	FreeBytes int64 `json:"freeBytes,omitempty"`
 	// Purge (Notfall): Einträge jünger als dies (Unix-ms) bleiben unangetastet (Schutzfrist).
 	KeepNewerThanMs int64 `json:"keepNewerThanMs,omitempty"`
+	// Übertragen (transfer.go): read-chunk/write-chunk (Offset, Limit bzw. Data), commit (Size, MTimeMs, Overwrite), move (DstRel).
+	Offset    int64  `json:"offset,omitempty"`
+	Data      []byte `json:"data,omitempty"`
+	DstRel    string `json:"dstRel,omitempty"`
+	Size      int64  `json:"size,omitempty"`
+	MTimeMs   int64  `json:"mtimeMs,omitempty"`
+	Overwrite bool   `json:"overwrite,omitempty"`
 }
 
 // FileStat ist das Ergebnis je Pfad. Err gesetzt = nicht prüfbar (z. B. Zugriff verweigert) — NICHT „fehlt“.
@@ -179,7 +186,7 @@ func unixMs(t time.Time) int64 { return t.UnixNano() / 1e6 }
 
 // RunFileOp führt eine Operation aus und liefert das Ergebnis als JSON.
 func RunFileOp(op FileOp) ([]byte, error) {
-	mutating := op.Op == FileOpTrash || op.Op == FileOpRestore || op.Op == FileOpPurge
+	mutating := op.Op == FileOpTrash || op.Op == FileOpRestore || op.Op == FileOpPurge || isTransferWrite(op.Op)
 	root, err := checkRoot(op.Root, mutating)
 	if err != nil {
 		return nil, err
@@ -200,6 +207,18 @@ func RunFileOp(op FileOp) ([]byte, error) {
 		out, err = opPurge(root, op)
 	case FileOpDF:
 		out, err = opDF(root)
+	case FileOpReadChunk:
+		out, err = opReadChunk(root, op)
+	case FileOpWriteChunk:
+		out, err = opWriteChunk(root, op)
+	case FileOpCommit:
+		out, err = opCommit(root, op)
+	case FileOpAbort:
+		out, err = opAbort(root, op)
+	case FileOpMove:
+		out, err = opMove(root, op)
+	case FileOpMkdir:
+		out, err = opMkdir(root, op)
 	default:
 		return nil, fmt.Errorf("%w: unbekannte Operation %q", ErrFileOp, op.Op)
 	}

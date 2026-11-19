@@ -68,7 +68,7 @@ func newEnv(t *testing.T) *env {
 	if err := reg.Migrate(context.Background(), db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	for _, tbl := range []string{"representation_health", "representations", "asset_versions", "assets", "file_roots", "storage_locations", "playout_state", "playout_channels"} {
+	for _, tbl := range []string{"file_transfers", "representation_health", "representations", "asset_versions", "assets", "file_roots", "storage_locations", "playout_state", "playout_channels"} {
 		_, _ = db.Exec("DELETE FROM " + tbl)
 	}
 	dir := t.TempDir()

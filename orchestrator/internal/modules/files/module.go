@@ -48,7 +48,8 @@ type Module struct {
 	cfgAt time.Time
 	cfgOK bool
 
-	mounts *mountTracker
+	mounts    *mountTracker
+	transfers *transferMgr
 }
 
 // New legt das Modul an.
@@ -97,7 +98,7 @@ func (m *Module) invalidate() {
 
 // Migrations implementiert module.Migrator.
 func (*Module) Migrations() []module.Migration {
-	return []module.Migration{{Version: 1, Name: "file_roots_representation_health", SQL: schema}, {Version: 2, Name: "file_roots_shared", SQL: schemaV2}}
+	return []module.Migration{{Version: 1, Name: "file_roots_representation_health", SQL: schema}, {Version: 2, Name: "file_roots_shared", SQL: schemaV2}, {Version: 3, Name: "file_transfers", SQL: schemaV3}}
 }
 
 func (m *Module) audit(actor, objectType, id, action string, details map[string]any) {
@@ -127,6 +128,7 @@ func (m *Module) Start(ctx context.Context, d module.Deps) error {
 		return nil
 	}
 	m.seedRoots(ctx)
+	m.recoverTransfers(ctx)
 	go m.loop(ctx)
 	return nil
 }

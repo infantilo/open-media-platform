@@ -27,7 +27,8 @@ const (
 	FeatDelete = "files.delete"
 	FeatForce  = "files.force"
 	FeatUpload = "files.upload"
-	FeatAdmin  = "files.admin"
+	// FeatTransfer: kopieren und verschieben (Verschieben verlangt zusätzlich FeatDelete) — transfer.go
+	FeatAdmin = "files.admin"
 )
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -76,6 +77,7 @@ func (*Module) Features() []module.FeatureDef {
 		{ID: FeatDelete, Group: g, Label: map[string]string{"de": "Dateien löschen und wiederherstellen", "en": "Delete and restore files"}, Description: map[string]string{"de": "Dateien in den Papierkorb legen (mit Verwendungsprüfung) und daraus wiederherstellen; Dateien als Asset anlegen oder zuordnen.", "en": "Move files to the trash (with usage check), restore them; create assets from files or attach files."}},
 		{ID: FeatForce, Group: g, Label: map[string]string{"de": "Gesperrte Dateien löschen (Erzwingen)", "en": "Force-delete locked files"}, Description: map[string]string{"de": "Dateien im Sperrfenster oder in einer Planung trotzdem löschen (Begründung, Audit, Alarm). Laufende Sendungen und Aufnahmen bleiben gesperrt.", "en": "Delete files in the lock window or in a plan anyway (reason, audit, alert). Running broadcasts and recordings stay locked."}},
 		{ID: FeatUpload, Group: g, Label: map[string]string{"de": "Dateien hochladen", "en": "Upload files"}, Description: map[string]string{"de": "Dateien aus dem Browser in einen Ort des Orchestrator-Rechners hochladen.", "en": "Upload files from the browser to a location on the orchestrator machine."}},
+		{ID: FeatTransfer, Group: g, Label: map[string]string{"de": "Dateien kopieren und verschieben", "en": "Copy and move files"}, Description: map[string]string{"de": "Dateien und Ordner zwischen Orten, Ordnern und Hosts kopieren oder verschieben (Verschieben verlangt zusätzlich das Löschrecht, weil die Quelle verschwindet).", "en": "Copy or move files and folders between locations, folders and hosts (moving also needs the delete right because the source disappears)."}},
 		{ID: FeatAdmin, Group: g, Label: map[string]string{"de": "Orte und Dateieinstellungen verwalten", "en": "Manage locations and file settings"}, Description: map[string]string{"de": "Explorer-Orte, Papierkorb-Dauer, Notfallgrenzen, Sperrfenster; Papierkorb endgültig leeren; Dateiprüfung neu starten.", "en": "Explorer locations, trash retention, emergency limits, lock windows; empty the trash for good; restart the file check."}},
 	}
 }
@@ -111,6 +113,10 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	r.Handle("POST /api/v1/files/delete/preview", module.Feature(FeatDelete), m.hDeletePreview)
 	r.Handle("POST /api/v1/files/delete", module.Feature(FeatDelete), m.hDelete)
 	r.Handle("POST /api/v1/files/upload", module.Feature(FeatUpload), m.hUpload)
+	r.Handle("POST /api/v1/files/transfer/preview", module.Feature(FeatTransfer), m.hTransferPreview)
+	r.Handle("POST /api/v1/files/transfer", module.Feature(FeatTransfer), m.hTransfer)
+	r.Handle("GET /api/v1/files/transfers", module.Feature(FeatView), m.hTransfers)
+	r.Handle("POST /api/v1/files/transfers/{id}/cancel", module.Feature(FeatTransfer), m.hTransferCancel)
 	r.Handle("GET /api/v1/files/asset-states", module.Authenticated(), m.hAssetStates)
 	r.Handle("GET /api/v1/files/assets/{id}", module.Authenticated(), m.hAssetFiles)
 	r.Handle("POST /api/v1/files/check", module.Feature(FeatView), m.hCheck)
@@ -964,4 +970,72 @@ func servedLocally(r Root) bool {
 		return false
 	}
 	return r.HostID == ""
+}
+
+// ---- Übertragen ------------------------------------------------------------------------------------------------
+
+// transferAllowed: Verschieben entfernt die Quelle und verlangt deshalb zusätzlich das Löschrecht.
+func (m *Module) transferAllowed(r *http.Request, mode string) bool {
+	acc := m.deps().Access
+	return mode != ModeMove || acc == nil || acc.Can(r, FeatDelete)
+}
+
+func (m *Module) hTransferPreview(w http.ResponseWriter, r *http.Request) {
+	var b TransferRequest
+	if !readBody(w, r, &b) {
+		return
+	}
+	if !m.transferAllowed(r, b.Mode) {
+		writeErr(w, 403, fmt.Errorf("Verschieben verlangt das Recht „Dateien löschen und wiederherstellen“"))
+		return
+	}
+	plan, err := m.PlanTransfer(r.Context(), b)
+	if err != nil {
+		rootErr(w, err)
+		return
+	}
+	writeJSON(w, 200, plan)
+}
+
+func (m *Module) hTransfer(w http.ResponseWriter, r *http.Request) {
+	var b TransferRequest
+	if !readBody(w, r, &b) {
+		return
+	}
+	if !m.transferAllowed(r, b.Mode) {
+		writeErr(w, 403, fmt.Errorf("Verschieben verlangt das Recht „Dateien löschen und wiederherstellen“"))
+		return
+	}
+	can := m.deps().Access == nil || m.deps().Access.Can(r, FeatForce)
+	t, plan, err := m.ExecTransfer(r.Context(), b, actorOf(r), can)
+	if err != nil {
+		code := 409
+		if errors.Is(err, ErrNotFound) || errors.Is(err, jobwire.ErrFileOp) {
+			code = 400
+		}
+		writeJSON(w, code, map[string]any{"error": err.Error(), "plan": plan})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"transfer": t, "plan": plan})
+}
+
+func (m *Module) hTransfers(w http.ResponseWriter, r *http.Request) {
+	list, err := m.ListTransfers(r.Context(), 50)
+	if err != nil {
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, list)
+}
+
+func (m *Module) hTransferCancel(w http.ResponseWriter, r *http.Request) {
+	if err := m.CancelTransfer(r.PathValue("id"), actorOf(r)); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeErr(w, 404, fmt.Errorf("Übertragung läuft nicht (mehr)"))
+			return
+		}
+		writeErr(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
