@@ -47,6 +47,27 @@ use gstreamer as gst;
 
 use crate::Output;
 
+/// `a=ts-refclk` + `a=mediaclk` (ST 2110-10 §8, RFC 7273) für die SDP eines Senders, der nach `host` sendet.
+/// Mit aktiver PTP-Zeitbasis (`OMP_PTP_DOMAIN`) `ptp=IEEE1588-2008:traceable` (die Großmeister-ID kennt der Node nicht
+/// und rät sie nicht); sonst `localmac=<MAC der Sendeschnittstelle>`, ohne bekannte MAC `local`. Früher stand hier eine
+/// erfundene Großmeister-ID — ein Empfänger hätte sich darauf verlassen.
+fn clock_lines(host: &str) -> String {
+    let refclk = if std::env::var("OMP_PTP_DOMAIN").is_ok_and(|v| !v.trim().is_empty()) {
+        "ptp=IEEE1588-2008:traceable".to_string()
+    } else {
+        match crate::st2110_anc::local_route_info(host).1 {
+            Some(mac) => format!("localmac={mac}"),
+            None => "local".to_string(),
+        }
+    };
+    format!("a=ts-refclk:{refclk}\r\na=mediaclk:direct=0\r\n")
+}
+
+/// Colorimetrie für `a=fmtp`: HD und größer BT.709, darunter BT.601 (ST 2110-20 / RFC 4175).
+fn sdp_colorimetry(height: i32) -> &'static str {
+    if height >= 720 { "BT709" } else { "BT601-5" }
+}
+
 /// Ein ST-2110-20-Sender: `upstream ! videoconvert ! videoscale !
 /// capsfilter(UYVY,W,H,fps) ! rtpvrawpay ! valve ! udpsink`. Anders als
 /// [`crate::rtp::RtpVideoOutput`] sind Breite/Höhe/Framerate
@@ -181,6 +202,8 @@ impl St2110VideoOutput {
     /// `a=ts-refclk` (ST 2110-10 §8.1/8.2) fehlten komplett.
     pub fn sdp(&self) -> String {
         let (host, port) = self.destination();
+        // `TP=2110TPW`: dieser Sender paced in Software (Kernel-UDP), nicht schmal (TPN) — frühere Fassung
+        // behauptete TPN. Ein Empfänger darf nur ein ehrliches Profil erwarten.
         format!(
             "v=0\r\n\
              o=- 0 0 IN IP4 {host}\r\n\
@@ -188,12 +211,13 @@ impl St2110VideoOutput {
              t=0 0\r\n\
              m=video {port} RTP/AVP 96\r\n\
              c=IN IP4 {host}\r\n\
-             a=ts-refclk:ptp=IEEE1588-2008:EC-46-70-FF-FE-00-CE-DE:0\r\n\
-             a=mediaclk:direct=0\r\n\
+             {clock}\
              a=rtpmap:96 raw/90000\r\n\
              a=fmtp:96 sampling=YCbCr-4:2:2; depth=8; width={w}; height={h}; \
-             exactframerate={num}/{den}; colorimetry=BT601-5; PM=2110GPM; \
-             SSN=ST2110-20:2017; TP=2110TPN; TCS=SDR\r\n",
+             exactframerate={num}/{den}; colorimetry={colorimetry}; PM=2110GPM; \
+             SSN=ST2110-20:2017; TP=2110TPW; TCS=SDR\r\n",
+            clock = clock_lines(&host),
+            colorimetry = sdp_colorimetry(self.height as i32),
             w = self.width,
             h = self.height,
             num = self.framerate_numerator,
@@ -478,7 +502,9 @@ impl St2110AudioOutput {
              t=0 0\r\n\
              m=audio {port} RTP/AVP 96\r\n\
              a=rtpmap:96 L24/{rate}/{channels}\r\n\
-             a=ptime:1\r\n",
+             a=ptime:1\r\n\
+             {clock}",
+            clock = clock_lines(&host),
             rate = self.sample_rate,
             channels = self.channels,
         )
@@ -893,6 +919,28 @@ mod tests {
         for required in ["a=mediaclk:", "a=ts-refclk:", "PM=", "SSN=", "TP="] {
             assert!(sdp.contains(required), "missing {required:?}: sdp = {sdp}");
         }
+        // ehrliches Profil: Software-Pacing = breit (TPW), niemals die frühere erfundene Großmeister-ID
+        assert!(sdp.contains("TP=2110TPW"), "sdp = {sdp}");
+        assert!(!sdp.contains("EC-46-70-FF-FE-00-CE-DE"), "sdp = {sdp}");
+    }
+
+    #[test]
+    fn colorimetry_follows_picture_height() {
+        assert_eq!(sdp_colorimetry(1080), "BT709");
+        assert_eq!(sdp_colorimetry(720), "BT709");
+        assert_eq!(sdp_colorimetry(576), "BT601-5");
+        assert_eq!(sdp_colorimetry(480), "BT601-5");
+    }
+
+    #[test]
+    fn audio_sdp_carries_clock_reference() {
+        gst::init().expect("gst::init");
+        let pipeline = gst::Pipeline::new();
+        let src = gst::ElementFactory::make("audiotestsrc").build().expect("audiotestsrc");
+        pipeline.add(&src).expect("add audiotestsrc");
+        let output = St2110AudioOutput::new(&pipeline, &src, "127.0.0.1", 52132, 48000, 2).expect("St2110AudioOutput::new");
+        let sdp = output.sdp();
+        assert!(sdp.contains("a=ts-refclk:") && sdp.contains("a=mediaclk:direct=0"), "sdp = {sdp}");
     }
 
     /// Echte Fremd-Gegenprobe (Kapitel 19 Teil 0 Verifikationskriterium,
