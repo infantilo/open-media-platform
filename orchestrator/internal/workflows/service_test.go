@@ -2594,3 +2594,137 @@ func TestImportRestoresGroupBindingByName(t *testing.T) {
 		t.Fatalf("ImportNotes = %v, want ein Hinweis zur unbekannten Gruppe", wf.ImportNotes)
 	}
 }
+
+// fakeHosts ist ein HostDirectory mit festen Hosts (ID → Label).
+type fakeHosts map[string]string
+
+func (h fakeHosts) HostLabel(id string) (string, bool) { l, ok := h[id]; return l, ok }
+
+func previewTestService() *Service {
+	l := &fakeLauncher{catalog: []launcher.CatalogEntry{{Type: "omp-video-mixer-me"}, {Type: "omp-viewer"}}}
+	svc := &Service{store: newFakeStore(), nodes: &fakeNodeLister{}, graph: &fakeGraph{}, launcher: l, authz: &fakeAuthzBinder{}}
+	svc.SetHostDirectory(fakeHosts{"host-1": "Regie-PC"})
+	svc.SetGroupDirectory(fakeGroups{"g-1": "Bildmeister"})
+	return svc
+}
+
+func issueCodes(r ImportReport) map[string]string {
+	m := map[string]string{}
+	for _, i := range r.Issues {
+		m[i.Code] = i.Level
+	}
+	return m
+}
+
+// TestPreviewFlagsProblemsWithoutChangingAnything: unbekannter Node-Typ = Fehler, unbekannter Host/Gruppe = Warnung.
+func TestPreviewFlagsProblemsWithoutChangingAnything(t *testing.T) {
+	svc := previewTestService()
+	in := ExportedWorkflow{Name: "Regie", Definition: Definition{Roles: []Role{
+		{Name: "mixer", NodeType: "omp-video-mixer-me", HostID: "host-9"},
+		{Name: "x", NodeType: "omp-gibt-es-nicht"},
+	}}, Bindings: []ExportedBinding{{Subject: "g-x", SubjectType: "group", SubjectName: "Weg", Role: "mixer", Verb: authz.VerbOperate}}}
+	rep, err := svc.Preview(in, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := issueCodes(rep)
+	if c["unknown-node-type"] != "error" || c["unknown-host"] != "warn" || c["unknown-group"] != "warn" {
+		t.Fatalf("Issues = %+v", rep.Issues)
+	}
+	if rep.CanImport {
+		t.Fatal("CanImport muss bei einem Fehler false sein")
+	}
+	if all, _ := svc.store.List(); len(all) != 0 {
+		t.Fatalf("Preview hat etwas angelegt: %+v", all)
+	}
+}
+
+// TestPreviewFindsExistingWorkflowAndDiff: gleicher Name → exists + Unterschiede; sonst nichts.
+func TestPreviewFindsExistingWorkflowAndDiff(t *testing.T) {
+	svc := previewTestService()
+	if _, err := svc.Create("Regie", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}, {Name: "alt", NodeType: "omp-viewer"}}}, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	in := ExportedWorkflow{Name: "Regie", Definition: Definition{
+		Roles:       []Role{{Name: "mixer", NodeType: "omp-video-mixer-me", HostID: "host-1"}, {Name: "neu", NodeType: "omp-viewer"}},
+		Connections: []Connection{{FromRole: "mixer", ToRole: "neu"}},
+	}}
+	rep, err := svc.Preview(in, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Exists == nil || rep.Exists.Name != "Regie" || !rep.Exists.CanReplace {
+		t.Fatalf("Exists = %+v", rep.Exists)
+	}
+	d := rep.Diff
+	if d == nil || len(d.RolesAdded) != 1 || d.RolesAdded[0] != "neu" || len(d.RolesRemoved) != 1 || d.RolesRemoved[0] != "alt" ||
+		len(d.RolesChanged) != 1 || d.RolesChanged[0] != "mixer" || d.ConnectionsAdded != 1 {
+		t.Fatalf("Diff = %+v", d)
+	}
+	if rep.NewName != "Regie (2)" {
+		t.Fatalf("NewName = %q", rep.NewName)
+	}
+	other := in
+	other.Name = "Ganz neu"
+	rep2, _ := svc.Preview(other, nil)
+	if rep2.Exists != nil {
+		t.Fatalf("Exists für unbekannten Namen = %+v", rep2.Exists)
+	}
+}
+
+func TestCompareVersions(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{{"2026.11.6.1", "2026.11.6.1", 0}, {"2026.11.7", "2026.11.6.1", 1}, {"2026.10.0", "2026.11.6.1", -1}, {"2026.11.6", "2026.11.6.0", 0}, {"dev", "2026.11.6", 0}, {"", "2026.11.6", 0}, {"v2027.1", "2026.11.6.1", 1}}
+	for _, c := range cases {
+		if got := CompareVersions(c.a, c.b); got != c.want {
+			t.Errorf("CompareVersions(%q,%q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// TestUnknownFieldsReportsOnlyRealValues: ein Feld einer neueren Version mit Wert wird gemeldet, ein leeres/false nicht.
+func TestUnknownFieldsReportsOnlyRealValues(t *testing.T) {
+	raw := []byte(`{"version":1,"name":"x","definition":{"roles":[{"name":"a","nodeType":"t","zukunft":"ja","leer":false}],"connections":[],"neuesFeld":{"x":1}}}`)
+	got := UnknownFields(raw)
+	want := map[string]bool{"definition.roles[].zukunft": true, "definition.neuesFeld": true}
+	if len(got) != 2 || !want[got[0]] || !want[got[1]] {
+		t.Fatalf("UnknownFields = %v", got)
+	}
+	if extra := UnknownFields([]byte(`{"version":1,"name":"x","definition":{"roles":[{"name":"a","nodeType":"t"}],"connections":[]}}`)); len(extra) != 0 {
+		t.Fatalf("UnknownFields(bekannte Datei) = %v", extra)
+	}
+}
+
+// TestImportReplaceKeepsIdAndName: ersetzen ändert die Definition, nicht ID und Name; Bindungen kommen hinzu, nicht doppelt.
+func TestImportReplaceKeepsIdAndName(t *testing.T) {
+	svc := previewTestService()
+	az := svc.authz.(*fakeAuthzBinder)
+	wf, err := svc.Create("Regie", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := az.Create("anna", wf.ID, "mixer", authz.VerbOperate); err != nil {
+		t.Fatal(err)
+	}
+	in := ExportedWorkflow{Name: "Regie", Definition: Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}, {Name: "mon", NodeType: "omp-viewer"}}},
+		Bindings: []ExportedBinding{
+			{Subject: "anna", Role: "mixer", Verb: authz.VerbOperate},                                                // schon vorhanden
+			{Subject: "ben", Role: "mon", Verb: authz.VerbOperate},                                                   // neu
+			{Subject: "alt", SubjectType: "group", SubjectName: "Bildmeister", Role: "mon", Verb: authz.VerbOperate}, // Gruppe über Namen
+		}}
+	got, err := svc.ImportReplace(wf.ID, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != wf.ID || got.Name != "Regie" || len(got.Definition.Roles) != 2 {
+		t.Fatalf("Ergebnis = %+v", got)
+	}
+	if all, _ := svc.store.List(); len(all) != 1 {
+		t.Fatalf("Ersetzen darf keinen zweiten Workflow anlegen: %d", len(all))
+	}
+	if n := len(az.snapshot()); n != 3 { // anna (alt) + ben + Gruppe
+		t.Fatalf("Bindungen = %+v, want 3", az.snapshot())
+	}
+}

@@ -3,6 +3,7 @@ import {
   applyExportChoices,
   describeAlertRoute,
   describeBinding,
+  describeDiff,
   type IoExport,
   proposeRoleNames,
   renameRolesInExport,
@@ -70,4 +71,13 @@ Deno.test("Umbenennen zieht Verbindungen, Schnittstelle und Bindungen mit", () =
   assertEquals(out.definition.interface?.outputs?.[0].members[0].role, "Regie 2 Mischer");
   assertEquals(out.bindings![0].role, "Regie 2 Mischer");
   assertEquals(out.bindings![1].role, "*"); // „ganzer Workflow“ bleibt
+});
+
+Deno.test("Unterschiede werden zeilenweise beschrieben", () => {
+  assertEquals(describeDiff({ connectionsAdded: 0, connectionsRemoved: 0, settingsChanged: false, schedulesChanged: false }), []);
+  const lines = describeDiff({
+    rolesAdded: ["neu"], rolesRemoved: ["a", "b"], rolesChanged: ["mixer"],
+    connectionsAdded: 3, connectionsRemoved: 1, settingsChanged: true, schedulesChanged: false,
+  });
+  assertEquals(lines, ["+ 1 Rolle: neu", "− 2 Rollen: a, b", "~ 1 Rolle geändert: mixer", "Verbindungen: +3 / −1", "Einstellungen geändert"]);
 });

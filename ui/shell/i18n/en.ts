@@ -3314,4 +3314,12 @@ export const en: Record<keyof typeof de, string> = {
   "wf.io.errDup": "Two roles have the same name.",
   "wf.io.group": "Group",
   "wf.io.user": "User",
+  "wf.io.checkOk": "File checked: no objections (this version: {p0}).",
+  "wf.io.exists": "A workflow “{p0}” already exists (state: {p1}).",
+  "wf.io.asNew": "Create as a new workflow (“{p0}”)",
+  "wf.io.replace": "Replace the existing workflow (same ID, name stays)",
+  "wf.io.diffHead": "Replacing would change:",
+  "wf.io.diffNone": "The definition is identical.",
+  "wf.io.replaceHint": "Replacing swaps roles, connections, settings and schedules. Role bindings from the file are added (nothing is withdrawn), alert rules from the file replace the current ones. For a running workflow the new definition applies from the next start.",
+  "wf.io.replaced": "Workflow “{p0}” replaced",
 };

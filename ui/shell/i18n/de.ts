@@ -3313,4 +3313,12 @@ export const de = {
   "wf.io.errDup": "Zwei Rollen haben denselben Namen.",
   "wf.io.group": "Gruppe",
   "wf.io.user": "Nutzer",
+  "wf.io.checkOk": "Datei geprüft: keine Beanstandungen (diese Version: {p0}).",
+  "wf.io.exists": "Einen Workflow „{p0}“ gibt es schon (Zustand: {p1}).",
+  "wf.io.asNew": "Als neuen Workflow anlegen („{p0}“)",
+  "wf.io.replace": "Vorhandenen Workflow ersetzen (gleiche ID, Name bleibt)",
+  "wf.io.diffHead": "Ersetzen würde ändern:",
+  "wf.io.diffNone": "Die Definition ist identisch.",
+  "wf.io.replaceHint": "Ersetzen tauscht Rollen, Verbindungen, Einstellungen und Zeitpläne. Rollenbindungen aus der Datei kommen hinzu (nichts wird entzogen), Alarmregeln aus der Datei ersetzen die bisherigen. Bei einem laufenden Workflow gilt die neue Definition ab dem nächsten Start.",
+  "wf.io.replaced": "Workflow „{p0}“ ersetzt",
 };

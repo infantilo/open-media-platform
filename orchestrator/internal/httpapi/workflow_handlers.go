@@ -347,6 +347,19 @@ func handleImportWorkflow(svc WorkflowService) http.HandlerFunc {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
+		// `?replace=<workflowId>`: statt eines neuen Workflows die Definition des vorhandenen ersetzen
+		if id := r.URL.Query().Get("replace"); id != "" {
+			if !workflowOrgGuard(w, r, svc, id) {
+				return
+			}
+			wf, err := svc.ImportReplace(id, body)
+			if err != nil {
+				writeWorkflowError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, wf)
+			return
+		}
 		wf, err := svc.Import(body, callerOrgID(r))
 		if err != nil {
 			writeWorkflowError(w, err)
@@ -558,5 +571,29 @@ func handleWorkflowDrift(svc WorkflowService) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"roles": roles})
+	}
+}
+
+// handleImportPreview liefert POST /api/v1/workflows/import/preview — prüft eine Exportdatei (Katalog, Definition, Hosts,
+// Gruppen, Version, unbekannte Felder) und meldet, ob schon ein Workflow gleichen Namens existiert, samt Unterschieden.
+// Verändert nichts.
+func handleImportPreview(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+		if err != nil {
+			http.Error(w, "unreadable body", http.StatusBadRequest)
+			return
+		}
+		var body workflows.ExportedWorkflow
+		if err := json.Unmarshal(raw, &body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		report, err := svc.Preview(body, raw)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
 	}
 }

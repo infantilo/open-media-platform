@@ -133,3 +133,45 @@ export function renameRolesInExport(exp: IoExport, map: Record<string, string>):
   if (exp.bindings) out.bindings = exp.bindings.map((b) => ({ ...b, role: map[b.role] !== undefined ? to(b.role) : b.role }));
   return out;
 }
+
+export interface ImportIssue {
+  level: "error" | "warn" | "info";
+  code: string;
+  message: string;
+  role?: string;
+}
+
+export interface DefinitionDiff {
+  rolesAdded?: string[];
+  rolesRemoved?: string[];
+  rolesChanged?: string[];
+  connectionsAdded: number;
+  connectionsRemoved: number;
+  settingsChanged: boolean;
+  schedulesChanged: boolean;
+}
+
+/** Antwort von POST /api/v1/workflows/import/preview. */
+export interface ImportReport {
+  name: string;
+  exists?: { id: string; name: string; status: string; canReplace: boolean };
+  newName: string;
+  issues: ImportIssue[];
+  diff?: DefinitionDiff;
+  fileVersion?: string;
+  currentVersion: string;
+  canImport: boolean;
+}
+
+/** Was „ersetzen“ am vorhandenen Workflow ändern würde, als eine Zeile je Punkt. Leer = keine Unterschiede. */
+export function describeDiff(d: DefinitionDiff): string[] {
+  const out: string[] = [];
+  const list = (n: string[] | undefined) => (n ?? []).join(", ");
+  if (d.rolesAdded?.length) out.push(`+ ${d.rolesAdded.length} Rolle${d.rolesAdded.length === 1 ? "" : "n"}: ${list(d.rolesAdded)}`);
+  if (d.rolesRemoved?.length) out.push(`− ${d.rolesRemoved.length} Rolle${d.rolesRemoved.length === 1 ? "" : "n"}: ${list(d.rolesRemoved)}`);
+  if (d.rolesChanged?.length) out.push(`~ ${d.rolesChanged.length} Rolle${d.rolesChanged.length === 1 ? "" : "n"} geändert: ${list(d.rolesChanged)}`);
+  if (d.connectionsAdded || d.connectionsRemoved) out.push(`Verbindungen: +${d.connectionsAdded} / −${d.connectionsRemoved}`);
+  if (d.settingsChanged) out.push("Einstellungen geändert");
+  if (d.schedulesChanged) out.push("Zeitpläne geändert");
+  return out;
+}

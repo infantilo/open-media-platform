@@ -25,6 +25,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/version"
 )
 
 // crosspointMethod beschreibt, wie eine Zielrolle ohne IS-04-Receiver
@@ -325,6 +326,8 @@ type Service struct {
 	alertRules AlertRuleBinder
 	// groups: Gruppenname ↔ ID für den Export/Import von Rollenbindungen. nil = aus.
 	groups GroupDirectory
+	// hostDir: bekannte Hosts für die Importprüfung. nil = keine Prüfung.
+	hostDir HostDirectory
 	// domains (Kap. 103): Prüfung benannter MXL-Domains beim Start; nil = nicht eingeschaltet.
 	domains DomainResolver
 	// hostMetrics (K7 Teil 4, failover.go) — s. SetHostMetrics/
@@ -609,7 +612,8 @@ func (s *Service) Export(id string, includeBindings bool) (ExportedWorkflow, err
 	if err != nil {
 		return ExportedWorkflow{}, err
 	}
-	exported := ExportedWorkflow{Version: exportVersion, Name: wf.Name, Definition: wf.Definition}
+	exported := ExportedWorkflow{Version: exportVersion, Name: wf.Name, Definition: wf.Definition,
+		Meta: ExportMeta{OrchestratorVersion: version.Version, ExportedAt: time.Now().UTC().Format(time.RFC3339)}}
 	if includeBindings && s.authz != nil {
 		bindings, err := s.authz.LoadByWorkflow(id)
 		if err != nil {

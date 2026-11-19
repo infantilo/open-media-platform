@@ -23,6 +23,8 @@ import {
   applyExportChoices,
   describeAlertRoute,
   describeBinding,
+  describeDiff,
+  type ImportReport,
   type IoExport,
   proposeRoleNames,
   renameRolesInExport,
@@ -881,12 +883,74 @@ class WorkflowsView extends HTMLElement {
 
   // Zeigt Rollen, Rollenbindungen und Alarmregeln einer Datei und fragt, was davon mitgehen soll. `verb`: Beschriftung des
   // Bestätigen-Knopfs, `intro`: erster Satz. Liefert die Wahl oder null bei Abbruch.
-  #askWhatGoesAlong(exp: IoExport, title: string, verb: string, intro: string): Promise<{ bindings: boolean; alerts: boolean } | null> {
-    return showDialog<{ bindings: boolean; alerts: boolean }>(title, (body, done) => {
+  #askWhatGoesAlong(
+    exp: IoExport,
+    title: string,
+    verb: string,
+    intro: string,
+    report?: ImportReport,
+  ): Promise<{ bindings: boolean; alerts: boolean; replaceId?: string } | null> {
+    return showDialog<{ bindings: boolean; alerts: boolean; replaceId?: string }>(title, (body, done) => {
       const p = document.createElement("div");
       p.style.cssText = "font-size:13px;margin-bottom:var(--omp-space-3);";
       p.textContent = intro;
       body.appendChild(p);
+      // Importprüfung: Fehler/Warnungen/Hinweise, danach „schon vorhanden?“ mit Wahl Neu anlegen / Ersetzen
+      let replaceRadio: HTMLInputElement | null = null;
+      if (report) {
+        const icon: Record<string, string> = { error: "✕", warn: "⚠", info: "ℹ" };
+        const color: Record<string, string> = { error: "var(--omp-error)", warn: "var(--omp-cue)", info: "var(--omp-text-dim)" };
+        if (report.issues.length > 0) {
+          const box = document.createElement("div");
+          box.style.cssText = "margin-bottom:var(--omp-space-3);border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:6px 8px;font-size:12px;max-height:150px;overflow:auto;";
+          for (const i of report.issues) {
+            const line = document.createElement("div");
+            line.style.cssText = `color:${color[i.level] ?? "inherit"};padding:1px 0;overflow-wrap:anywhere;`;
+            line.textContent = `${icon[i.level] ?? "•"} ${i.message}`;
+            box.appendChild(line);
+          }
+          body.appendChild(box);
+        } else {
+          const ok = document.createElement("div");
+          ok.style.cssText = "font-size:12px;color:var(--omp-preset);margin-bottom:var(--omp-space-3);";
+          ok.textContent = "✓ " + tt("wf.io.checkOk", { p0: report.currentVersion });
+          body.appendChild(ok);
+        }
+        if (report.exists) {
+          const ex = report.exists;
+          const box = document.createElement("div");
+          box.style.cssText = "margin-bottom:var(--omp-space-3);border:1px solid var(--omp-cue);border-radius:var(--omp-radius);padding:8px 10px;font-size:12px;background:rgba(251,140,0,.06);";
+          const head = document.createElement("div");
+          head.style.cssText = "font-weight:600;margin-bottom:6px;";
+          head.textContent = tt("wf.io.exists", { p0: ex.name, p1: ex.status });
+          box.appendChild(head);
+          const mk = (id: string, label: string, checked: boolean, disabled = false) => {
+            const row = document.createElement("label");
+            row.style.cssText = `display:flex;align-items:center;gap:8px;margin:2px 0;${disabled ? "opacity:.5;" : "cursor:pointer;"}`;
+            const r = document.createElement("input");
+            r.type = "radio";
+            r.name = "wf-import-mode";
+            r.value = id;
+            r.checked = checked;
+            r.disabled = disabled;
+            row.append(r, label);
+            box.appendChild(row);
+            return r;
+          };
+          mk("new", tt("wf.io.asNew", { p0: report.newName }), true);
+          replaceRadio = mk("replace", tt("wf.io.replace"), false, !ex.canReplace);
+          const lines = report.diff ? describeDiff(report.diff) : [];
+          const diff = document.createElement("div");
+          diff.style.cssText = "margin-top:6px;color:var(--omp-text-dim);";
+          diff.textContent = lines.length ? tt("wf.io.diffHead") + " " + lines.join(" · ") : tt("wf.io.diffNone");
+          box.appendChild(diff);
+          const hint = document.createElement("div");
+          hint.style.cssText = "margin-top:4px;color:var(--omp-text-dim);font-size:11px;";
+          hint.textContent = tt("wf.io.replaceHint");
+          box.appendChild(hint);
+          body.appendChild(box);
+        }
+      }
       const roles = exp.definition.roles.map((r) => `${r.name} — ${r.nodeType}`);
       const bindings = (exp.bindings ?? []).map((b) => describeBinding(b, tt("wf.io.wholeWorkflow"), tt("wf.io.group"), tt("wf.io.user")));
       const alerts = (exp.alertRules ?? []).map(describeAlertRoute);
@@ -901,7 +965,18 @@ class WorkflowsView extends HTMLElement {
       note.style.cssText = "font-size:11px;color:var(--omp-text-dim);";
       note.textContent = tt("wf.io.note");
       body.appendChild(note);
-      body.appendChild(buttonRow(verb, () => done({ bindings: bindRow.box.checked, alerts: alertRow.box.checked }), () => done(null)));
+      const bar = buttonRow(
+        verb,
+        () =>
+          done({
+            bindings: bindRow.box.checked,
+            alerts: alertRow.box.checked,
+            replaceId: replaceRadio?.checked && report?.exists ? report.exists.id : undefined,
+          }),
+        () => done(null),
+      );
+      if (report && !report.canImport) (bar.querySelector(".omp-btn-primary") as HTMLButtonElement).disabled = true;
+      body.appendChild(bar);
     }, true);
   }
 
@@ -1052,15 +1127,29 @@ class WorkflowsView extends HTMLElement {
       showToast(tt("wf.e7dba3", { p0: tt("wf.io.notAWorkflow") }));
       return;
     }
+    // Vorab prüfen lassen (Katalog, Definition, Hosts, Gruppen, Version, unbekannte Felder) und ob es den Workflow schon gibt
+    let report: ImportReport | undefined;
+    try {
+      const pr = await apiFetch("/api/v1/workflows/import/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(exported),
+      });
+      if (pr.ok) report = (await pr.json()) as ImportReport;
+    } catch {
+      // Prüfung nicht erreichbar: der Import selbst validiert weiterhin
+    }
     const choice = await this.#askWhatGoesAlong(
       exported,
       tt("wf.io.importTitle", { p0: exported.name ?? file.name }),
       tt("wf.5af5fb"),
       tt("wf.io.importIntro"),
+      report,
     );
     if (!choice) return;
     try {
-      const res = await apiFetch("/api/v1/workflows/import", {
+      const query = choice.replaceId ? `?replace=${encodeURIComponent(choice.replaceId)}` : "";
+      const res = await apiFetch(`/api/v1/workflows/import${query}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(applyExportChoices(exported, choice)),
@@ -1070,7 +1159,7 @@ class WorkflowsView extends HTMLElement {
         return;
       }
       const created = (await res.json()) as Workflow & { importNotes?: string[] };
-      showToast(tt("wf.db21f2", { p0: created.name }));
+      showToast(tt(choice.replaceId ? "wf.io.replaced" : "wf.db21f2", { p0: created.name }));
       if (created.importNotes?.length) showToast(tt("wf.importNotes", { p0: created.importNotes.join("; ") }));
     } catch (err) {
       showToast(tt("wf.6cdb17", { p0: err }));

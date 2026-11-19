@@ -648,6 +648,14 @@ func (f fakeWorkflowService) Export(id string, includeBindings bool) (workflows.
 	return f.exported, f.exportErr
 }
 
+func (f fakeWorkflowService) Preview(exported workflows.ExportedWorkflow, raw []byte) (workflows.ImportReport, error) {
+	return workflows.ImportReport{Name: exported.Name, NewName: exported.Name, CanImport: true, Issues: []workflows.ImportIssue{}}, nil
+}
+
+func (f fakeWorkflowService) ImportReplace(id string, exported workflows.ExportedWorkflow) (workflows.Workflow, error) {
+	return workflows.Workflow{ID: id, Name: exported.Name}, nil
+}
+
 func (f fakeWorkflowService) Import(exported workflows.ExportedWorkflow, ownerOrgID string) (workflows.Workflow, error) {
 	return f.imported, f.importErr
 }

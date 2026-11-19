@@ -1072,6 +1072,7 @@ func main() {
 		// Kap. 83: manuelle Benutzeraktionen aus dem Domänen-Audit (Opt-in: nur Regeln, die „Manuelle Benutzeraktion“ nennen).
 		domainAuditStore.SetObserver(userActionAlerter(sink))
 		// Kap. 83: Alarm → Workflow(s) für Regeln je Workflow. Host-Alarme gehören zu allen laufenden Workflows mit einer Rolle auf dem Host.
+		workflowSvc.SetHostDirectory(hostDirectory{hostStore})    // Importprüfung: kennt der Orchestrator die Hosts einer Datei?
 		workflowSvc.SetGroupDirectory(groupDirectory{groupStore}) // Rollenbindungen von Gruppen: Name im Export, Auflösung beim Import
 		if alertMailStore != nil {
 			workflowSvc.SetAlertRules(alertMailStore) // Kap. 83: Regeln je Workflow beim Löschen aufräumen, beim Export/Import mitnehmen
@@ -1919,6 +1920,22 @@ func (d groupDirectory) GroupIDByName(name string) (string, bool) {
 	for _, g := range list {
 		if g.Name == name {
 			return g.ID, true
+		}
+	}
+	return "", false
+}
+
+// hostDirectory passt den Hostspeicher an workflows.HostDirectory an.
+type hostDirectory struct{ store *hosts.Store }
+
+func (d hostDirectory) HostLabel(id string) (string, bool) {
+	list, err := d.store.ListHosts()
+	if err != nil {
+		return "", false
+	}
+	for _, h := range list {
+		if h.ID == id {
+			return h.Label, true
 		}
 	}
 	return "", false

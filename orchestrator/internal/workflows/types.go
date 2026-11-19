@@ -488,6 +488,8 @@ type ExportedWorkflow struct {
 	Version    int        `json:"version"`
 	Name       string     `json:"name"`
 	Definition Definition `json:"definition"`
+	// Meta: womit die Datei erzeugt wurde (Version des Orchestrators); der Import vergleicht sie.
+	Meta ExportMeta `json:"meta,omitempty"`
 	// Bindings (Nutzerwunsch 2026-07-28) — bewusst NICHT Teil des
 	// Standard-Exports (leer/omitted, es sei denn `includeBindings=true`
 	// wird explizit angefragt, s. Service.Export): der obige Grundsatz

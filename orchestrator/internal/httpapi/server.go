@@ -197,6 +197,9 @@ type WorkflowService interface {
 	Pause(ctx context.Context, id string, confirm bool) error
 	Export(id string, includeBindings bool) (workflows.ExportedWorkflow, error)
 	Import(exported workflows.ExportedWorkflow, ownerOrgID string) (workflows.Workflow, error)
+	// Preview prüft eine Importdatei ohne Wirkung; ImportReplace ersetzt die Definition eines vorhandenen Workflows.
+	Preview(exported workflows.ExportedWorkflow, raw []byte) (workflows.ImportReport, error)
+	ImportReplace(id string, exported workflows.ExportedWorkflow) (workflows.Workflow, error)
 	// FindRoleForNode (Kapitel 12 Teil 4) — s. WorkflowRoleFinder in
 	// auth_middleware.go, dieselbe Methode, hier Teil der ohnehin
 	// injizierten WorkflowService-Implementierung.
@@ -754,6 +757,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// dieselbe Schwelle wie Import, das ebenfalls VerbConfigure verlangt.
 	mux.HandleFunc("GET /api/v1/workflows/{id}/export", g.requireVerbGlobal(authz.VerbConfigure, handleExportWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/import", g.requireVerbGlobal(authz.VerbConfigure, handleImportWorkflow(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/import/preview", g.requireVerbGlobal(authz.VerbConfigure, handleImportPreview(workflowSvc)))
 
 	// Process Engine (Kapitel 21 Phase 5 Teil 2, ARCHITECTURE.md
 	// Domain-Trennung Process/Workflow, UMSETZUNG.md §6b/21.2) — eigener
