@@ -445,7 +445,8 @@ fn run_one(
             .into_iter()
             .find(|n| n.label == b.mixer)
             .ok_or_else(|| format!("Mischer „{}“ nicht gefunden", b.mixer))?;
-        let peer = PeerClient::new(node.href);
+        // Zeitgrenze: ein hängender Mischer-Aufruf würde die Kopplung sonst dauerhaft anhalten; bei Fehler wird der Link neu aufgebaut.
+        let peer = PeerClient::new(node.href).with_timeout(Duration::from_secs(2));
         if b.is_follow() {
             let _ = peer.invoke_with("pip.setAnimDelay", json!({"ms": follow_lead_ms() + START_MARGIN_MS}));
         }
