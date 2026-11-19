@@ -632,6 +632,9 @@ func (f fakeWorkflowService) RestoreHeldState(ctx context.Context, id, role stri
 	return nil
 }
 func (f fakeWorkflowService) DiscardHeldState(id, role string) error { return nil }
+func (f fakeWorkflowService) AdoptInstance(id, role, instanceID, nodeID, hostID string) (workflows.Workflow, error) {
+	return workflows.Workflow{ID: id}, nil
+}
 
 func (f fakeWorkflowService) MigrateRole(ctx context.Context, id, role, targetHostID string) error {
 	return f.migrateRoleErr

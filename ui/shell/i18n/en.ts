@@ -983,6 +983,7 @@ export const en: Record<keyof typeof de, string> = {
   "flow.20b36c": "Role “{p0}” switched to standby ({p1})",
   "flow.b40ef3": "Orchestrator host (local)",
   "flow.02d6ca": "Unassigned",
+  "flow.adoptFailed": "“{p0}” could not be assigned to the workflow: {p1}",
   "flow.28a45c": "Groups across several hosts",
   "flow.ef06dd": "Workflow not found.",
   "flow.ea2b0e": "Workflow “{p0}” is currently “{p1}” — wait a moment and try again.",

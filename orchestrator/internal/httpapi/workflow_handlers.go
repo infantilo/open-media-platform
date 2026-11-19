@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
@@ -424,9 +425,37 @@ func handleWorkflowStateHoldAction(svc WorkflowService) http.HandlerFunc {
 	}
 }
 
+// handleWorkflowAdoptInstance liefert POST /api/v1/workflows/{id}/runtime-roles mit {"role","instanceId","nodeId","hostId"?}:
+// eine im laufenden Workflow neu gestartete Instanz wird als Laufzeit-Rolle aufgenommen (nur zur Laufzeit; dauerhaft erst
+// durch „Im Workflow speichern“). 409, wenn die Instanz schon zu einem Workflow gehört.
+func handleWorkflowAdoptInstance(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		var body struct {
+			Role       string `json:"role"`
+			InstanceID string `json:"instanceId"`
+			NodeID     string `json:"nodeId"`
+			HostID     string `json:"hostId"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		wf, err := svc.AdoptInstance(id, body.Role, body.InstanceID, body.NodeID, body.HostID)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
+
 func writeWorkflowError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, workflows.ErrNothingToRearm), errors.Is(err, workflows.ErrNoHeldState):
+	case errors.Is(err, workflows.ErrNothingToRearm), errors.Is(err, workflows.ErrNoHeldState), errors.Is(err, workflows.ErrInstanceTaken):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, workflows.ErrNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)

@@ -192,6 +192,8 @@ type WorkflowService interface {
 	HeldStates(id string) ([]string, error)
 	RestoreHeldState(ctx context.Context, id, role string) error
 	DiscardHeldState(id, role string) error
+	// AdoptInstance: im laufenden Workflow neu gestartete Instanz als Laufzeit-Rolle aufnehmen (Flow-Editor).
+	AdoptInstance(id, role, instanceID, nodeID, hostID string) (workflows.Workflow, error)
 	Pause(ctx context.Context, id string, confirm bool) error
 	Export(id string, includeBindings bool) (workflows.ExportedWorkflow, error)
 	Import(exported workflows.ExportedWorkflow, ownerOrgID string) (workflows.Workflow, error)
@@ -743,6 +745,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/restart", g.requireVerbGlobal(authz.VerbAdmin, handleRestartWorkflowRole(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}/state-holds", g.requireAuth(handleWorkflowStateHolds(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/state-hold", g.requireVerbGlobal(authz.VerbAdmin, handleWorkflowStateHoldAction(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/runtime-roles", g.requireVerbGlobal(authz.VerbAdmin, handleWorkflowAdoptInstance(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/rearm-standby", g.requireVerbGlobal(authz.VerbAdmin, handleRearmStandby(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/migrate", g.requireVerbGlobal(authz.VerbAdmin, blockMaintenanceHost(options.maintenance, "targetHostId", handleMigrateWorkflowRole(workflowSvc))))
 	// requireVerbGlobal(VerbConfigure) statt requireAuth (Nutzerwunsch

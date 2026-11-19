@@ -604,6 +604,10 @@ export class FlowCanvas extends HTMLElement {
   // die ID nach #workflowScopeExtraNodeIds (s. #reconcileWorkflowScopePendingInstances).
   #workflowScopeExtraNodeIds: Set<string> = new Set();
   #workflowScopePendingInstanceIds: Set<string> = new Set();
+  // Typ/Host der noch nicht registrierten Instanzen und die in dieser Sitzung schon vergebenen Laufzeit-Rollennamen: Beim
+  // Auftauchen des Nodes in einem LAUFENDEN Workflow wird die Instanz als Laufzeit-Rolle angemeldet (#adoptStartedInstance).
+  #workflowScopePendingInfo: Map<string, { type: string; hostId?: string }> = new Map();
+  #workflowScopeReservedRoles: Set<string> = new Set();
   // Nutzerreport 2026-07-30 ("in einer Gruppe neue Nodes hinzufügen
   // landet im Root"): dasselbe Zeitfenster-Problem wie oben
   // (#workflowScopePendingInstanceIds), nur fürs B5-Gruppenmodell statt
@@ -2093,6 +2097,8 @@ export class FlowCanvas extends HTMLElement {
     // BEIDEN Fällen mit einer leeren Extra-Node-Menge.
     this.#workflowScopeExtraNodeIds = new Set();
     this.#workflowScopePendingInstanceIds = new Set();
+    this.#workflowScopePendingInfo = new Map();
+    this.#workflowScopeReservedRoles = new Set();
     this.#workflowEditDraft = this.#isIdleWorkflow(wf) ? structuredClone(wf.definition) : null;
     this.#assignMissingPositions();
     this.#render();
@@ -2104,6 +2110,8 @@ export class FlowCanvas extends HTMLElement {
     this.#workflowEditDraft = null;
     this.#workflowScopeExtraNodeIds = new Set();
     this.#workflowScopePendingInstanceIds = new Set();
+    this.#workflowScopePendingInfo = new Map();
+    this.#workflowScopeReservedRoles = new Set();
     this.#connectFromRole = null;
     this.#render();
   }
@@ -2167,7 +2175,36 @@ export class FlowCanvas extends HTMLElement {
       if (node.instanceId && this.#workflowScopePendingInstanceIds.has(node.instanceId)) {
         this.#workflowScopePendingInstanceIds.delete(node.instanceId);
         this.#workflowScopeExtraNodeIds.add(node.id);
+        const info = this.#workflowScopePendingInfo.get(node.instanceId);
+        this.#workflowScopePendingInfo.delete(node.instanceId);
+        if (info) void this.#adoptStartedInstance(node.id, node.instanceId, info);
       }
+    }
+  }
+
+  // Nutzerwunsch 2026-11-19: ein im geöffneten, LAUFENDEN Workflow neu gestarteter Microservice gehört zu diesem Workflow
+  // und nicht in „Unzugeordnet“. Er wird als Laufzeit-Rolle angemeldet (stoppt mit dem Workflow); dauerhaft wird er erst
+  // durch „Im Workflow speichern“ (#saveRunningWorkflowFromLiveTopology übernimmt die Rolle samt Namen in die Definition).
+  async #adoptStartedInstance(nodeId: string, instanceId: string, info: { type: string; hostId?: string }) {
+    const wfId = this.#workflowEditId;
+    const wf = wfId ? this.#workflows.find((w) => w.id === wfId) : undefined;
+    if (!wfId || !wf || wf.status !== "started") return;
+    const used = new Set<string>([
+      ...(wf.definition?.roles ?? []).map((r) => r.name),
+      ...Object.keys(wf.runtime ?? {}),
+      ...this.#workflowScopeReservedRoles,
+    ]);
+    const role = uniqueRoleName(info.type, used);
+    this.#workflowScopeReservedRoles.add(role);
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(wfId)}/runtime-roles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role, instanceId, nodeId, hostId: info.hostId ?? "" }),
+      });
+      if (!res.ok) this.#showToast(tt("flow.adoptFailed", { p0: info.type, p1: (await res.text()).trim() || res.status }));
+    } catch (err) {
+      this.#showToast(tt("flow.adoptFailed", { p0: info.type, p1: String(err) }));
     }
   }
 
@@ -2814,6 +2851,8 @@ export class FlowCanvas extends HTMLElement {
       }
       this.#workflowScopeExtraNodeIds = new Set();
       this.#workflowScopePendingInstanceIds = new Set();
+    this.#workflowScopePendingInfo = new Map();
+    this.#workflowScopeReservedRoles = new Set();
       this.#showToast(tt("flow.3fa58b"));
       await this.#queueFetchAndRender();
     } catch (err) {
@@ -7079,9 +7118,10 @@ export class FlowCanvas extends HTMLElement {
       // #groupScopePendingInstances-Doku): gleiches Prinzip, andere
       // Zielstruktur (#groupTree statt Workflow-Runtime).
       if (scopedWf || (!this.#workflowEditId && this.#scope !== null)) {
-        const inst = (await res.json()) as { id: string };
+        const inst = (await res.json()) as { id: string; type?: string; hostId?: string };
         if (scopedWf) {
           this.#workflowScopePendingInstanceIds.add(inst.id);
+          this.#workflowScopePendingInfo.set(inst.id, { type: inst.type ?? type, hostId: inst.hostId });
         } else if (this.#scope !== null) {
           this.#groupScopePendingInstances.set(inst.id, this.#scope);
         }

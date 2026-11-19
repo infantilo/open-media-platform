@@ -982,6 +982,7 @@ export const de = {
   "flow.20b36c": "Rolle „{p0}\" auf Standby umgeschaltet ({p1})",
   "flow.b40ef3": "Orchestrator-Host (lokal)",
   "flow.02d6ca": "Unzugeordnet",
+  "flow.adoptFailed": "„{p0}“ konnte dem Workflow nicht zugeordnet werden: {p1}",
   "flow.28a45c": "Gruppen über mehrere Hosts",
   "flow.ef06dd": "Workflow nicht gefunden.",
   "flow.ea2b0e": "Workflow „{p0}\" ist gerade „{p1}\" — kurz warten und erneut versuchen.",
