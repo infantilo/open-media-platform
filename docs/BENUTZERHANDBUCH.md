@@ -2584,6 +2584,19 @@ Das Intercom verbindet Menschen untereinander: **Kanäle** sind gemeinsame Sprec
 
 **Hinweise:** Auslastung: Kodiert wird je *verschiedenem* Hörsignal, nicht je Hörer (alle Zuhörer einer Partyline teilen einen Encoder), Stille wird nicht gesendet. Gemessen auf einem 1,8-GHz-Laptop unter Last: etwa 7 % eines Kerns je angemeldetem Teilnehmer; ein Server ist deutlich schneller. Die Verzögerung im Haus hängt vor allem von Browser und Audiogerät ab (Kopfhörer am Gerät, kein Lautsprecher). Gespräche werden **nicht aufgezeichnet**. Kennzahlen unter `GET /metrics` (`omp_intercom_*`); bei überlastetem Rechner meldet der Dienst einen Alarm.
 
+## 10c-6. PTZ-Kamera steuern (Schwenken, Neigen, Zoomen, Voreinstellungen)
+
+Der Node **PTZ-Kamera** (`omp-ptz`) führt eine Kamera mit Fernsteuerung über das Netz (VISCA über IP, UDP-Port 52381). Je Kamera eine Instanz starten; die Kamera-Adresse steht im Feld **Ziel** (Adresse oder Name, optional `:Port`) und wird mit **Übernehmen** gesetzt. Das Feld **Kamera** zeigt oben, ob die Kamera antwortet; ohne Antwort (rot) sind alle Bedienelemente wirkungslos außer **STOPP**. Der Hinweis **Simulator** (gelb) bedeutet: es ist keine echte Kamera angeschlossen.
+
+- **Joystick:** Maus oder Finger auf die Kreisfläche drücken und halten; je weiter außen, desto schneller. Loslassen (oder das Fenster verlassen) hält die Kamera an. Der Regler **Geschwindigkeit** begrenzt den Randwert.
+- **Zoom:** **Tele +** / **Weit −** gedrückt halten.
+- **Haltezeit:** Eine Fahrt gilt nur kurz und wird vom Bedienfeld laufend erneuert. Bricht die Verbindung zum Bedienfeld ab (Browser zu, Netz weg), hält der Node die Kamera nach der Haltezeit (Einstellungen, Standard 1000 ms) von selbst an.
+- **Voreinstellungen:** Raster mit den Nummern 1 bis 16. Unter **Beim Klick auf eine Voreinstellung** wählen: **Abrufen** (fährt die gespeicherte Lage an), **Speichern** (speichert die *aktuelle* Lage der Kamera unter dieser Nummer, mit dem Namen aus dem Feld daneben), **Löschen**. Leere Nummern sind gestrichelt. Die Lage selbst liegt in der Kamera, der Name im Node.
+- **Grundstellung** fährt die Kamera in ihre Ausgangslage; **STOPP** hält alles an.
+- **Position:** Zeigt Rohwerte der Kamera (Pan, Tilt, Zoom) und die Zahl der Fehlermeldungen der Kamera, z. B. beim Abruf einer nicht gespeicherten Nummer.
+
+**Grenzen:** nur VISCA über IP; kein Fokus, keine Blende, keine Tally-Kopplung. Die Kamera nimmt Befehle von jedem Rechner im Netz an: das Kameranetz gehört vom übrigen Netz getrennt. Mit echter Kamera noch nicht geprüft; Wertebereiche und Höchststufen sind je Modell verschieden (Einstellungen **Pan/Tilt, höchste Stufe**). Vertrag und Einzelheiten: `docs/contracts/CONTRACT-PTZ.md`.
+
 ## 10d. Playout-Workflow „Playout MXF“ (Player, Mischer, Monitor)
 
 Der Workflow **Playout MXF** (Reiter Workflows, nach dem Anlegen im Zustand „gestoppt“) enthält:

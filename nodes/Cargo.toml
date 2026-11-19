@@ -23,6 +23,7 @@ members = [
     "omp-playout-core",
     "omp-radio-automation",
     "omp-gpio",
+    "omp-ptz",
     "omp-midi-gateway",
     "omp-failover",
     "omp-studio-logic",

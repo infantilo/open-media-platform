@@ -1721,6 +1721,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-ptz"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "omp-node-sdk",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-radio-automation"
 version = "0.1.0"
 dependencies = [

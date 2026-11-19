@@ -450,6 +450,17 @@
     "expectedResources": "sehr gering"
   },
   {
+    "type": "omp-ptz",
+    "label": "PTZ-Kamera",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-ptz"],
+    "env": {"OMP_PTZ_TARGET": "192.168.0.100", "OMP_PTZ_PRESETS": "16"},
+    "mediaKind": "audio",
+    "description": "Steuert eine PTZ-Kamera über VISCA über IP (UDP, Port 52381): Pan/Tilt/Zoom mit Joystick-Bedienfeld, Voreinstellungen abrufen/speichern, Positionsanzeige. Eine Instanz je Kamera. Eine Fahrt gilt nur für die Haltezeit (Standard 1000 ms) und wird vom Bedienfeld erneuert; bricht die Bedienung ab, stoppt der Node die Kamera selbst. Zieladresse über die Methode `setTarget` oder die Umgebung `OMP_PTZ_TARGET`; `OMP_PTZ_SIM=1` startet einen Kamera-Simulator. Ereignisse auf NATS `omp.ptz.<node>.<link|preset|hold|error>`. Vertrag: docs/contracts/CONTRACT-PTZ.md.",
+    "i18n": { "en": {"label": "PTZ camera", "description": "Controls a PTZ camera over VISCA over IP (UDP, port 52381): pan/tilt/zoom with a joystick panel, recall/store presets, position display. One instance per camera. A move is valid only for the hold time (default 1000 ms) and is renewed by the panel; if the operator side drops, the node stops the camera by itself. Target address via method `setTarget` or environment `OMP_PTZ_TARGET`; `OMP_PTZ_SIM=1` starts a camera simulator. Events on NATS `omp.ptz.<node>.<link|preset|hold|error>`. Contract: docs/contracts/CONTRACT-PTZ.md.", "expectedResources": "very low"} },
+    "expectedResources": "sehr gering"
+  },
+  {
     "type": "omp-studio-logic",
     "label": "Studio-Logik",
     "runner": "process",
