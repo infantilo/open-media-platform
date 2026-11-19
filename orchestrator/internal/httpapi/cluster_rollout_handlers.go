@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/clusterupdate"
@@ -60,8 +61,28 @@ func handleMemberInfo(token string, clusterSvc ClusterService) http.HandlerFunc 
 	}
 }
 
+// isLeaderHost: Host:Port der URL stimmt mit der bekannten HTTP-Adresse des Leaders überein (mit oder ohne Schema).
+// Ohne Cluster-Dienst oder ohne bekannten Leader wird abgelehnt.
+func isLeaderHost(cs ClusterService, u *url.URL) bool {
+	if cs == nil {
+		return false
+	}
+	addr, ok := cs.LeaderHTTPAddr()
+	if !ok || addr == "" {
+		return false
+	}
+	if !strings.Contains(addr, "://") {
+		addr = "http://" + addr
+	}
+	l, err := url.Parse(addr)
+	if err != nil || l.Host == "" {
+		return false
+	}
+	return strings.EqualFold(l.Host, u.Host)
+}
+
 // handleMemberFetch: POST …/fetch — lädt das Paket vom Koordinator und prüft es mit dem EIGENEN Vertrauensanker.
-func handleMemberFetch(token string, svc UpdateService, nv NodeVersionRegistrar) http.HandlerFunc {
+func handleMemberFetch(token string, svc UpdateService, nv NodeVersionRegistrar, clusterSvc ClusterService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !memberAuth(token, w, r) {
 			return
@@ -78,6 +99,11 @@ func handleMemberFetch(token string, svc UpdateService, nv NodeVersionRegistrar)
 		u, err := url.Parse(req.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Path != "/api/v1/host-updates/"+req.PackageID {
 			http.Error(w, "unzulaessige Download-URL", http.StatusBadRequest)
+			return
+		}
+		// Und nur beim Koordinator (= bekannter Leader): kein Abruf beliebiger Hosts.
+		if !isLeaderHost(clusterSvc, u) {
+			http.Error(w, "Download-URL zeigt nicht auf den Koordinator", http.StatusBadRequest)
 			return
 		}
 		if e, err := svc.Get(req.PackageID); err == nil {

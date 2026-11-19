@@ -56,7 +56,7 @@ func TestMemberRoutesRejectMissingAndForeignToken(t *testing.T) {
 	cs := fakeClusterService{status: cluster.Status{Term: 3}}
 	hs := map[string]http.HandlerFunc{
 		"info":  handleMemberInfo(tok, cs),
-		"fetch": handleMemberFetch(tok, e.svc, nil),
+		"fetch": handleMemberFetch(tok, e.svc, nil, nil),
 		"apply": handleMemberApply(tok, e.svc, &restartSup{}, nil, nil, cs, nil),
 	}
 	for name, h := range hs {
@@ -120,8 +120,16 @@ func TestMemberFetchDownloadsVerifiesAndRejectsForeignURLs(t *testing.T) {
 
 	member := newUpdateEnv(t, false)
 	member.svc = coordTrust(t, member, coord)
-	h := handleMemberFetch(tok, member.svc, nil)
+	h := handleMemberFetch(tok, member.svc, nil, fakeClusterService{leaderHTTPAddr: srv.URL, leaderKnown: true})
 
+	// Fremder Host (auch mit korrektem Pfad) und unbekannter Leader werden abgelehnt.
+	if rec := memberCall(h, tok, clusterupdate.FetchRequest{PackageID: entry.ID, URL: "http://169.254.169.254/api/v1/host-updates/" + entry.ID}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("fremder Host: %d", rec.Code)
+	}
+	hNoLeader := handleMemberFetch(tok, member.svc, nil, fakeClusterService{})
+	if rec := memberCall(hNoLeader, tok, clusterupdate.FetchRequest{PackageID: entry.ID, URL: srv.URL + "/api/v1/host-updates/" + entry.ID}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("Leader unbekannt: %d", rec.Code)
+	}
 	if rec := memberCall(h, tok, clusterupdate.FetchRequest{PackageID: entry.ID, URL: srv.URL + "/etc/passwd"}); rec.Code != http.StatusBadRequest {
 		t.Fatalf("fremder Pfad: %d", rec.Code)
 	}
@@ -153,7 +161,7 @@ func TestMemberFetchRejectsPackageSignedByUntrustedKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, entry.File) }))
 	defer srv.Close()
 	member := newUpdateEnv(t, false) // vertraut nur seinem Schlüssel
-	h := handleMemberFetch(tok, member.svc, nil)
+	h := handleMemberFetch(tok, member.svc, nil, fakeClusterService{leaderHTTPAddr: srv.URL, leaderKnown: true})
 	rec := memberCall(h, tok, clusterupdate.FetchRequest{PackageID: entry.ID, URL: srv.URL + "/api/v1/host-updates/" + entry.ID})
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("Fremdsignatur: %d %s", rec.Code, rec.Body.String())

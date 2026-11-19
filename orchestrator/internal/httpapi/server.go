@@ -644,7 +644,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/host-updates/{id}", handleHostUpdateDownload(options.updates, options.updateDist))
 	// Cluster-Rolling-Update (Kap. 84): interne Mitglieds-Routen (HMAC) + Admin-API.
 	mux.HandleFunc("GET "+clusterupdate.PathInfo, handleMemberInfo(options.clusterRolloutToken, clusterSvc))
-	mux.HandleFunc("POST "+clusterupdate.PathFetch, handleMemberFetch(options.clusterRolloutToken, options.updates, options.nodeRegistrar()))
+	mux.HandleFunc("POST "+clusterupdate.PathFetch, handleMemberFetch(options.clusterRolloutToken, options.updates, options.nodeRegistrar(), clusterSvc))
 	mux.HandleFunc("POST "+clusterupdate.PathApply, handleMemberApply(options.clusterRolloutToken, options.updates, options.updateSup, options.nodeRegistrar(), launcherSvc, clusterSvc, options.domainAudit))
 	mux.HandleFunc("POST "+clusterupdate.PathAnnounce, handleMemberAnnounce(options.clusterRolloutToken, clusterSvc))
 	mux.HandleFunc("GET /api/v1/admin/cluster-rollout", g.requireVerbGlobal(authz.VerbAdmin, handleGetClusterRollout(options.clusterRollout)))
