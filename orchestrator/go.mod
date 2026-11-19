@@ -8,7 +8,7 @@ require (
 	github.com/go-ldap/ldap/v3 v3.4.15
 	github.com/hashicorp/raft v1.8.0
 	github.com/hashicorp/raft-boltdb/v2 v2.4.2
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/minio/minio-go/v7 v7.4.1
 	github.com/nats-io/nats.go v1.55.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
