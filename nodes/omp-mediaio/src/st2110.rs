@@ -82,10 +82,13 @@ pub struct St2110VideoOutput {
     height: i32,
     framerate_numerator: i32,
     framerate_denominator: i32,
+    /// Bittiefe auf dem Draht: 8 (`UYVY`) oder 10 (`UYVP`, RFC 4175 YCbCr-4:2:2 10 bit).
+    depth: u8,
     flowed: Arc<AtomicBool>,
 }
 
 impl St2110VideoOutput {
+    /// 8 Bit (unverändertes Verhalten aller bisherigen Aufrufer), s. [`Self::new_with_depth`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         pipeline: &gst::Pipeline,
@@ -97,6 +100,26 @@ impl St2110VideoOutput {
         framerate_numerator: i32,
         framerate_denominator: i32,
     ) -> Result<Self, String> {
+        Self::new_with_depth(pipeline, upstream, initial_host, initial_port, width, height, framerate_numerator, framerate_denominator, 8)
+    }
+
+    /// `depth` 8 oder 10 (alles andere ist ein Fehler). 10 Bit ist die Broadcast-Regel (SDI-Quellen sind 10 Bit);
+    /// 8 Bit kostet Qualität und wird von manchem Fremdempfänger nicht angenommen.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_depth(
+        pipeline: &gst::Pipeline,
+        upstream: &gst::Element,
+        initial_host: &str,
+        initial_port: u16,
+        width: i32,
+        height: i32,
+        framerate_numerator: i32,
+        framerate_denominator: i32,
+        depth: u8,
+    ) -> Result<Self, String> {
+        if depth != 8 && depth != 10 {
+            return Err(format!("ST 2110-20: Bittiefe {depth} nicht unterstützt (8 oder 10)"));
+        }
         let videoconvert = gst::ElementFactory::make("videoconvert")
             .build()
             .map_err(|e| format!("videoconvert: {e}"))?;
@@ -110,7 +133,7 @@ impl St2110VideoOutput {
             .property(
                 "caps",
                 gst::Caps::builder("video/x-raw")
-                    .field("format", "UYVY")
+                    .field("format", if depth == 10 { "UYVP" } else { "UYVY" })
                     .field("width", width)
                     .field("height", height)
                     .field(
@@ -120,7 +143,7 @@ impl St2110VideoOutput {
                     .build(),
             )
             .build()
-            .map_err(|e| format!("capsfilter(UYVY): {e}"))?;
+            .map_err(|e| format!("capsfilter(UYVY/UYVP): {e}"))?;
         let payloader = gst::ElementFactory::make("rtpvrawpay")
             .build()
             .map_err(|e| format!("rtpvrawpay: {e}"))?;
@@ -173,6 +196,7 @@ impl St2110VideoOutput {
             height,
             framerate_numerator,
             framerate_denominator,
+            depth,
             flowed,
         })
     }
@@ -213,11 +237,12 @@ impl St2110VideoOutput {
              c=IN IP4 {host}\r\n\
              {clock}\
              a=rtpmap:96 raw/90000\r\n\
-             a=fmtp:96 sampling=YCbCr-4:2:2; depth=8; width={w}; height={h}; \
+             a=fmtp:96 sampling=YCbCr-4:2:2; depth={depth}; width={w}; height={h}; \
              exactframerate={num}/{den}; colorimetry={colorimetry}; PM=2110GPM; \
              SSN=ST2110-20:2017; TP=2110TPW; TCS=SDR\r\n",
             clock = clock_lines(&host),
             colorimetry = sdp_colorimetry(self.height as i32),
+            depth = self.depth,
             w = self.width,
             h = self.height,
             num = self.framerate_numerator,
@@ -285,12 +310,30 @@ impl St2110VideoInput {
         framerate_denominator: i32,
         multicast_group: Option<&str>,
     ) -> Result<Self, String> {
+        Self::new_with_depth(pipeline, listen_port, width, height, framerate_numerator, framerate_denominator, multicast_group, 8)
+    }
+
+    /// `depth`: Bittiefe des ankommenden Stroms (8 oder 10) — muss zur SDP des Senders passen.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_depth(
+        pipeline: &gst::Pipeline,
+        listen_port: u16,
+        width: i32,
+        height: i32,
+        framerate_numerator: i32,
+        framerate_denominator: i32,
+        multicast_group: Option<&str>,
+        depth: u8,
+    ) -> Result<Self, String> {
+        if depth != 8 && depth != 10 {
+            return Err(format!("ST 2110-20: Bittiefe {depth} nicht unterstützt (8 oder 10)"));
+        }
         let rtp_caps = gst::Caps::builder("application/x-rtp")
             .field("media", "video")
             .field("clock-rate", 90000)
             .field("encoding-name", "RAW")
             .field("sampling", "YCbCr-4:2:2")
-            .field("depth", "8")
+            .field("depth", depth.to_string())
             .field("width", width.to_string())
             .field("height", height.to_string())
             .field("payload", 96)
@@ -922,6 +965,40 @@ mod tests {
         // ehrliches Profil: Software-Pacing = breit (TPW), niemals die frühere erfundene Großmeister-ID
         assert!(sdp.contains("TP=2110TPW"), "sdp = {sdp}");
         assert!(!sdp.contains("EC-46-70-FF-FE-00-CE-DE"), "sdp = {sdp}");
+    }
+
+    /// 10-Bit-Strecke (UYVP) über echten Multicast: Pakete kommen an, die SDP nennt `depth=10`.
+    #[test]
+    fn ten_bit_roundtrip_and_sdp() {
+        gst::init().expect("gst::init");
+        let wp = gst::Pipeline::new();
+        let src = gst::ElementFactory::make("videotestsrc").property("is-live", true).build().unwrap();
+        wp.add(&src).unwrap();
+        let out = St2110VideoOutput::new_with_depth(&wp, &src, "127.0.0.1", 52150, 320, 180, 25, 1, 10).expect("out10");
+        assert!(out.sdp().contains("depth=10"), "sdp = {}", out.sdp());
+        out.set_active(true);
+        let rp = gst::Pipeline::new();
+        let input = St2110VideoInput::new_with_depth(&rp, 52150, 320, 180, 25, 1, None, 10).expect("in10");
+        let got = Arc::new(AtomicBool::new(false));
+        let g = got.clone();
+        input.tail.static_pad("src").unwrap().add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+            g.store(true, Ordering::Relaxed);
+            gst::PadProbeReturn::Remove
+        });
+        let sink = gst::ElementFactory::make("fakesink").property("sync", false).build().unwrap();
+        rp.add(&sink).unwrap();
+        input.tail.link(&sink).unwrap();
+        rp.set_state(gst::State::Playing).unwrap();
+        wp.set_state(gst::State::Playing).unwrap();
+        for _ in 0..40 {
+            if got.load(Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        wp.set_state(gst::State::Null).unwrap();
+        rp.set_state(gst::State::Null).unwrap();
+        assert!(got.load(Ordering::Relaxed), "kein 10-Bit-Bild angekommen");
     }
 
     #[test]

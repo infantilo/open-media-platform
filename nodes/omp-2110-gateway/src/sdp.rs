@@ -22,6 +22,8 @@ pub struct ParsedVideoSdp {
     pub height: i32,
     pub framerate_numerator: i32,
     pub framerate_denominator: i32,
+    /// Bittiefe aus `depth=` (8 oder 10); fehlt sie, gilt 8 (bisheriges Verhalten).
+    pub depth: u8,
 }
 
 pub fn parse_video_sdp(sdp: &str) -> Result<ParsedVideoSdp, String> {
@@ -31,6 +33,7 @@ pub fn parse_video_sdp(sdp: &str) -> Result<ParsedVideoSdp, String> {
     let mut height: Option<i32> = None;
     let mut framerate_numerator: Option<i32> = None;
     let mut framerate_denominator: Option<i32> = None;
+    let mut depth: Option<u8> = None;
 
     for line in sdp.lines() {
         let line = line.trim();
@@ -60,6 +63,7 @@ pub fn parse_video_sdp(sdp: &str) -> Result<ParsedVideoSdp, String> {
                 match key {
                     "width" => width = value.parse().ok(),
                     "height" => height = value.parse().ok(),
+                    "depth" => depth = value.parse().ok(),
                     "exactframerate" => {
                         let (num, den) = value.split_once('/').unwrap_or((value, "1"));
                         framerate_numerator = num.parse().ok();
@@ -78,6 +82,10 @@ pub fn parse_video_sdp(sdp: &str) -> Result<ParsedVideoSdp, String> {
         height: height.ok_or("SDP: kein height in a=fmtp gefunden")?,
         framerate_numerator: framerate_numerator.ok_or("SDP: kein exactframerate in a=fmtp gefunden")?,
         framerate_denominator: framerate_denominator.unwrap_or(1),
+        depth: match depth.unwrap_or(8) {
+            d @ (8 | 10) => d,
+            d => return Err(format!("SDP: depth={d} nicht unterstützt (8 oder 10)")),
+        },
     })
 }
 
@@ -198,8 +206,18 @@ mod tests {
                 height: 1080,
                 framerate_numerator: 25,
                 framerate_denominator: 1,
+                depth: 8,
             }
         );
+    }
+
+    #[test]
+    fn depth_is_parsed_and_validated() {
+        let base = "c=IN IP4 239.1.1.1/16\r\nm=video 5004 RTP/AVP 96\r\n";
+        let ok = format!("{base}a=fmtp:96 sampling=YCbCr-4:2:2; depth=10; width=1920; height=1080; exactframerate=25/1\r\n");
+        assert_eq!(parse_video_sdp(&ok).unwrap().depth, 10);
+        let bad = format!("{base}a=fmtp:96 sampling=YCbCr-4:2:2; depth=12; width=1920; height=1080; exactframerate=25/1\r\n");
+        assert!(parse_video_sdp(&bad).is_err());
     }
 
     /// Multicast-Adresse mit TTL-Suffix (echte Fremdgeräte-SDP-Form,

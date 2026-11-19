@@ -122,6 +122,21 @@ pub struct IngestConfig {
     pub audio_multicast_group: Option<String>,
     pub audio_sample_rate: i32,
     pub audio_channels: i32,
+    /// Bittiefe des ankommenden ST-2110-20-Stroms (8 oder 10).
+    pub depth: u8,
+}
+
+/// Bittiefe auf dem Draht für den Ausgang und für den Ingest ohne SDP: `OMP_2110_GATEWAY_DEPTH` (8 oder 10),
+/// Standard **10** (Broadcast-Regel; 8 Bit nur für Gegenstellen, die nichts anderes annehmen).
+pub fn wire_depth() -> Result<u8, String> {
+    match std::env::var("OMP_2110_GATEWAY_DEPTH") {
+        Err(_) => Ok(10),
+        Ok(v) => match v.trim() {
+            "8" => Ok(8),
+            "10" | "" => Ok(10),
+            other => Err(format!("OMP_2110_GATEWAY_DEPTH={other:?} ungültig (8 oder 10)")),
+        },
+    }
 }
 
 /// Griff auf die laufende Ingest-Pipeline — hält `pipeline`/`_input`/
@@ -214,7 +229,7 @@ pub fn run_ingest(
 
     let pipeline = gst::Pipeline::new();
 
-    let input = match St2110VideoInput::new(
+    let input = match St2110VideoInput::new_with_depth(
         &pipeline,
         config.listen_port,
         config.width,
@@ -222,6 +237,7 @@ pub fn run_ingest(
         config.framerate_numerator,
         config.framerate_denominator,
         config.multicast_group.as_deref(),
+        config.depth,
     ) {
         Ok(i) => i,
         Err(e) => {
@@ -478,7 +494,7 @@ fn build_output(
         None => None,
     };
 
-    let output = St2110VideoOutput::new(
+    let output = St2110VideoOutput::new_with_depth(
         &pipeline,
         &input.tail,
         destination_host,
@@ -487,6 +503,7 @@ fn build_output(
         height,
         framerate_numerator,
         framerate_denominator,
+        wire_depth()?,
     )?;
     output.set_active(true);
 

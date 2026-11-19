@@ -580,6 +580,7 @@ struct IngestParams {
     height: i32,
     fps_num: i32,
     fps_den: i32,
+    depth: u8,
 }
 
 /// Liest die Ingest-Konfiguration bevorzugt aus einem gereichten SDP
@@ -602,6 +603,7 @@ fn resolve_ingest_params() -> Result<IngestParams, String> {
             height: parsed.height,
             fps_num: parsed.framerate_numerator,
             fps_den: parsed.framerate_denominator,
+            depth: parsed.depth,
         });
     }
 
@@ -622,6 +624,7 @@ fn resolve_ingest_params() -> Result<IngestParams, String> {
         fps_den: env_or("OMP_2110_GATEWAY_FPS_DEN", "1")
             .parse()
             .map_err(|e| format!("OMP_2110_GATEWAY_FPS_DEN: {e}"))?,
+        depth: pipeline::wire_depth()?,
     })
 }
 
@@ -692,7 +695,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     match direction {
         Direction::Ingest => {
-            let IngestParams { listen_port, multicast_group, width, height, fps_num, fps_den } =
+            let IngestParams { listen_port, multicast_group, width, height, fps_num, fps_den, depth } =
                 resolve_ingest_params()?;
             let AudioIngestParams {
                 listen_port: audio_listen_port,
@@ -725,6 +728,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 audio_multicast_group: audio_multicast_group.clone(),
                 audio_sample_rate,
                 audio_channels,
+                depth,
             };
 
             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
