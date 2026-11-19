@@ -1163,6 +1163,30 @@
     "domain": "core"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/files/transfer",
+    "auth": "feature:FeatTransfer",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/files/transfer/preview",
+    "auth": "feature:FeatTransfer",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/files/transfers",
+    "auth": "feature:FeatView",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/files/transfers/{id}/cancel",
+    "auth": "feature:FeatTransfer",
+    "domain": "core"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/files/trash",
     "auth": "feature:FeatView",

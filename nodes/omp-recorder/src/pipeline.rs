@@ -882,6 +882,12 @@ mod tests {
     #[test]
     fn avc_intra_100_with_16_mono_tracks_into_mxf() {
         gst::init().unwrap();
+        for f in ["x264enc", "mxfmux", "h264parse"] {
+            if gst::ElementFactory::find(f).is_none() {
+                eprintln!("uebersprungen: GStreamer-Element {f} fehlt");
+                return;
+            }
+        }
         let dir = tempfile_dir();
         let path = dir.join("avci.mxf");
         let pipeline = gst::Pipeline::new();
