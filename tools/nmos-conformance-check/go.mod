@@ -1,3 +1,3 @@
 module github.com/infantilo/openmediaplatform/tools/nmos-conformance-check
 
-go 1.26.9
+go 1.26.11

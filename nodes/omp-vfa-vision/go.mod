@@ -1,6 +1,6 @@
 module github.com/infantilo/openmediaplatform/nodes/omp-vfa-vision
 
-go 1.26.9
+go 1.26.11
 
 require (
 	github.com/esimov/pigo v1.4.6

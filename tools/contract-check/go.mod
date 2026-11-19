@@ -1,6 +1,6 @@
 module github.com/infantilo/openmediaplatform/tools/contract-check
 
-go 1.26.9
+go 1.26.11
 
 require github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 

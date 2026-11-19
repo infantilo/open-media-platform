@@ -1,6 +1,6 @@
 module github.com/infantilo/openmediaplatform/nodes/omp-vfa
 
-go 1.26.9
+go 1.26.11
 
 require (
 	github.com/klauspost/compress v1.20.0 // indirect

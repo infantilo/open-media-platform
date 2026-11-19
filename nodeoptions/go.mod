@@ -1,3 +1,3 @@
 module github.com/infantilo/openmediaplatform/nodeoptions
 
-go 1.26.9
+go 1.26.11

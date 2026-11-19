@@ -1,6 +1,6 @@
 module github.com/infantilo/openmediaplatform/host-agent
 
-go 1.26.9
+go 1.26.11
 
 require github.com/nats-io/nats.go v1.55.0
 
