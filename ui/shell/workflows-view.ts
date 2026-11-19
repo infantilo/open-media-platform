@@ -153,7 +153,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 const POLL_FALLBACK_INTERVAL_MS = 30000;
 
 // Event-Typen, bei denen die Workflow-Liste neu geladen wird.
-const REFRESH_EVENT_TYPES = new Set(["workflow.updated", "lost-events"]);
+const REFRESH_EVENT_TYPES = new Set(["workflow.updated", "workflow.statehold", "lost-events"]);
 
 // Nutzerauftrag 2026-09-02 ("Workflows nach demselben Muster"): Design-
 // Tokens statt roher Hex-Werte, gleiche Farbsemantik wie überall sonst
@@ -215,6 +215,8 @@ class WorkflowsView extends HTMLElement {
   #workflows: Workflow[] = [];
   // Plan-Vorschau je Workflow (Hosts, Bedarf, Engpass-Warnungen), s. workflow-plan-logic.ts.
   #plans = new Map<string, StartPlan>();
+  // Rollen je Workflow, deren gesicherter Stand nach einem Absturz-Neustart gehalten wird (GET …/state-holds).
+  #holds = new Map<string, string[]>();
   #formRoles: Role[] = [{ name: "", nodeType: "", hostId: "" }];
   #formConnections: Connection[] = [];
   #formName = "";
@@ -344,6 +346,76 @@ class WorkflowsView extends HTMLElement {
       }),
     );
     this.#plans = new Map(results.filter((r): r is [string, StartPlan] => r[1] !== null));
+    await this.#loadHolds();
+  }
+
+  async #loadHolds() {
+    const results = await Promise.all(
+      this.#workflows
+        .filter((wf) => wf.status === "started" || wf.status === "paused")
+        .map(async (wf): Promise<[string, string[]]> => {
+          try {
+            const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(wf.id)}/state-holds`);
+            return [wf.id, res.ok ? (((await res.json()) as { roles?: string[] }).roles ?? []) : []];
+          } catch {
+            return [wf.id, []];
+          }
+        }),
+    );
+    this.#holds = new Map(results.filter(([, roles]) => roles.length > 0));
+  }
+
+  // Nach einem Absturz-Neustart kommt eine Rolle leer hoch; ihr gesicherter Stand wird gehalten, bis jemand entscheidet.
+  async #holdAction(wf: Workflow, role: string, action: "restore" | "discard") {
+    if (action === "discard") {
+      const ok = await confirmDialog(tt("wf.hold.confirmDiscard", { p0: role }), { confirmLabel: tt("wf.hold.discard") });
+      if (!ok) return;
+    }
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(wf.id)}/roles/${encodeURIComponent(role)}/state-hold`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (res.ok) {
+        showToast(tt(action === "restore" ? "wf.hold.restored" : "wf.hold.discarded", { p0: role }));
+      } else {
+        showToast(tt("wf.hold.failed", { p0: role, p1: (await res.text()).trim() }));
+      }
+    } catch (err) {
+      showToast(tt("wf.hold.failed", { p0: role, p1: String(err) }));
+    }
+    await this.#poll();
+  }
+
+  #renderHolds(wf: Workflow): HTMLElement | null {
+    const roles = this.#holds.get(wf.id);
+    if (!roles || roles.length === 0) return null;
+    const box = document.createElement("div");
+    box.setAttribute("data-role", "workflow-state-holds");
+    box.style.cssText =
+      "font-size:11px;padding:6px 8px;border-radius:4px;border:1px solid var(--omp-cue,#fb8c00);background:rgba(251,140,0,.08);display:flex;flex-direction:column;gap:6px;";
+    for (const role of roles) {
+      const line = document.createElement("div");
+      line.setAttribute("data-role", "workflow-state-hold");
+      line.setAttribute("data-hold-role", role);
+      line.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:6px;";
+      const text = document.createElement("span");
+      text.style.cssText = "flex:1 1 220px;";
+      text.textContent = `⚠ ${tt("wf.hold.text", { p0: role })}`;
+      const restore = document.createElement("button");
+      restore.className = "omp-btn-primary";
+      restore.setAttribute("data-action", "hold-restore");
+      restore.textContent = tt("wf.hold.restore");
+      restore.addEventListener("click", () => void this.#holdAction(wf, role, "restore"));
+      const discard = document.createElement("button");
+      discard.setAttribute("data-action", "hold-discard");
+      discard.textContent = tt("wf.hold.discard");
+      discard.addEventListener("click", () => void this.#holdAction(wf, role, "discard"));
+      line.append(text, restore, discard);
+      box.appendChild(line);
+    }
+    return box;
   }
 
   // Rollen und Hosts eines Workflows: je Host ein Block mit den Rollen, die dort laufen (würden), dem erwarteten
@@ -1018,6 +1090,11 @@ class WorkflowsView extends HTMLElement {
       row.appendChild(tagsRow);
     }
 
+    const holds = this.#renderHolds(wf);
+    if (holds) {
+      holds.style.marginTop = "6px";
+      row.appendChild(holds);
+    }
     row.appendChild(this.#renderPlan(wf));
 
     // Kapitel 15: nur anzeigen, wenn tatsächlich gesetzt — die meisten
