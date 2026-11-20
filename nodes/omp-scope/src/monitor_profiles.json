@@ -1,0 +1,38 @@
+{
+  "standard": {
+    "label": "Standard",
+    "checks": {
+      "black":          { "enabled": true,  "threshold": 16,   "holdSeconds": 3,  "severity": "error" },
+      "freeze":         { "enabled": true,  "threshold": 0.5,  "holdSeconds": 5,  "severity": "warning" },
+      "silence":        { "enabled": true,  "threshold": -60,  "holdSeconds": 5,  "severity": "error" },
+      "clipping":       { "enabled": true,  "threshold": 0.999, "holdSeconds": 0,  "severity": "warning", "minSamples": 4 },
+      "loudness":       { "enabled": false, "threshold": -18,  "holdSeconds": 10, "severity": "warning" },
+      "phase":          { "enabled": true,  "threshold": -0.5, "holdSeconds": 5,  "severity": "warning" },
+      "monoDropout":    { "enabled": true,  "threshold": -50,  "holdSeconds": 5,  "severity": "warning" },
+      "signalLoss":     { "enabled": true,  "threshold": 0,    "holdSeconds": 2,  "severity": "error" },
+      "formatMismatch": { "enabled": true,  "threshold": 0,    "holdSeconds": 2,  "severity": "warning" }
+    }
+  },
+  "strict": {
+    "label": "Streng",
+    "checks": {
+      "black":          { "enabled": true, "threshold": 16,   "holdSeconds": 1,  "severity": "error" },
+      "freeze":         { "enabled": true, "threshold": 0.5,  "holdSeconds": 2,  "severity": "error" },
+      "silence":        { "enabled": true, "threshold": -60,  "holdSeconds": 2,  "severity": "error" },
+      "clipping":       { "enabled": true, "threshold": 0.999, "holdSeconds": 0,  "severity": "error", "minSamples": 2 },
+      "loudness":       { "enabled": true, "threshold": -16,  "holdSeconds": 5,  "severity": "warning" },
+      "phase":          { "enabled": true, "threshold": -0.3, "holdSeconds": 2,  "severity": "error" },
+      "monoDropout":    { "enabled": true, "threshold": -50,  "holdSeconds": 2,  "severity": "error" },
+      "signalLoss":     { "enabled": true, "threshold": 0,    "holdSeconds": 1,  "severity": "error" },
+      "formatMismatch": { "enabled": true, "threshold": 0,    "holdSeconds": 1,  "severity": "error" }
+    }
+  },
+  "off": {
+    "label": "Aus",
+    "checks": {
+      "black": { "enabled": false }, "freeze": { "enabled": false }, "silence": { "enabled": false }, "clipping": { "enabled": false },
+      "loudness": { "enabled": false }, "phase": { "enabled": false }, "monoDropout": { "enabled": false },
+      "signalLoss": { "enabled": false }, "formatMismatch": { "enabled": false }
+    }
+  }
+}

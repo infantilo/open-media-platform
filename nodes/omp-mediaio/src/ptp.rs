@@ -65,6 +65,11 @@ pub fn align_rtp_to_st2059(pipeline: &gst::Pipeline, clock: &PtpClock, audio_rat
     set_base_time_and_offsets(pipeline, clock.time(), audio_rate)
 }
 
+/// Wie [`align_rtp_to_st2059`] mit einer beliebigen Uhrzeit (z. B. Systemuhr als **Ersatz ohne PTP-Karte**, nur zum Testen).
+pub fn align_rtp_with_clock_time(pipeline: &gst::Pipeline, now: gst::ClockTime, audio_rate: u32) -> Result<bool, String> {
+    set_base_time_and_offsets(pipeline, now, audio_rate)
+}
+
 /// Kern von [`align_rtp_to_st2059`], von der Uhr getrennt (testbar mit der Systemuhr).
 fn set_base_time_and_offsets(pipeline: &gst::Pipeline, now: gst::ClockTime, audio_rate: u32) -> Result<bool, String> {
     pipeline.set_start_time(gst::ClockTime::NONE);

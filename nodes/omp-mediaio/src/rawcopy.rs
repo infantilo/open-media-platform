@@ -20,6 +20,61 @@ const STALL: Duration = Duration::from_secs(3);
 /// Wartezeit eines blockierenden Lesens (Futex); danach wird kurz die Stopp-Bedingung geprüft und erneut gewartet.
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
 
+/// Laufzeit-Steuerung des A/V-Ausgleichs im Kopierpfad (UMSETZUNG 106.5). Alle Werte sind jederzeit änderbar.
+///
+/// - Ton: Verzögerung in Samples. Ganzzahlig und stationär bleibt der Pfad **bitgleich** (nur gelesener Index verschoben).
+///   Bei Änderung gleitet die Verzögerung mit höchstens `slew_permille` (‰ = ms je s) zum Ziel, dazwischen wird linear
+///   interpoliert (kein Sprung im Ton). Datenkanäle (`data_channels`) werden nie interpoliert, nur ganzzahlig versetzt.
+/// - Bild: Verzögerung in ganzen Bildern über einen lokalen Ring; bei Änderung springt das Bild um ganze Bilder.
+pub struct AvDelay {
+    audio_target: std::sync::atomic::AtomicU64,
+    audio_current: std::sync::atomic::AtomicU64,
+    slew_permille: std::sync::atomic::AtomicU64,
+    video_frames: std::sync::atomic::AtomicU32,
+    max_video_frames: u32,
+    data_channels: Mutex<Vec<usize>>,
+}
+
+impl AvDelay {
+    pub fn new(max_video_frames: u32) -> Arc<AvDelay> {
+        Arc::new(AvDelay {
+            audio_target: std::sync::atomic::AtomicU64::new(0f64.to_bits()),
+            audio_current: std::sync::atomic::AtomicU64::new(0f64.to_bits()),
+            slew_permille: std::sync::atomic::AtomicU64::new(5.0f64.to_bits()),
+            video_frames: std::sync::atomic::AtomicU32::new(0),
+            max_video_frames,
+            data_channels: Mutex::new(Vec::new()),
+        })
+    }
+    /// Zielverzögerung des Tons in Samples (auf ganze Samples gerundet, ≥ 0).
+    pub fn set_audio_delay_samples(&self, samples: f64) {
+        let v = if samples.is_finite() { samples.round().max(0.0) } else { 0.0 };
+        self.audio_target.store(v.to_bits(), Ordering::Relaxed);
+    }
+    pub fn audio_target_samples(&self) -> f64 {
+        f64::from_bits(self.audio_target.load(Ordering::Relaxed))
+    }
+    /// Aktuell wirksame Tonverzögerung (gleitet zum Ziel).
+    pub fn audio_current_samples(&self) -> f64 {
+        f64::from_bits(self.audio_current.load(Ordering::Relaxed))
+    }
+    pub fn set_slew_permille(&self, p: f64) {
+        self.slew_permille.store(p.clamp(0.01, 1000.0).to_bits(), Ordering::Relaxed);
+    }
+    pub fn set_video_frames(&self, n: u32) {
+        self.video_frames.store(n.min(self.max_video_frames), Ordering::Relaxed);
+    }
+    pub fn max_frames(&self) -> u32 {
+        self.max_video_frames
+    }
+    pub fn video_frames(&self) -> u32 {
+        self.video_frames.load(Ordering::Relaxed)
+    }
+    pub fn set_data_channels(&self, ch: Vec<usize>) {
+        *self.data_channels.lock().expect("lock poisoned") = ch;
+    }
+}
+
 /// Das Zielformat, dem die Quelle entsprechen muss.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VideoFormat {
@@ -151,6 +206,23 @@ impl RawAudioCopy {
         flowed: Arc<AtomicBool>,
         on_dead: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self, String> {
+        Self::start_delayed(in_ctx, out_ctx, source_flow_id, source_def, out_flow_id, label, target, flowed, on_dead, None)
+    }
+
+    /// Wie [`start`](Self::start), mit optionaler Laufzeit-Verzögerung (`AvDelay`). Ohne Steuerung oder bei Verzögerung 0
+    /// ist der Pfad derselbe bitgleiche Kopierer.
+    pub fn start_delayed(
+        in_ctx: Arc<MxlContext>,
+        out_ctx: Arc<MxlContext>,
+        source_flow_id: &str,
+        source_def: serde_json::Value,
+        out_flow_id: &str,
+        label: &str,
+        target: AudioFormat,
+        flowed: Arc<AtomicBool>,
+        on_dead: Arc<dyn Fn() + Send + Sync>,
+        ctl: Option<Arc<AvDelay>>,
+    ) -> Result<Self, String> {
         let mut def = source_def;
         if let Some(o) = def.as_object_mut() {
             o.insert("id".into(), out_flow_id.into());
@@ -181,8 +253,92 @@ impl RawAudioCopy {
                 let batch = AUDIO_BATCH as u64;
                 let mut index = now_index().saturating_sub(batch * 3);
                 let mut last_ok = Instant::now();
+                let mut cur_delay = 0.0f64;
                 while run.load(Ordering::Relaxed) {
-                    match samples_reader.get_samples(index, AUDIO_BATCH, READ_TIMEOUT) {
+                    let (target_d, slew) = match &ctl {
+                        Some(c) => (c.audio_target_samples(), f64::from_bits(c.slew_permille.load(Ordering::Relaxed)) / 1000.0),
+                        None => (0.0, 0.0),
+                    };
+                    let stationary = (cur_delay - target_d).abs() < 1e-9 && cur_delay.fract() == 0.0;
+                    if ctl.is_some() && !stationary {
+                        // Gleitende Verzögerung: pro Sample um höchstens `slew` Samples zum Ziel, linear interpoliert.
+                        let data_ch = ctl.as_ref().map(|c| c.data_channels.lock().expect("lock poisoned").clone()).unwrap_or_default();
+                        let mut d = Vec::with_capacity(AUDIO_BATCH);
+                        // Auf einer Kopie rechnen: scheitert das Lesen (Timeout), wird derselbe Block wiederholt, ohne dass die
+                        // Verzögerung schon weitergelaufen ist (sonst fehlen Samples im Ton).
+                        let mut next_delay = cur_delay;
+                        for _ in 0..AUDIO_BATCH {
+                            let step = (target_d - next_delay).clamp(-slew, slew);
+                            next_delay += step;
+                            if (next_delay - target_d).abs() < 1e-9 {
+                                next_delay = target_d;
+                            }
+                            d.push(next_delay);
+                        }
+                        // MXL adressiert einen Sample-Block über seinen LETZTEN Index: der Block `index` umfasst [index−479, index].
+                        let w0 = (index + 1).saturating_sub(AUDIO_BATCH as u64);
+                        let pos = |i: usize| (w0 + i as u64) as f64 - d[i];
+                        let lo_f = pos(0).min(pos(AUDIO_BATCH - 1)).floor();
+                        let hi_f = pos(0).max(pos(AUDIO_BATCH - 1)).floor() + 1.0;
+                        if lo_f < 0.0 {
+                            index += batch;
+                            continue;
+                        }
+                        let (lo, len) = (lo_f as u64, (hi_f - lo_f) as usize + 1);
+                        match samples_reader.get_samples(lo + len as u64 - 1, len, READ_TIMEOUT) {
+                            Ok(data) => {
+                                if let Ok(mut access) = samples_writer.open_samples(index, AUDIO_BATCH) {
+                                    for ch in 0..data.num_of_channels().min(access.channels()) {
+                                        let Ok(src) = data.channel_data(ch) else { continue };
+                                        let words: Vec<u32> = src.0.chunks_exact(4).chain(src.1.chunks_exact(4)).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+                                        let mut out = Vec::with_capacity(AUDIO_BATCH * 4);
+                                        for i in 0..AUDIO_BATCH {
+                                            let p = pos(i);
+                                            let k = (p.floor() as u64).saturating_sub(lo) as usize;
+                                            let w = if data_ch.contains(&ch) {
+                                                // Datenkanal: nie interpolieren, nur ganzzahlig versetzt.
+                                                words.get((p.round() as u64).saturating_sub(lo) as usize).copied().unwrap_or(0)
+                                            } else {
+                                                let frac = (p - p.floor()) as f32;
+                                                let a = f32::from_bits(words.get(k).copied().unwrap_or(0));
+                                                let b = f32::from_bits(words.get(k + 1).copied().unwrap_or(0));
+                                                (a + (b - a) * frac).to_bits()
+                                            };
+                                            out.extend_from_slice(&w.to_le_bytes());
+                                        }
+                                        if let Ok(dst) = access.channel_data_mut(ch) {
+                                            copy_fragments((&out, &[]), dst);
+                                        }
+                                    }
+                                    if access.commit().is_ok() {
+                                        flowed.store(true, Ordering::Relaxed);
+                                        last_ok = Instant::now();
+                                    }
+                                }
+                                index += batch;
+                                cur_delay = next_delay;
+                            }
+                            Err(mxl::Error::Timeout) => {}
+                            Err(mxl::Error::OutOfRangeTooLate) => index = index.max(now_index().saturating_sub(batch * 2)),
+                            Err(mxl::Error::OutOfRangeTooEarly) => thread::sleep(Duration::from_millis(2)),
+                            Err(_) => thread::sleep(Duration::from_millis(20)),
+                        }
+                        if let Some(c) = &ctl {
+                            c.audio_current.store(cur_delay.to_bits(), Ordering::Relaxed);
+                        }
+                        if last_ok.elapsed() > STALL {
+                            dd.store(true, Ordering::Relaxed);
+                            on_dead();
+                            break;
+                        }
+                        continue;
+                    }
+                    if let Some(c) = &ctl {
+                        c.audio_current.store(cur_delay.to_bits(), Ordering::Relaxed);
+                    }
+                    // Stationär (auch Verzögerung 0): bitgleiche Kopie, gelesen wird um die ganzzahlige Verzögerung früher.
+                    let read_at = index.saturating_sub(cur_delay as u64);
+                    match samples_reader.get_samples(read_at, AUDIO_BATCH, READ_TIMEOUT) {
                         Ok(data) => {
                             match samples_writer.open_samples(index, AUDIO_BATCH) {
                                 Ok(mut access) => {
@@ -250,6 +406,22 @@ impl RawVideoCopy {
         flowed: Arc<AtomicBool>,
         on_dead: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self, String> {
+        Self::start_delayed(in_ctx, out_ctx, source_flow_id, source_def, out_flow_id, label, target, flowed, on_dead, None)
+    }
+
+    /// Wie [`start`](Self::start), mit optionaler Bildverzögerung in ganzen Bildern (lokaler Ring, `AvDelay`).
+    pub fn start_delayed(
+        in_ctx: Arc<MxlContext>,
+        out_ctx: Arc<MxlContext>,
+        source_flow_id: &str,
+        source_def: serde_json::Value,
+        out_flow_id: &str,
+        label: &str,
+        target: VideoFormat,
+        flowed: Arc<AtomicBool>,
+        on_dead: Arc<dyn Fn() + Send + Sync>,
+        ctl: Option<Arc<AvDelay>>,
+    ) -> Result<Self, String> {
         let mut def = source_def;
         if let Some(o) = def.as_object_mut() {
             o.insert("id".into(), out_flow_id.into());
@@ -292,6 +464,7 @@ impl RawVideoCopy {
                 // Zwei Bilder hinter der Uhr beginnen: die Quelle hat dort sicher fertig geschrieben.
                 let mut index = now_index().saturating_sub(2);
                 let mut last_ok = Instant::now();
+                let mut ring: std::collections::VecDeque<Vec<u8>> = std::collections::VecDeque::new();
                 while run.load(Ordering::Relaxed) {
                     // Blockierend: der Aufruf kehrt zurück, sobald der Schreiber das Grain fertig committet hat (Futex), oder
                     // nach dem Timeout — kein Nachsehen im Takt. Gemessen (blocking_read_probe, MXL 1.1.0 GA): auch mit 8
@@ -301,8 +474,19 @@ impl RawVideoCopy {
                             match grain_writer.open_grain(index) {
                                 Ok(mut access) => {
                                     let payload = access.payload_mut();
-                                    let n = payload.len().min(g.payload.len());
-                                    payload[..n].copy_from_slice(&g.payload[..n]);
+                                    let k = ctl.as_ref().map_or(0, |c| c.video_frames()) as usize;
+                                    if k == 0 {
+                                        ring.clear();
+                                    } else {
+                                        // Lokaler Ring: das Bild von vor `k` Bildern ausgeben (solange der Ring noch nicht reicht, das älteste).
+                                        ring.push_back(g.payload.to_vec());
+                                        while ring.len() > k + 1 {
+                                            ring.pop_front();
+                                        }
+                                    }
+                                    let src: &[u8] = if k == 0 { &g.payload[..] } else { &ring[0][..] };
+                                    let n = payload.len().min(src.len());
+                                    payload[..n].copy_from_slice(&src[..n]);
                                     let total = access.total_slices();
                                     if access.commit(total).is_ok() {
                                         flowed.store(true, Ordering::Relaxed);

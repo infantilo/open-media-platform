@@ -293,6 +293,35 @@ impl Store {
                     Err(e) => reply(Self::admin_err(e)),
                 }
             }
+            service::Op::CreateEventReturn => {
+                let v = match body_json() {
+                    Ok(v) => v,
+                    Err(r) => return reply(r),
+                };
+                let g = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                let ttl = v.get("ttl_minutes").and_then(Value::as_i64).unwrap_or(24 * 60);
+                let mut adm = self.admin.lock().expect("lock poisoned");
+                match adm.create_event_return(&actor, &g("key"), &g("event"), &g("name"), &g("mode"), ttl, admin::now_secs()) {
+                    Ok((r, guest, note)) => match self.apply_admin(&adm) {
+                        Ok(()) => {
+                            let out = json!({"return": r, "guest": guest.as_ref().map(|g| Self::guest_out(req, g))});
+                            (json_resp(201, out), audit(note))
+                        }
+                        Err(e) => reply(json_resp(500, json!({"error": e}))),
+                    },
+                    Err(e) => reply(Self::admin_err(e)),
+                }
+            }
+            service::Op::DeleteEventReturns(event) => {
+                let mut adm = self.admin.lock().expect("lock poisoned");
+                match adm.delete_event_returns(&event) {
+                    Ok((n, note)) => match self.apply_admin(&adm) {
+                        Ok(()) => (json_resp(200, json!({"ok": true, "removed": n})), audit(note)),
+                        Err(e) => reply(json_resp(500, json!({"error": e}))),
+                    },
+                    Err(e) => reply(Self::admin_err(e)),
+                }
+            }
             service::Op::DeleteGuest(id) => {
                 let mut adm = self.admin.lock().expect("lock poisoned");
                 match adm.delete_guest(id) {

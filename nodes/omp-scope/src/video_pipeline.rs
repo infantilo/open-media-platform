@@ -397,6 +397,12 @@ fn build(
                         // R 103 (Kapitel 78.3): Gamut auf demselben Analysebild.
                         let matrix = crate::gamut::Matrix::from_flow_colorspace(flow_meta.lock().expect("lock poisoned").colorspace.as_deref());
                         qc.observe_gamut(&luma, &cb, &cr, WAVEFORM_WIDTH, ANALYSIS_HEIGHT, matrix, now);
+                        // Überwachung (106.13c): Rohbedingungen gegen die einstellbaren Schwellen; Haltezeit/Flanken wertet `monitor` aus.
+                        let snap = qc.snapshot();
+                        let mon = crate::monitor::rt();
+                        mon.video_frame(now);
+                        mon.feed("black", snap.mean_luma_percent.is_some_and(|p| p * 2.55 <= mon.cfg("black").threshold), now, None);
+                        mon.feed("freeze", snap.frame_diff.is_some_and(|d| d <= mon.cfg("freeze").threshold), now, None);
                     }
                     if let Ok(out_buffer) = build_output_buffer(&output_info, &image) {
                         let _ = app_src.push_buffer(out_buffer);

@@ -304,9 +304,26 @@ impl NodeHandle {
             );
             return;
         };
+        let alert = health::Alert { node_id: self.node_id.clone(), message: message.into(), kind: None, state: None, severity: None, line: None };
+        if let Err(e) = publisher.publish_alert(&alert).await {
+            eprintln!("omp-node-sdk: alert publish failed: {e}");
+        }
+    }
+
+    /// Wie [`publish_alert`](Self::publish_alert) mit strukturierten Angaben (Art, Zustand `raised`/`cleared`, Schweregrad, Leitung),
+    /// damit Empfänger Eintritt und Ende eines Alarms zuordnen können (Kapitel 106.13c).
+    pub async fn publish_alert_ex(&self, kind: &str, state: &str, severity: &str, line: &str, message: impl Into<String>) {
+        let Some(publisher) = &self.publisher else {
+            eprintln!("omp-node-sdk: alert dropped (no nats connection): {kind} {state}");
+            return;
+        };
         let alert = health::Alert {
             node_id: self.node_id.clone(),
             message: message.into(),
+            kind: Some(kind.to_string()),
+            state: Some(state.to_string()),
+            severity: Some(severity.to_string()),
+            line: if line.is_empty() { None } else { Some(line.to_string()) },
         };
         if let Err(e) = publisher.publish_alert(&alert).await {
             eprintln!("omp-node-sdk: alert publish failed: {e}");

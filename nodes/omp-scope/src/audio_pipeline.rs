@@ -36,6 +36,10 @@ use crate::flowmeta::{self, AudioFlowMeta};
 use crate::qc::{self, AudioQc, AudioQcSnapshot};
 use crate::timing::{FlowTiming, TimingSnapshot};
 
+fn snapshot_momentary(m: &EbuR128) -> Option<f64> {
+    m.loudness_momentary().ok()
+}
+
 pub const METER_INPUT_ID: &str = "audio";
 const LEVEL_INTERVAL_NS: u64 = 50_000_000;
 
@@ -324,6 +328,19 @@ fn build(
                     let block_peak_dbfs = block_peak.map(qc::linear_to_dbfs);
                     if let Some(db) = block_peak_dbfs {
                         audio_qc.lock().expect("lock poisoned").observe(db, qc_context.now_ns());
+                        // Überwachung (106.13c)
+                        let now = qc_context.now_ns();
+                        let mon = crate::monitor::rt();
+                        mon.audio_block(now);
+                        mon.feed("silence", db < mon.cfg("silence").threshold, now, None);
+                        let ch = channels_val as usize;
+                        let clip = mon.cfg("clipping");
+                        mon.feed("clipping", crate::monitor::clipping_run(&samples, ch, clip.threshold as f32) >= clip.min_samples.max(1), now, None);
+                        mon.feed("loudness", snapshot_momentary(m).is_some_and(|l| l > mon.cfg("loudness").threshold), now, None);
+                        if ch >= 2 {
+                            mon.feed("phase", crate::monitor::correlation(&samples, ch, 0, 1).is_some_and(|c| c < mon.cfg("phase").threshold), now, None);
+                            mon.feed("monoDropout", crate::monitor::mono_dropout(&crate::monitor::channel_peaks_db(&samples, ch), 0, 1, mon.cfg("monoDropout").threshold), now, None);
+                        }
                     }
                     let mut snap = loudness.lock().expect("lock poisoned");
                     snap.momentary_lufs = m.loudness_momentary().ok();

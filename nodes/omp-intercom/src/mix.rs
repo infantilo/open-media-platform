@@ -601,4 +601,133 @@ mod tests {
         assert!(per_frame_ms < 20.0, "{per_frame_ms} ms je Frame");
         eprintln!("100x20: {per_frame_ms:.3} ms je Frame");
     }
+
+    /// Event-Rückweg (106.12): Der Kommentator hört sich nie selbst. Sein Mikrofon liegt nur auf dem Mikrofonkanal, sein Rückweg ist
+    /// ein anderer Kanal; die Energie seines Mikrofons im eigenen Rückweg bleibt unter −60 dB (relativ zum Mikrofonpegel).
+    #[test]
+    fn event_return_commentator_never_hears_self() {
+        use crate::admin::Admin;
+        let mut a = Admin::open(None).unwrap();
+        let now = 1_000;
+        let (mix, _, _) = a.create_event_return("anna", "e/pgm", "e", "PGM", "mix", 0, now).unwrap();
+        let (kom, guest, _) = a.create_event_return("anna", "e/kom", "e", "Kommentator", "guest", 60, now).unwrap();
+        let guest = guest.unwrap();
+        let mut e = Engine::new();
+        let ch_of = |id: u32| -> Channel {
+            let c = a.cfg.channels.iter().find(|c| c.id == id).unwrap();
+            Channel { duck_db: c.duck_db as f32, ..Channel::default() }
+        };
+        for c in &a.cfg.channels {
+            e.channels.insert(c.id, ch_of(c.id));
+        }
+        // Teilnehmer: Gast (Kommentator), Programm-Quelle (Rückweg-Quelle), Mikrofon-Anbindung
+        let mut guest_party = Party::default();
+        for r in &guest.routes {
+            let x = guest_party.route_mut(r.ch);
+            x.listen = r.listen;
+            x.talk_allowed = r.talk;
+            x.talk_key = r.talk;
+        }
+        e.parties.insert(1000, guest_party);
+        for p in &a.cfg.parties {
+            let mut ep = Party::default();
+            ep.is_program = p.kind == "program";
+            for r in &p.routes {
+                let x = ep.route_mut(r.ch);
+                x.listen = r.listen;
+                x.talk_allowed = r.talk;
+                x.talk_key = r.talk;
+            }
+            e.parties.insert(p.id, ep);
+        }
+        // Kommentator spricht (1 kHz, 0,3); Programm läuft auf der Rückweg-Quelle des Kommentators (440 Hz, 0,2).
+        let mut ins: BTreeMap<_, _> = BTreeMap::new();
+        ins.insert(1000u32, tone(0.3, 1000.0, 0));
+        ins.insert(kom.prog_party, tone(0.2, 440.0, 0));
+        let (with_mic, _) = e.process(&ins);
+        let mut quiet = ins.clone();
+        quiet.insert(1000u32, vec![0.0; FRAME]);
+        let mut e2 = Engine::new();
+        e2.channels = e.channels.clone();
+        e2.parties = e.parties.clone();
+        let (without_mic, _) = e2.process(&quiet);
+        let mut diff = 0.0f32;
+        let mut mic_e = 0.0f32;
+        for i in 0..FRAME {
+            diff += (with_mic[&1000].left[i] - without_mic[&1000].left[i]).powi(2);
+            mic_e += (0.3f32 * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 48_000.0).sin()).powi(2);
+        }
+        let rel_db = 10.0 * (diff.max(1e-20) / mic_e).log10();
+        assert!(rel_db < -60.0, "Kommentator hört sich selbst: {rel_db:.1} dB");
+        // Das Programm kommt beim Kommentator an
+        assert!(without_mic[&1000].left.iter().map(|v| v * v).sum::<f32>() > 1e-3, "Rückweg trägt kein Programm");
+        let _ = mix;
+    }
+
+    /// IFB-Ducking (106.12): Spricht die Regie in den Rückwegkanal, wird das Programm dort um `duck_db` gedämpft.
+    #[test]
+    fn event_return_ifb_ducks_program_when_director_talks() {
+        use crate::admin::Admin;
+        let mut a = Admin::open(None).unwrap();
+        let (r, _, _) = a.create_event_return("anna", "e/pgm", "e", "PGM", "mix", 0, 1_000).unwrap();
+        let mut e = Engine::new();
+        for c in &a.cfg.channels {
+            e.channels.insert(c.id, Channel { duck_db: c.duck_db as f32, ..Channel::default() });
+        }
+        for p in &a.cfg.parties {
+            let mut ep = Party::default();
+            ep.is_program = p.kind == "program";
+            for x in &p.routes {
+                let rt = ep.route_mut(x.ch);
+                rt.listen = x.listen;
+                rt.talk_allowed = x.talk;
+                rt.talk_key = x.talk;
+            }
+            e.parties.insert(p.id, ep);
+        }
+        // Regie: Mensch, spricht in den Rückwegkanal
+        let mut dir = Party::default();
+        let x = dir.route_mut(r.ret_channel);
+        x.talk_allowed = true;
+        x.talk_key = true;
+        e.parties.insert(2000, dir);
+        let prog = || tone(0.2, 440.0, 0);
+        let quiet_in: BTreeMap<_, _> = [(r.prog_party, prog())].into_iter().collect();
+        let mut loud = quiet_in.clone();
+        loud.insert(2000u32, tone(0.3, 1000.0, 0));
+        // einschwingen lassen
+        let mut e1 = Engine::new();
+        e1.channels = e.channels.clone();
+        e1.parties = e.parties.clone();
+        let mut e2 = Engine::new();
+        e2.channels = e.channels.clone();
+        e2.parties = e.parties.clone();
+        let mut ref_e = 0.0f32;
+        let mut duck_e = 0.0f32;
+        for _ in 0..20 {
+            let (o1, _) = e1.process(&quiet_in);
+            ref_e = o1[&r.ret_port_party].left.iter().map(|v| v * v).sum();
+            let (o2, _) = e2.process(&loud);
+            // Regie ist nicht Hörer des Ausgangs: im Ausgang bleibt nur Programm + Regiestimme, Programmanteil über getrennten Lauf messen
+            duck_e = o2[&r.ret_port_party].left.iter().map(|v| v * v).sum();
+        }
+        // Programmanteil im Duck-Lauf = Ausgang mit Regie − Ausgang nur mit Regie
+        let mut e3 = Engine::new();
+        e3.channels = e.channels.clone();
+        e3.parties = e.parties.clone();
+        let only_dir: BTreeMap<_, _> = [(2000u32, tone(0.3, 1000.0, 0))].into_iter().collect();
+        let mut dir_e = 0.0f32;
+        for _ in 0..20 {
+            let (o3, _) = e3.process(&only_dir);
+            dir_e = o3[&r.ret_port_party].left.iter().map(|v| v * v).sum();
+        }
+        let _ = dir_e;
+        assert!(ref_e > 1e-3, "Programm kommt am Ausgang an");
+        assert!(duck_e.is_finite());
+        // Programm im Duck-Lauf: gesamt − Regie allein (Energien addieren sich bei verschiedenen Frequenzen)
+        let prog_ducked = (duck_e - dir_e).max(0.0);
+        let ratio_db = 10.0 * (prog_ducked.max(1e-12) / ref_e).log10();
+        assert!(ratio_db < -9.0, "Programm wird beim Sprechen der Regie nicht gedämpft: {ratio_db:.1} dB");
+    }
 }
+

@@ -637,6 +637,11 @@ impl St2110VideoInput {
         })
     }
 
+    /// Der RTP-Jitterbuffer (für den Etiketten-Probe, `rtplabel::attach`).
+    pub fn jitterbuffer(&self) -> &gst::Element {
+        &self.jitterbuffer
+    }
+
     /// `(num_lost, num_late)` seit Pipeline-Start, direkt aus
     /// `rtpjitterbuffer`s `stats`-Property (`GstStructure` mit
     /// `guint64`-Feldern `num-lost`/`num-late`, per `gst-inspect-1.0
@@ -953,6 +958,11 @@ impl St2110AudioInput {
         });
 
         Ok(St2110AudioInput { tail: audioconvert, flowed, jitterbuffer, rtp_caps })
+    }
+
+    /// Der RTP-Jitterbuffer (für den Etiketten-Probe, `rtplabel::attach`).
+    pub fn jitterbuffer(&self) -> &gst::Element {
+        &self.jitterbuffer
     }
 
     /// S. `St2110VideoInput::jitterbuffer_stats`-Doku, identisches

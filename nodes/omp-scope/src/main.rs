@@ -33,6 +33,7 @@ mod anc;
 mod audio_pipeline;
 mod flowmeta;
 mod gamut;
+mod monitor;
 mod qc;
 mod scope_image;
 mod timing;
@@ -270,12 +271,27 @@ impl ParamStore for ScopeStore {
             readonly_bool("audioSilenceDetected"),
             readonly_number("audioSilenceSeconds", Some("s")),
         ];
+        // --- Überwachung (106.13c): Profil, erwartetes Format, je Prüfung einstellbar ---
+        let rw = |name: String, kind: ParamType, unit: Option<&str>| ParamSpec { name, kind, unit: unit.map(str::to_string), range: None, readonly: false };
+        parameters.push(rw("qc.profile".into(), ParamType::String, None));
+        parameters.push(rw("qc.line".into(), ParamType::String, None));
+        parameters.push(rw("qc.expectedFormat".into(), ParamType::String, None));
+        parameters.push(readonly_string("qc.status"));
+        for c in monitor::CHECKS {
+            parameters.push(rw(format!("qc.{c}.enabled"), ParamType::Boolean, None));
+            parameters.push(rw(format!("qc.{c}.threshold"), ParamType::Number, None));
+            parameters.push(rw(format!("qc.{c}.holdSeconds"), ParamType::Number, Some("s")));
+            parameters.push(rw(format!("qc.{c}.severity"), ParamType::String, None));
+        }
         parameters.extend(timing_params("video"));
         parameters.extend(timing_params("audio"));
         Descriptor { latency: None, parameters, methods: vec![] }
     }
 
     fn get(&self, name: &str) -> Option<Value> {
+        if let Some(v) = monitor_get(name) {
+            return Some(v);
+        }
         match name {
             "previewUrl" => Some(serde_json::json!(self.preview_url)),
             "levelsUrl" => Some(serde_json::json!(self.levels_url)),
@@ -377,6 +393,9 @@ impl ParamStore for ScopeStore {
     }
 
     fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        if name.starts_with("qc.") {
+            return monitor_set(name, &value);
+        }
         if name != "scte35Input" {
             return Err(SetError::ReadOnly);
         }
@@ -455,6 +474,56 @@ impl ParamStore for ScopeStore {
         }
         uibundle::route(method, path)
     }
+}
+
+/// Lesen der Überwachungs-Parameter (`qc.*`); `None`, wenn der Name keiner davon ist.
+fn monitor_get(name: &str) -> Option<Value> {
+    let rt = monitor::rt();
+    let st = rt.settings.lock().expect("lock poisoned").clone();
+    match name {
+        "qc.profile" => return Some(serde_json::json!(st.profile)),
+        "qc.line" => return Some(serde_json::json!(st.line)),
+        "qc.expectedFormat" => return Some(serde_json::json!(st.expected_format)),
+        "qc.status" => return Some(serde_json::json!(serde_json::to_string(&rt.status(0)).unwrap_or_default())),
+        _ => {}
+    }
+    let rest = name.strip_prefix("qc.")?;
+    let (check, field) = rest.split_once('.')?;
+    if !monitor::CHECKS.contains(&check) {
+        return None;
+    }
+    let c = st.cfg(check);
+    match field {
+        "enabled" => Some(serde_json::json!(c.enabled)),
+        "threshold" => Some(serde_json::json!(c.threshold)),
+        "holdSeconds" => Some(serde_json::json!(c.hold_seconds)),
+        "severity" => Some(serde_json::json!(c.severity)),
+        _ => None,
+    }
+}
+
+fn monitor_set(name: &str, value: &Value) -> Result<(), SetError> {
+    let rt = monitor::rt();
+    let mut st = rt.settings.lock().expect("lock poisoned");
+    match name {
+        "qc.profile" => return st.set_profile(value.as_str().ok_or(SetError::Unknown)?).map_err(|_| SetError::Unknown),
+        "qc.line" => {
+            st.line = value.as_str().ok_or(SetError::Unknown)?.to_string();
+            return Ok(());
+        }
+        "qc.expectedFormat" => {
+            let text = value.as_str().ok_or(SetError::Unknown)?;
+            if !text.trim().is_empty() && serde_json::from_str::<Value>(text).is_err() {
+                return Err(SetError::Unknown);
+            }
+            st.expected_format = text.to_string();
+            return Ok(());
+        }
+        _ => {}
+    }
+    let rest = name.strip_prefix("qc.").ok_or(SetError::Unknown)?;
+    let (check, field) = rest.split_once('.').ok_or(SetError::Unknown)?;
+    st.set_field(check, field, value).map_err(|_| SetError::Unknown)
 }
 
 fn opt_u32_json(v: Option<u32>) -> Value {
@@ -564,6 +633,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let video_shutdown_thread = video_shutdown.clone();
     let video_measurements = video_pipeline::Measurements::default();
     let video_measurements_thread = video_measurements.clone();
+    let video_measurements_alarm = video_measurements.clone();
     let video_thread = std::thread::spawn(move || {
         video_pipeline::run(
             video_context,
@@ -593,6 +663,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let audio_shutdown_thread = audio_shutdown.clone();
     let audio_measurements = audio_pipeline::Measurements::default();
     let audio_measurements_thread = audio_measurements.clone();
+    let audio_measurements_alarm = audio_measurements.clone();
     let audio_thread = std::thread::spawn(move || {
         audio_pipeline::run(audio_context, audio_tx, audio_shutdown_thread, audio_ready_tx, audio_heartbeat_thread, audio_measurements_thread)
     });
@@ -748,6 +819,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     handle.register_worker("audio-pipeline", audio_heartbeat);
     handle.register_worker("preview-accept", preview_heartbeat);
     handle.register_worker("levels-accept", levels_heartbeat);
+
+    // Überwachung (106.13c): zweimal je Sekunde auswerten; Eintritt und Ende als Alarm melden.
+    tokio::spawn({
+        let handle = handle.clone();
+        let ctx = mxl_context.clone();
+        let vm = video_measurements_alarm;
+        let am = audio_measurements_alarm;
+        async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+            loop {
+                tick.tick().await;
+                let v = vm.flow();
+                let a = am.flow();
+                let mut actual = serde_json::Map::new();
+                if v.width.is_some() || v.grain_rate.is_some() {
+                    actual.insert("video".into(), serde_json::json!({
+                        "width": v.width, "height": v.height,
+                        "rate": v.grain_rate.map(|(n, d)| format!("{n}/{d}")),
+                    }));
+                }
+                if a.channel_count.is_some() || a.sample_rate.is_some() {
+                    actual.insert("audio".into(), serde_json::json!({ "channels": a.channel_count, "sampleRate": a.sample_rate }));
+                }
+                let rt = monitor::rt();
+                let line = rt.settings.lock().expect("lock poisoned").line.clone();
+                for al in rt.evaluate(ctx.now_ns(), &Value::Object(actual)) {
+                    let state = if al.edge == monitor::Edge::Raised { "raised" } else { "cleared" };
+                    let text = if al.edge == monitor::Edge::Raised { al.text.clone() } else { format!("{} – beendet", al.text) };
+                    handle.publish_alert_ex(&format!("signal-{}", al.check), state, &al.severity, &line, text).await;
+                }
+            }
+        }
+    });
 
     // Gleiches Muster wie `omp-viewer::main` (dort zusätzlich gegen ein
     // "Pipeline-Thread endete"-Event racend — hier bewusst vereinfacht

@@ -63,8 +63,13 @@ impl Colorimetry {
         format!("{} {}", self.colorspace, self.transfer)
     }
 
-    /// Aus `OMP_COLORIMETRY` einmal je Prozess; ungültiger Wert → Meldung auf stderr und SDR.
-    pub fn process_default() -> &'static Colorimetry {
+    /// Kennzeichnung, die neue Ausgangs-Flows dieses Prozesses tragen: ein gesetzter Override ([`set_process_override`],
+    /// z. B. vom Normalizer nach dem Hausformat), sonst `OMP_COLORIMETRY` (einmal je Prozess gelesen; ungültiger Wert →
+    /// Meldung auf stderr und SDR).
+    pub fn process_default() -> Colorimetry {
+        if let Some(c) = OVERRIDE.read().expect("lock poisoned").clone() {
+            return c;
+        }
         static CELL: OnceLock<Colorimetry> = OnceLock::new();
         CELL.get_or_init(|| match std::env::var("OMP_COLORIMETRY") {
             Ok(v) => Colorimetry::parse(&v).unwrap_or_else(|e| {
@@ -73,13 +78,22 @@ impl Colorimetry {
             }),
             Err(_) => Colorimetry::default(),
         })
+        .clone()
     }
+}
+
+static OVERRIDE: std::sync::RwLock<Option<Colorimetry>> = std::sync::RwLock::new(None);
+
+/// Setzt (oder löscht mit `None`) die Kennzeichnung für **danach angelegte** Ausgangs-Flows dieses Prozesses. Für Nodes,
+/// die das Farbformat zur Laufzeit ändern (Normalizer, Kap. 106); bereits geschriebene Flows ändern sich nicht.
+pub fn set_process_override(c: Option<Colorimetry>) {
+    *OVERRIDE.write().expect("lock poisoned") = c;
 }
 
 /// Warnt auf stderr, wenn ein Eingang anders gekennzeichnet ist als der eigene Ausgang dieses Prozesses (z. B. ein
 /// HDR-Flow an einem SDR-Mischer). Gibt `true` bei Abweichung zurück.
 pub fn warn_if_mismatch(flow_id: &str, input: &Colorimetry) -> bool {
-    let own = Colorimetry::process_default();
+    let own = &Colorimetry::process_default();
     if input == own {
         return false;
     }

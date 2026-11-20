@@ -53,6 +53,8 @@ members = [
     "omp-subtitle-asr",
     "omp-sign-avatar",
     "omp-lowlat-mixer",
+    "omp-normalizer",
+    "omp-contribution",
 ]
 
 # Eigener Rust-Code mit Pixel-Schleifen (v210-Packen/Alpha-Key-Extraktion in

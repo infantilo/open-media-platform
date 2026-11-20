@@ -221,6 +221,10 @@ pub struct IngestHandle {
     audio_flowed: Arc<AtomicBool>,
     audio_mixmatrix: gst::Element,
     audio_channels: i32,
+    /// 106.8: Etiketten aus RTP-Zeitstempeln (Bild, Ton) und Name der benutzten Uhr (`ptp`, `system` = Ersatz zum Testen, `none`).
+    pub video_labels: Arc<omp_mediaio::rtplabel::RtpLabels>,
+    pub audio_labels: Arc<omp_mediaio::rtplabel::RtpLabels>,
+    pub label_clock: &'static str,
 }
 
 impl IngestHandle {
@@ -451,6 +455,33 @@ pub fn run_ingest(
         None => None,
     };
 
+    // 106.8: Etiketten aus den RTP-Zeitstempeln, wenn eine gemeinsame Uhr da ist (synchrone PTP-Uhr). `OMP_2110_LABEL_CLOCK=system`
+    // nimmt die Systemuhr als **Ersatz zum Testen ohne PTP-Karte** (nur sinnvoll, wenn der Sender dieselbe Uhr nutzt).
+    let (label_clock_fn, label_clock): (Option<omp_mediaio::rtplabel::ClockFn>, &'static str) = match (&ptp_clock, std::env::var("OMP_2110_LABEL_CLOCK").ok().as_deref()) {
+        (Some(c), _) => {
+            let c = c.clone();
+            (Some(Arc::new(move || if c.is_synced() { Some(c.time().nseconds()) } else { None })), "ptp")
+        }
+        (None, Some("system")) => {
+            let c = gst::SystemClock::obtain();
+            (Some(Arc::new(move || Some(c.time().nseconds()))), "system")
+        }
+        _ => (None, "none"),
+    };
+    let default_rtp = label_clock_fn.is_some() && std::env::var("OMP_2110_LABEL_SOURCE").map(|v| v != "arrival").unwrap_or(true);
+    let video_labels = omp_mediaio::rtplabel::RtpLabels::new(default_rtp);
+    let audio_labels = omp_mediaio::rtplabel::RtpLabels::new(default_rtp);
+    if let Some(clk) = &label_clock_fn {
+        let skew = 10_000_000_000u64;
+        if let Err(e) = omp_mediaio::rtplabel::attach(input.jitterbuffer(), &pipeline, 90_000, video_labels.clone(), clk.clone(), skew) {
+            eprintln!("omp-2110-gateway: Etiketten (Bild): {e}");
+        }
+        if let Err(e) = omp_mediaio::rtplabel::attach(audio_input.jitterbuffer(), &pipeline, config.audio_sample_rate as u32, audio_labels.clone(), clk.clone(), skew) {
+            eprintln!("omp-2110-gateway: Etiketten (Ton): {e}");
+        }
+        eprintln!("omp-2110-gateway: Etiketten aus RTP-Zeitstempeln (Uhr: {label_clock})");
+    }
+
     if let Err(e) = pipeline.set_state(gst::State::Playing) {
         let msg = format!("set state playing: {e}");
         let _ = tx.send(Event::Error(msg.clone()));
@@ -469,6 +500,9 @@ pub fn run_ingest(
         audio_flowed,
         audio_mixmatrix,
         audio_channels: config.audio_channels,
+        video_labels,
+        audio_labels,
+        label_clock,
     }));
 
     // Kein Reconnect-Kommandokanal nötig (fix konfiguriert) — reine

@@ -186,6 +186,40 @@ pub struct Config {
     pub templates: Vec<Template>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guests: Vec<Guest>,
+    /// Event-Rückwege (106.12): je Rückweg die angelegten Kanäle/Teilnehmer; sie verschwinden mit `delete_event_returns`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub event_returns: Vec<EventReturn>,
+}
+
+/// Ein Rückweg zu einer Leitung eines Events: IFB-Kanal (Programm + Regie mit Ducking), Programmeingang (Quelle, N-1 schon
+/// abgezogen), je nach Art Gast-Link (Browser/Handy) oder Mix-Ausgang (MXL, für die SRT-Rückleitung).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EventReturn {
+    /// Schlüssel des Rückwegs (Event + Leitung), vom Aufrufer vergeben; wieder anlegen mit demselben Schlüssel ist ein No-op.
+    pub key: String,
+    pub event: String,
+    pub name: String,
+    /// "guest" (Browser/Handy-Link) oder "mix" (MXL-Mix-Ausgang).
+    pub mode: String,
+    pub ret_channel: u32,
+    pub prog_party: u32,
+    /// Programmeingang `ret_in` (IS-05-Receiver „Programm N“): hier hinein wird die Rückweg-Quelle verbunden.
+    pub ret_in: u32,
+    /// Nur Art „guest“: Mikrofon-Kanal und Anbindung (Mikrofon zum Mischer).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub mic_channel: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub mic_port_party: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub mic_out: u32,
+    /// Nur Art „mix“: Anbindung, die den Rückwegkanal als Mix-Ausgang `ret_out` (MXL-Sender „Intercom Mix N“) ausgibt.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub ret_port_party: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub ret_out: u32,
+    /// Nur Art „guest“: der Gast-Zugang.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub guest_id: u32,
 }
 
 // ---------- Zeit: RFC 3339 ohne Zusatz-Abhängigkeit ----------
@@ -452,6 +486,20 @@ impl Config {
                 }
             }
         }
+        // Ebenso die Verdrahtung der Event-Rückwege (106.12): sie gehört dem Event, nicht der Einrichtung.
+        for r in &old.event_returns {
+            for c in old.channels.iter().filter(|c| c.id == r.ret_channel || (r.mic_channel != 0 && c.id == r.mic_channel)) {
+                if !self.channels.iter().any(|x| x.id == c.id) {
+                    self.channels.push(c.clone());
+                }
+            }
+            for pt in old.parties.iter().filter(|p| p.id == r.prog_party || (r.mic_port_party != 0 && p.id == r.mic_port_party) || (r.ret_port_party != 0 && p.id == r.ret_port_party)) {
+                if !self.parties.iter().any(|x| x.id == pt.id) {
+                    self.parties.push(pt.clone());
+                }
+            }
+        }
+        self.event_returns = old.event_returns.clone();
         let tokens: BTreeMap<u32, &str> = old.parties.iter().map(|p| (p.id, p.token.as_str())).collect();
         for p in &mut self.parties {
             p.token = match tokens.get(&p.id) {
@@ -476,6 +524,20 @@ impl Config {
     }
 
     /// Entfernt den Gast samt der für ihn angelegten Kanäle und Anbindungen.
+    /// Entfernt alle Rückwege eines Events samt ihren Kanälen, Teilnehmern und Gästen.
+    pub fn remove_event_returns(&mut self, event: &str) -> usize {
+        let gone: Vec<EventReturn> = self.event_returns.iter().filter(|r| r.event == event).cloned().collect();
+        for r in &gone {
+            self.channels.retain(|c| c.id != r.ret_channel && c.id != r.mic_channel);
+            self.parties.retain(|p| p.id != r.prog_party && p.id != r.mic_port_party && p.id != r.ret_port_party);
+            if r.guest_id != 0 {
+                self.guests.retain(|g| g.id != r.guest_id);
+            }
+        }
+        self.event_returns.retain(|r| r.event != event);
+        gone.len()
+    }
+
     pub fn remove_guest(&mut self, id: u32) {
         if let Some(a) = self.guests.iter().find(|g| g.id == id).and_then(|g| g.audio.clone()) {
             self.channels.retain(|c| c.id != a.ret_channel && c.id != a.mic_channel);
@@ -766,6 +828,119 @@ impl Admin {
             details: json!({"name": name, "expires": format_rfc3339(g.expires), "mxl_in": a.ret_in, "mxl_out": a.mic_out}),
         };
         Ok((g, note))
+    }
+
+    /// Rückweg zu einer Leitung eines Events (106.12), Verallgemeinerung von [`Admin::create_audio_guest`].
+    ///
+    /// - Immer: IFB-Kanal (Programm + Regie, Ducking 12 dB), Programmeingang als Rückweg-Quelle.
+    /// - `mode = "guest"`: Mikrofonkanal, Anbindung „Mikrofon zum Mischer“ und ein Gast-Link (Browser/Handy).
+    /// - `mode = "mix"`: Anbindung, die den Rückwegkanal als MXL-Mix-Ausgang ausgibt (für die SRT-Rückleitung).
+    ///
+    /// Gleicher `key` ein zweites Mal ist ein No-op (gibt den vorhandenen Rückweg zurück), damit der Orchestrator ihn gefahrlos
+    /// wiederholen kann.
+    pub fn create_event_return(&mut self, actor: &str, key: &str, event: &str, name: &str, mode: &str, ttl_minutes: i64, now: i64) -> Result<(EventReturn, Option<Guest>, AuditNote), AdminError> {
+        if key.trim().is_empty() || event.trim().is_empty() || name.trim().is_empty() {
+            return Err(AdminError::Invalid(vec!["Rückweg braucht Schlüssel, Event und Namen".into()]));
+        }
+        if mode != "guest" && mode != "mix" {
+            return Err(AdminError::Invalid(vec![format!("Art „{mode}“ unbekannt (guest oder mix)")]));
+        }
+        if let Some(r) = self.cfg.event_returns.iter().find(|r| r.key == key) {
+            let g = self.cfg.guests.iter().find(|g| g.id == r.guest_id).cloned();
+            return Ok((r.clone(), g, AuditNote { id: key.to_string(), action: "event-return-exists", details: Value::Null }));
+        }
+        if mode == "guest" && !(1..=7 * 24 * 60).contains(&ttl_minutes) {
+            return Err(AdminError::Invalid(vec!["Gültigkeit muss zwischen 1 Minute und 7 Tagen liegen".into()]));
+        }
+        let mut cand = self.cfg.clone();
+        cand.drop_expired_guests(now);
+        let free_slot = |used: Vec<u32>, max: u32| (1..=max.min(16)).find(|n| !used.contains(n));
+        let used_in: Vec<u32> = cand.parties.iter().map(|p| p.mxl_in).collect();
+        let used_out: Vec<u32> = cand.parties.iter().map(|p| p.mxl_out).collect();
+        let ret_in = free_slot(used_in, self.mxl_inputs)
+            .ok_or_else(|| AdminError::Invalid(vec![format!("Kein freier Programmeingang ({} vorhanden, OMP_INTERCOM_PROGRAM_INPUTS)", self.mxl_inputs)]))?;
+        let out_slot = free_slot(used_out, self.mxl_outputs)
+            .ok_or_else(|| AdminError::Invalid(vec![format!("Kein freier Mix-Ausgang ({} vorhanden, OMP_INTERCOM_MIX_OUTPUTS)", self.mxl_outputs)]))?;
+        let mut ch_next = cand.channels.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+        let mut party_next = cand.parties.iter().map(|p| p.id).max().unwrap_or(0) + 1;
+        let need_ch = if mode == "guest" { 2 } else { 1 };
+        let need_party = if mode == "guest" { 3 } else { 2 };
+        if ch_next + need_ch > MAX_CHANNEL_ID || party_next + need_party >= GUEST_BASE {
+            return Err(AdminError::Invalid(vec!["Keine freien Kanal-/Teilnehmer-IDs mehr".into()]));
+        }
+        let label = name.trim();
+        let mut r = EventReturn { key: key.to_string(), event: event.to_string(), name: label.to_string(), mode: mode.to_string(), ..Default::default() };
+        r.ret_channel = ch_next;
+        ch_next += 1;
+        cand.channels.push(Channel { id: r.ret_channel, name: format!("{label} Rückweg"), kind: "ifb".into(), duck_db: 12.0, ..Default::default() });
+        r.prog_party = party_next;
+        party_next += 1;
+        r.ret_in = ret_in;
+        cand.parties.push(Party {
+            id: r.prog_party,
+            name: format!("{label} Rückweg-Quelle"),
+            kind: "program".into(),
+            mxl_in: ret_in,
+            routes: vec![Route { ch: r.ret_channel, talk: true, ..Default::default() }],
+            ..Default::default()
+        });
+        let mut guest = None;
+        if mode == "guest" {
+            r.mic_channel = ch_next;
+            cand.channels.push(Channel { id: r.mic_channel, name: format!("{label} Mikro"), ..Default::default() });
+            r.mic_port_party = party_next;
+            r.mic_out = out_slot;
+            cand.parties.push(Party {
+                id: r.mic_port_party,
+                name: format!("{label} Mikro zum Mischer"),
+                kind: "port".into(),
+                mxl_out: out_slot,
+                routes: vec![Route { ch: r.mic_channel, listen: true, ..Default::default() }],
+                ..Default::default()
+            });
+            let mut next_id = GUEST_BASE;
+            for g in &cand.guests {
+                next_id = next_id.max(g.id + 1);
+            }
+            let routes = vec![Route { ch: r.ret_channel, listen: true, ..Default::default() }, Route { ch: r.mic_channel, talk: true, ..Default::default() }];
+            let g = Guest { id: next_id, name: label.to_string(), token: new_token(), expires: now + ttl_minutes * 60, routes, created_by: actor.to_string(), audio: None };
+            r.guest_id = g.id;
+            cand.guests.push(g.clone());
+            guest = Some(g);
+        } else {
+            r.ret_port_party = party_next;
+            r.ret_out = out_slot;
+            cand.parties.push(Party {
+                id: r.ret_port_party,
+                name: format!("{label} Rückweg-Ausgang"),
+                kind: "port".into(),
+                mxl_out: out_slot,
+                routes: vec![Route { ch: r.ret_channel, listen: true, ..Default::default() }],
+                ..Default::default()
+            });
+        }
+        cand.event_returns.push(r.clone());
+        cand.validate().map_err(AdminError::Invalid)?;
+        let prev = std::mem::replace(&mut self.cfg, cand);
+        if let Err(e) = self.save() {
+            self.cfg = prev;
+            return Err(e);
+        }
+        let note = AuditNote { id: key.to_string(), action: "event-return-create", details: json!({"event": event, "name": label, "mode": mode, "mxl_in": r.ret_in, "mxl_out": out_slot}) };
+        Ok((r, guest, note))
+    }
+
+    /// Räumt alle Rückwege eines Events ab. Kein Rückweg ist kein Fehler (idempotent).
+    pub fn delete_event_returns(&mut self, event: &str) -> Result<(usize, AuditNote), AdminError> {
+        let prev = self.cfg.clone();
+        let n = self.cfg.remove_event_returns(event);
+        if n > 0 {
+            if let Err(e) = self.save() {
+                self.cfg = prev;
+                return Err(e);
+            }
+        }
+        Ok((n, AuditNote { id: event.to_string(), action: "event-return-delete", details: json!({"removed": n}) }))
     }
 
     pub fn delete_guest(&mut self, id: u32) -> Result<AuditNote, AdminError> {
@@ -1105,5 +1280,53 @@ mod tests {
         assert!(a.cfg.guests.is_empty());
         assert_eq!(a.cfg.channels.len(), sample().channels.len());
         assert_eq!(a.cfg.parties.len(), sample().parties.len());
+    }
+
+    #[test]
+    fn event_return_modes_idempotent_and_cleanup() {
+        let mut a = Admin::open(None).unwrap();
+        a.update("x", sample()).unwrap();
+        let base_ch = a.cfg.channels.len();
+        let base_pa = a.cfg.parties.len();
+        let now = 1_000;
+        // Art „mix“: IFB-Kanal mit Ducking, Programmeingang, Mix-Ausgang mit dem Rückwegkanal
+        let (r, guest, note) = a.create_event_return("anna", "ev1/pgm", "ev1", "PGM", "mix", 0, now).unwrap();
+        assert!(guest.is_none());
+        assert_eq!(note.action, "event-return-create");
+        let ch = a.cfg.channels.iter().find(|c| c.id == r.ret_channel).unwrap();
+        assert_eq!((ch.kind.as_str(), ch.duck_db), ("ifb", 12.0));
+        let prog = a.cfg.parties.iter().find(|p| p.id == r.prog_party).unwrap();
+        assert_eq!((prog.kind.as_str(), prog.mxl_in), ("program", r.ret_in));
+        let port = a.cfg.parties.iter().find(|p| p.id == r.ret_port_party).unwrap();
+        assert_eq!((port.kind.as_str(), port.mxl_out), ("port", r.ret_out));
+        assert!(port.routes.iter().any(|x| x.ch == r.ret_channel && x.listen && !x.talk));
+        a.cfg.validate().unwrap();
+        // gleicher Schlüssel: nichts Neues
+        let (r2, _, note2) = a.create_event_return("anna", "ev1/pgm", "ev1", "PGM", "mix", 0, now).unwrap();
+        assert_eq!(r2, r);
+        assert_eq!(note2.action, "event-return-exists");
+        assert_eq!(a.cfg.event_returns.len(), 1);
+        // Art „guest“: Mikrofon, Anbindung, Gast-Link (Rückweg hören, Mikro sprechen)
+        let (g, guest, _) = a.create_event_return("anna", "ev1/kom", "ev1", "Kommentator", "guest", 120, now).unwrap();
+        let guest = guest.unwrap();
+        assert!(guest.routes.iter().any(|x| x.ch == g.ret_channel && x.listen && !x.talk));
+        assert!(guest.routes.iter().any(|x| x.ch == g.mic_channel && x.talk && !x.listen));
+        assert_ne!((r.ret_in, r.ret_out), (g.ret_in, g.mic_out));
+        a.cfg.validate().unwrap();
+        // eine Speicherung der Einrichtung darf die Verdrahtung nicht verlieren
+        let kept = sample().with_tokens(&a.cfg);
+        assert!(kept.channels.iter().any(|c| c.id == r.ret_channel) && kept.parties.iter().any(|p| p.id == r.ret_port_party));
+        assert_eq!(kept.event_returns.len(), 2);
+        kept.validate().unwrap();
+        // Abbau: alles weg, auch ein zweites Mal ohne Fehler
+        let (n, _) = a.delete_event_returns("ev1").unwrap();
+        assert_eq!(n, 2);
+        assert_eq!((a.cfg.channels.len(), a.cfg.parties.len()), (base_ch, base_pa));
+        assert!(a.cfg.guests.is_empty() && a.cfg.event_returns.is_empty());
+        assert_eq!(a.delete_event_returns("ev1").unwrap().0, 0);
+        // ungültige Eingaben
+        assert!(a.create_event_return("anna", "k", "e", "N", "foo", 10, now).is_err());
+        assert!(a.create_event_return("anna", "", "e", "N", "mix", 0, now).is_err());
+        assert!(a.create_event_return("anna", "k", "e", "N", "guest", 0, now).is_err());
     }
 }

@@ -40,6 +40,16 @@ pub struct Status {
 pub struct Alert {
     pub node_id: String,
     pub message: String,
+    /// Strukturierte Angaben (optional, ab Kapitel 106.13c): Art (z. B. `signal-black`), Zustand (`raised`/`cleared`),
+    /// Schweregrad (`info`/`warning`/`error`/`critical`) und Leitungsname. Alte Empfänger ignorieren die Felder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
 }
 
 /// Auf `omp.tally.<node_id>` veröffentlichter Payload — Body-Schema laut

@@ -22,6 +22,51 @@
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
   {
+    "type": "omp-normalizer",
+    "label": "Normalizer (Hausformat)",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-normalizer"],
+    "env": {},
+    "description": "Bringt eine Leitung nur dann ins Hausformat, wenn sie davon abweicht. Passt das Format (Größe, Bildrate, Raster, Farbmatrix; Abtastrate, Kanalzahl), kopiert der Node die Bilder und den Ton bitgleich weiter, ohne Bearbeitung und ohne Qualitätsverlust. Weicht es ab, wandelt er nur die nötigen Stufen (Größe, Bildrate, Halbbild auflösen/erzeugen, Farbmatrix, Kanalzuordnung und Abtastrate des Tons). Das Hausformat (Video und Ton getrennt) ist zur Laufzeit einstellbar und bleibt bei Stop/Start erhalten; Modus „copyOnly“ meldet eine Abweichung als Alarm, statt zu wandeln. Verbindung: Video- und Ton-Eingang per Kreuzschiene wählen, Ausgänge sind stabile Flows. Quelle und Normalizer müssen auf demselben Rechner laufen (MXL ist rechnerlokal). Übertragungsfunktion (SDR/HLG/PQ) wahlweise warnen, sperren oder mit einer festen Mindest-Kennlinie (ohne Qualitätsversprechen, austauschbar durch einen externen Dienst) abbilden. Misst den A/V-Versatz mit einem Marker-Testsignal (positiv = Ton eilt voraus). Gleicht den Versatz aus: Ton wird sample-genau, Bild in ganzen Bildern verzögert (nur im Kopierpfad).",
+    "i18n": {
+      "en": {
+        "description": "Brings a line into the house format only when it deviates from it. If the format matches (size, frame rate, scan, colour matrix; sample rate, channel count), the node copies picture and sound bit-for-bit, with no processing and no quality loss. If it deviates, only the necessary stages run (size, frame rate, de-/interlacing, colour matrix, channel mapping and sample rate of the audio). The house format (video and audio separately) can be changed at runtime and survives stop/start; mode \"copyOnly\" reports a deviation as an alarm instead of converting. Connect: pick the video and audio inputs in the cross-point matrix; the outputs are stable flows. Source and normalizer must run on the same machine (MXL is machine-local). Transfer function (SDR/HLG/PQ): warn, block, or map with a fixed minimum curve (no quality promise, replaceable by an external service). Measures A/V offset with a marker test signal (positive = sound leads picture). Compensates the offset: sound is delayed sample-accurately, picture in whole frames (copy path only)."
+      }
+    },
+    "expectedResources": "Kopie: sehr gering (Speicherkopie); Wandlung: je nach Stufe",
+    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 1 } }
+  },
+  {
+    "type": "omp-contribution-in",
+    "label": "Leitungseingang (SRT)",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-contribution"],
+    "env": { "OMP_CONTRIB_DIRECTION": "in" },
+    "description": "Nimmt eine ankommende Leitung per SRT (Internet-Draft draft-sharabayko-srt-01) entgegen, entpackt den MPEG-Transportstrom, dekodiert Bild und bis zu 8 Ton-PIDs und schreibt sie als MXL-Flows im nativen Format der Leitung (Größe und Bildrate werden erkannt, Ton als Summe aller Kanäle). Adresse, Betriebsart (Caller, Listener, Rendezvous), Latenz, Stream-ID und Ton-PIDs sind zur Laufzeit einstellbar; die Passphrase kommt nur aus einer Datei (OMP_CONTRIB_PASSPHRASE_FILE, Rechte 0600). Zeigt Zustand, Bitrate, Paketverlust und Wiederholungsanforderungen an und verbindet bei Abbruch selbst neu (gleiche Flow-IDs). Auch RIST (Simple Profile, mit Bündelung) und Relay des Originalstroms; der Mitschnitt läuft über den Ingest als dekodierter Fluss.",
+    "i18n": {
+      "en": {
+        "description": "Receives an incoming line over SRT (Internet-Draft draft-sharabayko-srt-01), demultiplexes the MPEG transport stream, decodes picture and up to 8 audio PIDs and writes them as MXL flows in the line's native format (size and frame rate are detected, audio is the sum of all channels). Address, mode (caller, listener, rendezvous), latency, stream ID and audio PIDs are settable at runtime; the passphrase comes only from a file (OMP_CONTRIB_PASSPHRASE_FILE, mode 0600). Shows state, bitrate, packet loss and retransmission requests and reconnects by itself (same flow IDs). Also RIST (Simple Profile, with bonding) and relay of the original stream; recording goes through the ingest as a decoded flow."
+      }
+    },
+    "expectedResources": "mittel (Dekodierung), abhängig vom Strom",
+    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
+  },
+  {
+    "type": "omp-contribution-out",
+    "label": "Rückleitung (SRT/RIST)",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-contribution"],
+    "env": { "OMP_CONTRIB_DIRECTION": "out" },
+    "description": "Schickt Ton (und optional Bild) einer Quelle als MPEG-Transportstrom per SRT oder RIST zum Veranstaltungsort zurück: Kommentator-Rückweg und PGM-Rückweg. Ton wird als AAC kodiert (Bitrate einstellbar), Bild optional als H.264. Ziel, Betriebsart, Latenz, Stream-ID und Bitraten sind zur Laufzeit einstellbar; die Passphrase kommt nur aus einer Datei (OMP_CONTRIB_PASSPHRASE_FILE, Rechte 0600). Zeigt Zustand, Bitrate, Paketverlust und Wiederholungen an und verbindet bei Abbruch selbst neu.",
+    "i18n": {
+      "en": {
+        "description": "Sends sound (and optionally picture) of a source back to the venue as an MPEG transport stream over SRT or RIST: commentator return and programme return. Sound is encoded as AAC (bitrate adjustable), picture optionally as H.264. Target, mode, latency, stream ID and bitrates are settable at runtime; the passphrase comes only from a file (OMP_CONTRIB_PASSPHRASE_FILE, mode 0600). Shows state, bitrate, packet loss and retransmissions and reconnects by itself."
+      }
+    },
+    "expectedResources": "mittel (Kodierung), abhängig von Bild an/aus",
+    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
+  },
+  {
     "type": "omp-mxl-bridge",
     "label": "MXL Domain Bridge",
     "runner": "process",
@@ -63,7 +108,7 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-2110-gateway"],
     "env": { "OMP_2110_GATEWAY_DIRECTION": "ingest" },
-    "description": "Empfängt unkomprimiertes SMPTE-2110-20-Video per RTP-Multicast/-Unicast aus dem LAN und speist es als MXL-Flow ein (Kapitel 19 Teil 1). Ziel/Quelle per OMP_2110_GATEWAY_LISTEN_PORT/_MULTICAST_GROUP oder direktem SDP (OMP_2110_GATEWAY_SDP/_SDP_FILE) konfiguriert, optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-01-Empfangsstatus (Link/Verbindung/Sync/Stream, `docs/decisions.md` BCP-008-Nachtrag) über die generischen monitor.*-Parameter.",
+    "description": "Empfängt unkomprimiertes SMPTE-2110-20-Video per RTP-Multicast/-Unicast aus dem LAN und speist es als MXL-Flow ein (Kapitel 19 Teil 1). Ziel/Quelle per OMP_2110_GATEWAY_LISTEN_PORT/_MULTICAST_GROUP oder direktem SDP (OMP_2110_GATEWAY_SDP/_SDP_FILE) konfiguriert, optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-01-Empfangsstatus (Link/Verbindung/Sync/Stream, `docs/decisions.md` BCP-008-Nachtrag) über die generischen monitor.*-Parameter. Mit synchroner PTP-Uhr kommen die Etiketten für Bild und Ton aus den RTP-Zeitstempeln statt aus der Ankunft (ingest.labelSource).",
     "i18n": { "en": {"description": "Receives uncompressed SMPTE 2110-20 video via RTP multicast/unicast from the LAN and feeds it in as an MXL flow (chapter 19 part 1). Destination/source configured via OMP_2110_GATEWAY_LISTEN_PORT/_MULTICAST_GROUP or a direct SDP (OMP_2110_GATEWAY_SDP/_SDP_FILE), optional PTP time base via OMP_PTP_DOMAIN. Reports AMWA BCP-008-01 receiver status (link/connection/sync/stream, `docs/decisions.md` BCP-008 addendum) via the generic monitor.* parameters.", "expectedResources": "moderate (uncompressed video, network-heavy)"} },
     "network": { "direction": "in", "kind": "video", "bitsPerPixel": 16, "width": 1920, "height": 1080, "fps": 25 },
     "expectedResources": "moderat (unkomprimiertes Video, netzwerklastig)",
@@ -195,7 +240,7 @@
     "runner": "process",
     "command": ["../nodes/target/release/omp-scope"],
     "env": {},
-    "description": "Passiver Mess-Tap für Video (Waveform/Vektorskop, Schwarzbild-/Standbild-Erkennung, Gamut-Alarm nach EBU R 103 v3.0), Audio (Peak/RMS, EBU-R128-Lautheit, True Peak nach BS.1770, Stille-Erkennung) und MXL-Timing (Transportlatenz/Jitter/Kadenz aus den Grain-Ursprungszeitstempeln, A/V-Versatz nach EBU R 37) plus die Flow-Deklaration aus der MXL-Domain und ein ANC-/SCTE-Analysator (jeder ANC-Pakettyp, entschlüsselt CEA-708, AFD, SCTE 104 und SCTE 35) — kein Ausgang, reines Analysegerät, bedienbar in Tabs.",
+    "description": "Passiver Mess-Tap für Video (Waveform/Vektorskop, Schwarzbild-/Standbild-Erkennung, Gamut-Alarm nach EBU R 103 v3.0), Audio (Peak/RMS, EBU-R128-Lautheit, True Peak nach BS.1770, Stille-Erkennung) und MXL-Timing (Transportlatenz/Jitter/Kadenz aus den Grain-Ursprungszeitstempeln, A/V-Versatz nach EBU R 37) Überwachung mit Profilen (Schwarzbild, Standbild, Stille, Übersteuerung, Lautheit, Phase, Mono-Ausfall, Signalverlust, Formatabweichung) mit Alarm bei Eintritt und Ende, plus die Flow-Deklaration aus der MXL-Domain und ein ANC-/SCTE-Analysator (jeder ANC-Pakettyp, entschlüsselt CEA-708, AFD, SCTE 104 und SCTE 35) — kein Ausgang, reines Analysegerät, bedienbar in Tabs.",
     "i18n": { "en": {"label": "Meter (Scope)", "description": "Passive measurement tap for video (waveform/vectorscope, black/freeze detection, gamut alarm per EBU R 103 v3.0), audio (peak/RMS, EBU R128 loudness, true peak per BS.1770, silence detection) and MXL timing (transport latency/jitter/cadence from the grain origin timestamps, A/V offset per EBU R 37) plus the flow declaration from the MXL domain — no output, pure analysis device.", "expectedResources": "low"} },
     "expectedResources": "gering"
   },

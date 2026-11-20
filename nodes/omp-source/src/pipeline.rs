@@ -285,6 +285,13 @@ impl Pipeline {
                 gst::PadProbeReturn::Ok
             });
         }
+        // `OMP_SOURCE_AUDIO_OFFSET_MS` (Diagnose, nur Tests): verschiebt den Ton relativ zum Bild. Positiv = Ton später
+        // (hinkt nach), negativ = Ton früher. Wirkt über den Pad-Versatz, also auf die Zeit der Etiketten (106.4).
+        if let Some(ms) = std::env::var("OMP_SOURCE_AUDIO_OFFSET_MS").ok().and_then(|v| v.parse::<i64>().ok())
+            && let Some(pad) = audiotestsrc.static_pad("src")
+        {
+            pad.set_offset(ms * 1_000_000);
+        }
         let audioconvert = gst::ElementFactory::make("audioconvert")
             .build()
             .map_err(|e| PipelineError(format!("audioconvert: {e}")))?;

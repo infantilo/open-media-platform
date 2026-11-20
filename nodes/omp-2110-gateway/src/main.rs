@@ -179,6 +179,12 @@ impl ParamStore for IngestStore {
                 range: None,
                 readonly: true,
             },
+            // 106.8: Etiketten aus RTP-Zeitstempeln statt aus der Ankunft.
+            ParamSpec { name: "ingest.labelSource".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
+            ParamSpec { name: "ingest.labelClock".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "ingest.labelJumps".to_string(), kind: ParamType::Number, unit: None, range: None, readonly: true },
+            ParamSpec { name: "ingest.labelFallbacks".to_string(), kind: ParamType::Number, unit: None, range: None, readonly: true },
+            ParamSpec { name: "ingest.labelMessage".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
         ];
         parameters.extend(self.monitor.param_specs("monitor"));
         Descriptor { latency: None, parameters, methods: self.monitor.method_specs("monitor") }
@@ -198,6 +204,15 @@ impl ParamStore for IngestStore {
                 Some(serde_json::json!(format!("{group}:{}", self.audio_listen_port)))
             }
             "audioChannels" => Some(serde_json::json!(self.audio_channels)),
+            "ingest.labelSource" => Some(serde_json::json!(if self.pipeline.video_labels.use_rtp.load(std::sync::atomic::Ordering::Relaxed) { "rtp" } else { "arrival" })),
+            "ingest.labelClock" => Some(serde_json::json!(self.pipeline.label_clock)),
+            "ingest.labelJumps" => Some(serde_json::json!(
+                self.pipeline.video_labels.jumps.load(std::sync::atomic::Ordering::Relaxed) + self.pipeline.audio_labels.jumps.load(std::sync::atomic::Ordering::Relaxed)
+            )),
+            "ingest.labelFallbacks" => Some(serde_json::json!(
+                self.pipeline.video_labels.fallbacks.load(std::sync::atomic::Ordering::Relaxed) + self.pipeline.audio_labels.fallbacks.load(std::sync::atomic::Ordering::Relaxed)
+            )),
+            "ingest.labelMessage" => Some(serde_json::json!(self.pipeline.video_labels.last_message())),
             // `null`, wenn keine PTP-Domain konfiguriert ist (kein
             // stillschweigendes `false` — "nicht aktiviert" und "aktiv,
             // aber noch nicht synchronisiert" sind unterschiedliche
@@ -220,6 +235,20 @@ impl ParamStore for IngestStore {
     }
 
     fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        if name == "ingest.labelSource" {
+            let on = match value.as_str() {
+                Some("rtp") => true,
+                Some("arrival") => false,
+                _ => return Err(SetError::Unknown),
+            };
+            if on && self.pipeline.label_clock == "none" {
+                eprintln!("omp-2110-gateway: ingest.labelSource=rtp braucht eine synchrone PTP-Uhr (OMP_PTP_DOMAIN)");
+                return Err(SetError::Unknown);
+            }
+            self.pipeline.video_labels.use_rtp.store(on, std::sync::atomic::Ordering::Relaxed);
+            self.pipeline.audio_labels.use_rtp.store(on, std::sync::atomic::Ordering::Relaxed);
+            return Ok(());
+        }
         match self.monitor.set("monitor", name, &value) {
             Some(true) => Ok(()),
             Some(false) => Err(SetError::Unknown),

@@ -17,6 +17,7 @@
 //! keine "Zieladresse" im RTP-Sinn, nur eine feste Flow-ID+Domain).
 
 pub mod anc;
+pub mod avmarker;
 pub mod colorimetry;
 pub mod cea608;
 pub mod au_ring;
@@ -38,6 +39,8 @@ pub mod rawcopy;
 pub mod domainwatch;
 #[cfg(feature = "mxl")]
 pub mod diag;
+pub mod rtplabel;
+pub mod rtptime;
 pub mod timebase;
 #[cfg(any(feature = "preview", feature = "audio-stream", feature = "pcm-stream", feature = "levels"))]
 pub mod streamauth;

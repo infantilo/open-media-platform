@@ -1461,6 +1461,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-contribution"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "gstreamer-app",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-device-hub"
 version = "0.1.0"
 dependencies = [
@@ -1665,6 +1677,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-normalizer"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "mxl",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-ograf"
 version = "0.1.0"
 dependencies = [
@@ -1785,6 +1810,7 @@ dependencies = [
  "gstreamer-video",
  "omp-mediaio",
  "omp-node-sdk",
+ "serde",
  "serde_json",
  "tokio",
 ]

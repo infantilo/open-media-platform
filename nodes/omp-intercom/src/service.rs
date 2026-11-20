@@ -29,6 +29,9 @@ pub enum Op {
     ListGuests,
     CreateGuest,
     DeleteGuest(u32),
+    /// Vertragsrollen `event.return.create` / `event.return.delete` (106.12): Rückweg zu einer Leitung eines Events.
+    CreateEventReturn,
+    DeleteEventReturns(String),
     Panels,
     Status,
     Metrics,
@@ -55,6 +58,8 @@ pub fn route(method: &str, path: &str) -> Option<Op> {
         ("GET", ["guests"]) => Op::ListGuests,
         ("POST", ["guests"]) => Op::CreateGuest,
         ("DELETE", ["guests", g]) => Op::DeleteGuest(id(g)?),
+        ("POST", ["event-returns"]) => Op::CreateEventReturn,
+        ("DELETE", ["event-returns", e]) if !e.is_empty() => Op::DeleteEventReturns((*e).to_string()),
         ("GET", ["panels"]) => Op::Panels,
         ("GET", ["status"]) => Op::Status,
         ("GET", ["metrics"]) => Op::Metrics,
@@ -196,6 +201,8 @@ pub fn manifest(importable: bool) -> Value {
             route("GET", "/guests", &[FEAT_ADMIN]),
             role("POST", "/guests", &[FEAT_ADMIN, FEAT_GUEST], "guest.create"),
             role("DELETE", "/guests/{id}", &[FEAT_ADMIN, FEAT_GUEST], "guest.revoke"),
+            role("POST", "/event-returns", &[FEAT_ADMIN, FEAT_GUEST], "event.return.create"),
+            role("DELETE", "/event-returns/{id}", &[FEAT_ADMIN, FEAT_GUEST], "event.return.delete"),
             role("GET", "/channels", &[FEAT_USE, FEAT_ADMIN, FEAT_GUEST], "channels"),
             role("GET", "/panels", &[FEAT_USE, FEAT_ADMIN], "panels"),
             role("GET", "/status", &[FEAT_USE, FEAT_ADMIN], "status"),
@@ -256,7 +263,7 @@ mod tests {
         assert_eq!(m["import"]["importable"], true);
         assert_eq!(m["kind"], "intercom");
         let roles: Vec<&str> = m["routes"].as_array().unwrap().iter().filter_map(|r| r["role"].as_str()).collect();
-        assert_eq!(roles, ["guest.create", "guest.revoke", "channels", "panels", "status", "deck.state", "deck.command"]);
+        assert_eq!(roles, ["guest.create", "guest.revoke", "event.return.create", "event.return.delete", "channels", "panels", "status", "deck.state", "deck.command"]);
         let ids: Vec<&str> = m["features"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
         assert_eq!(ids, [FEAT_USE, FEAT_GUEST, FEAT_ADMIN]);
     }
