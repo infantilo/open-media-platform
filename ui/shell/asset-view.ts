@@ -25,7 +25,11 @@ import {
   FILE_FILTERS,
   filterAssets,
   type LifecycleGraph,
+  absInRoot,
+  type FileRoot,
+  findRootForPath,
   hasTamsPlay,
+  localWritableRoot,
   METADATA_CATEGORIES,
   type MetadataRows,
   type MetaFieldDef,
@@ -1567,25 +1571,88 @@ class AssetView extends HTMLElement {
   }
 
   /** Online-Nodes, die `tams.play` anbieten (der Descriptor verrät es; der Katalogtyp steht nicht in der Node-Liste). */
-  async #tamsReaders(): Promise<{ id: string; label: string }[]> {
+  async #tamsReaders(): Promise<{ id: string; label: string; instanceId: string }[]> {
     try {
       const res = await apiFetch("/api/v1/nodes");
       if (!res.ok) return [];
-      const nodes = (await res.json()) as { id: string; label: string; online: boolean }[];
+      const nodes = (await res.json()) as { id: string; label: string; online: boolean; instance_id?: string }[];
       const found = await Promise.all(
         nodes.filter((n) => n.online).map(async (n) => {
           try {
             const d = await apiFetch(`/api/v1/nodes/${n.id}/descriptor`);
-            return d.ok && hasTamsPlay(await d.json()) ? { id: n.id, label: n.label } : null;
+            return d.ok && hasTamsPlay(await d.json()) ? { id: n.id, label: n.label, instanceId: n.instance_id ?? "" } : null;
           } catch {
             return null;
           }
         }),
       );
-      return found.filter((x): x is { id: string; label: string } => x !== null);
+      return found.filter((x): x is { id: string; label: string; instanceId: string } => x !== null);
     } catch {
       return [];
     }
+  }
+
+  /** Host-Agent-ID der Instanz ("" = Rechner des Orchestrators; auch wenn die Instanz unbekannt ist). */
+  async #hostOfInstance(instanceId: string): Promise<string> {
+    if (!instanceId) return "";
+    try {
+      const res = await apiFetch("/api/v1/instances");
+      if (!res.ok) return "";
+      const list = (await res.json()) as { id: string; hostId?: string }[];
+      return list.find((i) => i.id === instanceId)?.hostId ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  /** Quell- und Zielort der Übertragung bestimmen; bei Misserfolg der i18n-Schlüssel der Erklärung. */
+  async #planExportTransfer(hostId: string, path: string): Promise<{ src: FileRoot; rel: string; dst: FileRoot } | "tams.noSourceRoot" | "tams.noLocalRoot"> {
+    let roots: FileRoot[] = [];
+    try {
+      const res = await apiFetch("/api/v1/files/roots");
+      if (res.ok) roots = (await res.json()) as FileRoot[];
+    } catch { /* leer: Erklärung unten */ }
+    const src = findRootForPath(roots, hostId, path);
+    if (!src) return "tams.noSourceRoot";
+    const dst = localWritableRoot(roots);
+    if (!dst) return "tams.noLocalRoot";
+    return { src: src.root, rel: src.rel, dst };
+  }
+
+  /** Datei kopieren (Datei-Übertragung, geprüft und atomar), danach als Asset registrieren. */
+  async #transferAndRegister(plan: { src: FileRoot; rel: string; dst: FileRoot }, out: HTMLElement): Promise<boolean> {
+    const res = await apiFetch("/api/v1/files/transfer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "copy", srcRoot: plan.src.id, paths: [plan.rel], dstRoot: plan.dst.id, dstDir: "tams-export", conflict: "rename", confirm: true }),
+    });
+    const body = (await res.json().catch(() => null)) as { transfer?: { id: string }; plan?: { items?: { dstRel?: string }[] }; error?: string } | null;
+    if (!res.ok || !body?.transfer) {
+      showToast(tt("misc.failedWith", { p0: tt("tams.transfer"), p1: body?.error ?? res.status }), { variant: "error" });
+      return false;
+    }
+    const id = body.transfer.id;
+    out.textContent = tt("tams.transferring");
+    for (let i = 0; i < 1800; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const list = (await (await apiFetch("/api/v1/files/transfers")).json().catch(() => [])) as { id: string; status: string; error?: string; items?: { dstRel?: string; status?: string }[] }[];
+      const t = list.find((x) => x.id === id);
+      if (!t) continue;
+      if (t.status === "done") {
+        const dstRel = t.items?.find((x) => x.dstRel)?.dstRel ?? body.plan?.items?.[0]?.dstRel;
+        if (!dstRel) {
+          showToast(tt("misc.failedWith", { p0: tt("tams.transfer"), p1: "dstRel" }), { variant: "error" });
+          return false;
+        }
+        return await this.#registerExportAsset(absInRoot(plan.dst, dstRel));
+      }
+      if (t.status === "failed" || t.status === "cancelled" || t.status === "interrupted") {
+        out.textContent = tt("tams.transferFailed", { p0: t.error ?? t.status });
+        return false;
+      }
+    }
+    out.textContent = tt("tams.exportTimeout");
+    return false;
   }
 
   /** Export-Datei als eigenes Asset anlegen (Datei-Darstellung, veröffentlicht). Der Pfad gilt auf dem Rechner des Orchestrators:
@@ -1711,14 +1778,34 @@ class AssetView extends HTMLElement {
               result.textContent = tt("tams.exportDone", { p0: info.path ?? "", p1: info.gaps ?? 0 });
               if (info.path) {
                 const path = info.path;
+                const reader = readers.find((r) => r.id === node);
                 const reg = document.createElement("button");
-                reg.textContent = tt("tams.registerAsset");
                 reg.setAttribute("data-role", "tams-export-register");
                 reg.style.marginLeft = "var(--omp-space-2)";
-                reg.addEventListener("click", () => {
-                  void this.#guard(reg, () => this.#registerExportAsset(path), close);
-                });
-                result.append(document.createElement("br"), reg);
+                const hostId = await this.#hostOfInstance(reader?.instanceId ?? "");
+                if (hostId === "") {
+                  reg.textContent = tt("tams.registerAsset");
+                  reg.addEventListener("click", () => {
+                    void this.#guard(reg, () => this.#registerExportAsset(path), close);
+                  });
+                  result.append(document.createElement("br"), reg);
+                } else {
+                  // Anderer Host: Datei zuerst zum Orchestrator übertragen (Datei-Übertragung), dann registrieren
+                  const plan = await this.#planExportTransfer(hostId, path);
+                  const hint = document.createElement("div");
+                  hint.style.cssText = "margin-top:var(--omp-space-1);color:var(--omp-text-dim);";
+                  if (typeof plan === "string") {
+                    hint.textContent = tt(plan, { p0: hostId });
+                  } else {
+                    reg.textContent = tt("tams.transferAndRegister", { p0: plan.src.name, p1: plan.dst.name });
+                    reg.addEventListener("click", () => {
+                      void this.#guard(reg, () => this.#transferAndRegister(plan, result), close);
+                    });
+                    hint.textContent = tt("tams.otherHost", { p0: hostId });
+                    result.append(document.createElement("br"), reg);
+                  }
+                  result.append(hint);
+                }
               }
               return false; // Dialog offen lassen: der Pfad soll lesbar bleiben
             }

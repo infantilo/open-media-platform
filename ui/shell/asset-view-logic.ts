@@ -374,3 +374,43 @@ export function tamsPlayArgs(reps: Representation[]): TamsPlay | null {
 export function hasTamsPlay(descriptor: { methods?: { name?: string }[] } | null | undefined): boolean {
   return !!descriptor?.methods?.some((m) => m.name === "tams.play");
 }
+
+// ---- Export-Datei auf einem anderen Host (Kapitel 105.6) ------------------------------------------------------------------------
+// Der Wiedergabe-Node legt die Datei auf SEINEM Rechner ab. Läuft er auf einem anderen Host als der Orchestrator, wird sie über die
+// Datei-Übertragung (Dateien → Übertragen) zu einem Dateiort des Orchestrators kopiert und erst dann als Asset registriert.
+
+export interface FileRoot {
+  id: string;
+  name: string;
+  /** "" = Rechner des Orchestrators */
+  hostId: string;
+  path: string;
+  readOnly?: boolean;
+  shared?: boolean;
+  hosts?: string[];
+}
+
+/** Dateiort auf `hostId`, der den absoluten Pfad enthält (der längste gewinnt), samt Pfad relativ zum Ort. */
+export function findRootForPath(roots: FileRoot[], hostId: string, abs: string): { root: FileRoot; rel: string } | null {
+  let best: { root: FileRoot; rel: string } | null = null;
+  for (const r of roots) {
+    const serves = r.hostId === hostId || (r.shared === true && (r.hosts ?? []).includes(hostId));
+    if (!serves) continue;
+    const base = r.path.replace(/\/+$/, "");
+    if (!abs.startsWith(base + "/")) continue;
+    const rel = abs.slice(base.length + 1);
+    if (!rel || rel.split("/").includes("..")) continue;
+    if (!best || base.length > best.root.path.replace(/\/+$/, "").length) best = { root: r, rel };
+  }
+  return best;
+}
+
+/** Beschreibbarer Dateiort auf dem Rechner des Orchestrators (Ziel der Übertragung). */
+export function localWritableRoot(roots: FileRoot[]): FileRoot | undefined {
+  return roots.find((r) => r.hostId === "" && !r.readOnly && !r.shared) ?? roots.find((r) => (r.hostId === "" || (r.hosts ?? []).includes("")) && !r.readOnly);
+}
+
+/** Absoluter Pfad einer Datei `rel` im Dateiort. */
+export function absInRoot(root: FileRoot, rel: string): string {
+  return root.path.replace(/\/+$/, "") + "/" + rel.replace(/^\/+/, "");
+}

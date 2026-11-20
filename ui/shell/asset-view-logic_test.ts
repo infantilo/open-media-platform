@@ -3,7 +3,11 @@ import {
   type Asset,
   filterAssets,
   formatBitrate,
+  absInRoot,
+  type FileRoot,
+  findRootForPath,
   formatBytes,
+  localWritableRoot,
   hasTamsPlay,
   parseTamsUri,
   tamsPlayArgs,
@@ -167,4 +171,26 @@ Deno.test("TAMS-Verweise: URI lesen, Abspiel-Argumente bilden, Reader erkennen",
   assertEquals(hasTamsPlay({ methods: [{ name: "tams.stop" }, { name: "tams.play" }] }), true);
   assertEquals(hasTamsPlay({ methods: [] }), false);
   assertEquals(hasTamsPlay(null), false);
+});
+
+Deno.test("Export auf anderem Host: Dateiort zum Pfad finden, lokales Ziel wählen", () => {
+  const roots: FileRoot[] = [
+    { id: "l1", name: "lokal", hostId: "", path: "/data/media" },
+    { id: "h1", name: "Host A", hostId: "hostA", path: "/srv" },
+    { id: "h2", name: "Host A tams", hostId: "hostA", path: "/srv/tams-export/" },
+    { id: "ro", name: "nur lesen", hostId: "", path: "/ro", readOnly: true },
+    { id: "sh", name: "Isilon", hostId: "hostB", path: "/mnt/isi", shared: true, hosts: ["hostB", "hostA"] },
+  ];
+  // der längste passende Ort gewinnt
+  assertEquals(findRootForPath(roots, "hostA", "/srv/tams-export/clip.mp4")?.root.id, "h2");
+  assertEquals(findRootForPath(roots, "hostA", "/srv/tams-export/clip.mp4")?.rel, "clip.mp4");
+  assertEquals(findRootForPath(roots, "hostA", "/srv/andere/x.mp4")?.root.id, "h1");
+  // anderer Host / Grenze am Verzeichnisnamen / gemeinsamer Speicher
+  assertEquals(findRootForPath(roots, "hostC", "/srv/x.mp4"), null);
+  assertEquals(findRootForPath(roots, "hostA", "/srvx/x.mp4"), null);
+  assertEquals(findRootForPath(roots, "hostA", "/mnt/isi/a/b.mp4")?.rel, "a/b.mp4");
+  assertEquals(findRootForPath(roots, "hostA", "/srv/../etc/passwd"), null);
+  assertEquals(localWritableRoot(roots)?.id, "l1");
+  assertEquals(localWritableRoot([roots[3]]), undefined);
+  assertEquals(absInRoot(roots[2], "x/y.mp4"), "/srv/tams-export/x/y.mp4");
 });
