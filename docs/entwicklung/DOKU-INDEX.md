@@ -101,6 +101,7 @@ Erzeugt mit `sh docs/entwicklung/doku-index.sh`. Abschnitt gezielt lesen: Read m
 6715 Kapitel 103 (Teil 5): D7 Abschottung per Sandbox, Polling in den Nodes, Fit-All-Fehler
 6727 Kapitel 104: PTZ-Kamerasteuerung `omp-ptz`
 6740 Kapitel 105: TAMS — zeitadressierter Medienspeicher: Aufnahme, Wiedergabe, optional eigener Speicher
+6782 Kapitel 106: Hauptkontrollraum (MCR / Ingest-Leitstelle) — Leitungen, Hausformat nur bei Abweichung, A/
 
 ## ARCHITECTURE.md
 
@@ -136,3 +137,4 @@ Erzeugt mit `sh docs/entwicklung/doku-index.sh`. Abschnitt gezielt lesen: Read m
 4565 30. Playout-Puffer: Ausgangs-Anker und Failover-Puffer
 4619 31. Netzwerkarme Platzierung: Verbünde statt Einzelrollen
 4642 32. Getrennte MXL-Domains
+4651 33. Hauptkontrollraum (MCR / Ingest-Leitstelle)

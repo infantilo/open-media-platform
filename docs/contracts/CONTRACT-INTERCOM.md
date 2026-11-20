@@ -25,6 +25,8 @@ Funktionsrechte mit Präfix `<name>.` und die Routen mit **Rollen** (§2).
 | `channels` | `GET /channels` | nein | Kanäle zur Auswahl (z. B. beim Einladen einer Handy-Kamera) |
 | `guest.create` | `POST /guests` | nein | befristeten Gast-Zugang ausstellen |
 | `guest.revoke` | `DELETE /guests/{id}` | nein | Gast-Zugang widerrufen |
+| `event.return.create` | `POST /event-returns` | nein | Rückweg zu einer Leitung eines Events anlegen (idempotent über `key`) |
+| `event.return.delete` | `DELETE /event-returns/{id}` | nein | alle Rückwege eines Events abbauen (`{id}` = Event-Kennung) |
 
 Die Pfade wählt die Implementierung; maßgeblich sind Rolle, Methode und die Anzahl der Platzhalter (`{party}` = Teilnehmer-ID).
 Clients finden die Route über `GET /api/v1/ext` (Typ `intercom`, `roles`), nie über einen festen Pfad oder Namen.
@@ -45,6 +47,15 @@ Clients finden die Route über `GET /api/v1/ext` (Typ `intercom`, `roles`), nie 
   Sie darf mit `?embed=1` kompakt eingebettet werden (iframe, `allow="microphone; autoplay"`). Rechte: `<name>.guest` oder `.admin`.
   Optional `"audio":true` (statt `routes`): Ton-Gast — der Dienst legt Rückweg- und Mikrofonkanal samt Programmeingang
   (`ret_in`) und Mix-Ausgang (`mic_out`) an und liefert beide Nummern in `audio`; Widerruf/Ablauf räumt sie wieder ab.
+* `event.return.create` (Kap. 106.12, Verallgemeinerung des Ton-Gasts): Körper `{"key":"<event>/<leitung>","event":"<event>","name":"PGM",
+  "mode":"mix"|"guest","ttl_minutes":1440}`. Der Dienst legt an: einen **IFB-Kanal** (Programm + Regie, Ducking 12 dB), einen
+  **Programmeingang** `ret_in` (dort wird die Rückweg-Quelle, bei der der Kommentar schon abgezogen ist, hineinverbunden) und
+  - `mode="mix"`: einen **Mix-Ausgang** `ret_out`, der den Rückwegkanal ausgibt (für eine SRT-/RIST-Rückleitung),
+  - `mode="guest"`: Mikrofonkanal samt Anbindung `mic_out` und einen Gast-Link (`url`) für Browser/Handy.
+  Antwort 201 `{"return":{"key","event","name","mode","ret_channel","ret_in","ret_out"|"mic_out",…},"guest":{…}|null}`. Gleicher `key` ein
+  zweites Mal gibt den vorhandenen Rückweg zurück (kein Fehler). Rechte: `<name>.guest` oder `.admin`.
+* `event.return.delete`: räumt alle Rückwege des Events samt Kanälen, Teilnehmern und Gästen ab; kein Rückweg ist kein Fehler.
+  Antwort `{"ok":true,"removed":N}`.
 * Rechte: `deck.*` nur für Sprechstellen, die die Person bedienen darf (eigene bzw. mit Administrationsrecht alle).
 
 ## 3. Sicherheit (gilt für jeden Dienst)

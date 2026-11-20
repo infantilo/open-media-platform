@@ -4646,3 +4646,134 @@ Kein LLM; keine automatische Verlagerung von Sendewegen; kein Ersatz für Gatewa
 - **Abschottung (D7):** `unshare --user --map-root-user --mount` mit privatem tmpfs-`/dev/shm`, in das nur die Domain(en) des Nodes per Bind-Mount hineingereicht werden; fail closed. Entscheidung gegen UID/Gruppe je Domain: braucht Root und getrennte Benutzer.
 - **Lesemodus:** `omp-mediaio` liest MXL blockierend (`READ_WAIT` 100 ms), Rückfall `OMP_MXL_READ_MODE=poll`; `omp-lowlat-mixer` fragt bewusst ab.
 - **Betrieb/Best Practice:** `docs/HANDBUCH.md` §9.3a; Entwurf und Entscheidungen: `docs/entwuerfe/ENTWURF-MXL-DOMAIN-TRENNUNG.md`.
+
+
+## 33. Hauptkontrollraum (MCR / Ingest-Leitstelle) (Plan 2026-11-20, UMSETZUNG.md Kapitel 106)
+
+**Ziel:** Ankommende Leitungen (Mobilfunk-Bündelung über SRT, SRT/RIST-Strecken, Austauschstrecken der Rundfunkunionen, ST 2110 von
+Host Broadcastern großer Ereignisse) annehmen, die A/V-Lage messen und ausgleichen, die Signale **automatisch und nur bei Abweichung**
+ins Hausformat bringen und mehrere Leitungen samt Intercom-Rückwegen zu einem **Event** (Vorlage, Lebenszyklus, Rollen, Multiviewer-
+Ansicht, Aufzeichnung) zusammenfassen.
+
+### 33.1 Ist-Stand (am Code geprüft 2026-11-20)
+
+| Baustein | Vorhanden | Fehlt für den MCR |
+|---|---|---|
+| `omp-srt-gateway` | ST 2110 ⇄ SRT (Roh-RTP oder H.264/HEVC in MPEG-TS), Raster-Automatik im Downlink | **keine MXL-Seite**, **nur Video**, keine NMOS-Sender, Endpunkte nur als Start-Umgebung → als Leitungseingang ungeeignet; bleibt unverändert |
+| RIST | kein Code in OMP; GStreamer 1.22 hat `ristsrc`/`ristsink` (Bündelung über `bonding-addresses`) | Leitungseingang/-ausgang |
+| SRT-Verbindungsbündelung | `srtsrc` (GStreamer 1.22) hat **keine** Socket-Gruppen-Eigenschaft | native Bündelung; Mobilfunk-Bündelung kommt daher als einfacher SRT-Strom vom Empfangsserver des Bündelungssystems |
+| `omp-2110-gateway` (ingest) | Video + Audio, SDP, Halbbild (`st2110_interlaced`), ST 2022-7, PTP-Uhr | Etiketten (MXL-Index) entstehen aus der **Ankunft**, nicht aus den RTP-Zeitstempeln; ST-2059-1-Bindung gibt es nur auf der Sendeseite (`ptp::align_rtp_to_st2059`) |
+| `omp-hls-source` | Muster „dekodieren → MXL“, Wiederverbinden | Format ist Konfiguration, es wird **immer** skaliert |
+| `omp-mediaio::rawcopy` | `check_passthrough`/`check_audio_passthrough`, bitgleiche Grain-/Sample-Kopie **mit erhaltenem Index** (< 5 % CPU statt ≈ 70 % beim Wandeln) | prüft nur Größe, Rate, progressiv, Kanalzahl, Abtastrate — nicht Farbraum, Übertragungsfunktion, Halbbild-Reihenfolge, Kanalbelegung |
+| `omp-mxl-bridge` | Kopie oder (auf Wunsch) Wandlung zwischen Domains, Parameter `videoMode`/`audioMode` | — (Vorbild für den Normalizer) |
+| `omp-scaler` | Größe + Bildrate (`videorate`/`blend`), Ausgleichsverzögerung | nur Video, kein Halbbild, keine Farbmatrix, **wandelt immer** (keine Kopie) |
+| `omp-mediaio::mxl`, `colorimetry` | Schreiben mit `interlaced_tff`, Kennzeichnung BT601/709/2020/2100 + SDR/HLG/PQ | **keine** Wandlung der Übertragungsfunktion (Plattformregel) |
+| Orchestrator-Formate (`workflows/formats.go`) | benannte Presets | **nur progressiv** — ein Hausformat 1080i50 ist dort nicht darstellbar |
+| A/V-Messung | `omp-scope` `avOffsetMs` = Differenz der **Transportlatenzen**, kein Etikettenversatz (`docs/decisions.md`, Nachtrag 2026-10-05); Etiketten-Messung mit Markern: `omp-source` (`OMP_SOURCE_VIDEO_MARKER=1`, `OMP_SOURCE_AUDIO_WAVE=ticks`) + `omp-mediaio/examples/av_marker_probe.rs`, `tools/av-marker/` | Marker-Erkennung als Bibliothek und als Dauer-Messung im Betrieb |
+| `omp-audio-delay` | Ring mit Fill/Run/Hold, Wiederaufbau mit ±‰-Tonhöhe (`delay.rs`, rein) | nur Stereo, Sekundenbereich, kein Bildbezug — Logik wird übernommen, der Node nicht |
+| `omp-playout-buffer` | `setOutputDelay` | verzögert Bild **und** Ton gemeinsam → kein relativer Ausgleich |
+| `omp-vfa-vision` | Gesichter (Position/Größe) alle 300 ms auf 320 px | keine Mundbewegung, zu seltene Abtastung für Lippensynchron-Messung |
+| `omp-intercom` | Mix-minus im Mix-Kern, IFB mit Ducking, **Ton-Gast** (Rückweg N-1 + Mikrofon + Gastlink in einem Schritt, `admin.rs::create_audio_guest`), Parties mit `users`/`groups` | Rückweg je Event/Kommentator als Vertragsroute |
+| `omp-audio-mixer` | N-1-Busse (`aux.<id>.setN1(exclude)`) | — |
+| `omp-multiviewer-custom` | Layout, UMD, Tally je Kachel über `POST /state`, Presets | Erzeugung eines Event-Layouts; Alarm-Badge/-Rahmen je Kachel |
+| Signalüberwachung `omp-scope` | Schwarz/Standbild/Stille als gehaltene Bedingungen (`qc.rs`), R-128-Lautheit, True Peak, Gamut R 103, Flow-Deklaration | **meldet keine Alarme** (nur Parameter); kein Clipping, keine Phasen-/Mono-Prüfung, kein Signalverlust-/Formatalarm, keine Profile; Waveform-Bild kostet CPU auch ohne Betrachter |
+| Alarmwege | `omp.alert.<node>` (`omp-node-sdk::health::publish_alert`), `internal/alertsink` (Webhook, E-Mail, Empfängerregeln, dynamische Arten `RegisterKind`), `internal/alarmacks` (gemeinsames Quittieren), Alarmliste `ui/shell/alarms.ts`, `omp-gpio` (Vertrag GPIO) | Node-Alarme erscheinen **nicht** in der Alarmliste der Oberfläche (die leitet aus Instanzen/Hosts ab); **keine Historie** für Signalalarme; kein Text-Hinweis an Intercom-Sprechstellen |
+| Aufnahme | Ingest-Modul (Kap. 42/44/45), Recorder, TAMS (Kap. 105) | Aufträge aus einem Event; Mitschnitt des **Original**-Stroms ohne Neukodierung |
+| Orchestrator | Module (§28), Workflows mit `Interface` (benannte Ausgänge, `Feed`), Zeitpläne, `ConfirmStop`, `accessrules` (Selektor `workflow`), `statemachine` | Event-Objekt, Vorlagen, Lebenszyklus, Event-Rollen |
+
+### 33.2 Entscheidungen (Plan; Nutzerentscheidungen E-M1–E-M10 am 2026-11-20 getroffen, siehe UMSETZUNG.md Kap. 106 „Entschiedene Punkte“)
+
+* **M1 Normalisierung im eigenen Node `omp-normalizer`** hinter jedem Eingang, nicht im Eingang. Eingänge schreiben das **native**
+  Format nach MXL (Raster-Automatik wie `omp-srt-gateway/autobridge.rs`: Ausgang erst nach dem ersten dekodierten Bild bauen); der
+  Normalizer vergleicht die `flow_def` mit dem Hausformat. Gründe: gilt für jede Quelle (SRT, RIST, 2110, HLS, Karte, vorhandener
+  Flow), das MCR sieht das Eingangsformat, und „unverändert“ ist messbar. Preis: im Wandlungsfall eine zusätzliche Lese-/Schreibstufe.
+  Die Ausgangs-Flow-IDs des Normalizers sind stabil — Formatwechsel der Leitung ändern nichts an den Verbindungen dahinter.
+* **M2 „Nicht bearbeiten“ hat in OMP zwei Bedeutungen.** (a) MXL ist unkomprimiert: ein komprimierter Eingang wird genau einmal
+  dekodiert (unvermeidlich). Passt das Format, **kopiert** der Normalizer die Grains bitgleich mit erhaltenem Index (`rawcopy`) — kein
+  Skalieren, keine Farbwandlung, kein Neuberechnen. (b) Komprimierte Weitergabe (Relay an ein anderes Ziel, Leitungsmitschnitt) nimmt
+  den **Originalstrom vor dem Dekoder** — kein Re-Encode. Neu kodiert wird nur an Ausgängen, die ohnehin kodieren.
+* **M3 Feste Stufenfolge, nur bei festgestellter Abweichung:** Halbbild auflösen → Bildrate → Größe → Farbmatrix → Halbbild erzeugen;
+  Ton: Kanalzuordnung → Abtastrate. Übertragungsfunktion (SDR ↔ HLG/PQ): Standard bleibt Warnung/Sperre (bestehende Regel in
+  `colorimetry.rs`); zusätzlich Einstellung `map` über eine **austauschbare Stufen-Schnittstelle** (`StageBackend`) mit eingebauter Mindest-Abbildung
+  ohne Qualitätsversprechen; ein hochwertiger Dienst kommt später aus der Community. Dieselbe Schnittstelle trägt die Bildraten-Stufe (jetzt
+  `videorate`/`blend` als Übergang, später bewegungskompensiert austauschbar).
+* **M3a Hausformat und Tonformat sind Laufzeitdaten**, nie Festwerte im Code: Vererbung Global → Event → Leitung, Video- und Tonteil getrennt,
+  Änderung im Betrieb baut den Normalizer mit gleichen Ausgangs-Flow-IDs um; Quelle der Wahrheit ist die Datenbank (Stop/Start verliert nichts).
+  Hausformat-Definition für Halbbild: „1080i50“ = 1920×1080, **25 Bilder/s**, `interlaced_tff` (ein Grain = ein Vollbild mit
+  verschränkten Halbbildern, wie `MxlVideoOutput::new_interlaced_tff`).
+* **M4 A/V-Lage = Lage der Etiketten** (Grain-/Sample-Index auf TAI, `omp-mediaio::timebase`). Messung und Ausgleich beziehen sich nie
+  auf Ankunfts- oder Transportlatenzen (Befund 2026-10-05: diese Differenz ist für nach Etikett ausrichtende Verbraucher bedeutungslos).
+* **M5 Drei Messwege, Rangfolge:** (1) **Etiketten-Erhalt aus der Quellzeit** — ST 2110: RTP-Zeitstempel bezogen auf PTP (ST 2110-10,
+  ST 2059-1), MPEG-TS: PTS. Verhindert, dass OMP selbst Versatz erzeugt; einen Versatz, der beim Absender schon im Inhalt steckt, sieht
+  dieser Weg prinzipiell nicht. (2) **Testsignal** (heller Blitz + Tonimpuls, periodisch) in der Testphase — maßgeblicher Messwert; Standardstrategie `once` (messen, übernehmen, halten). Live-Nachführung (`tracking`) ist vorgeplant (Datenmodell/Parameterwert), aber nicht umgesetzt.
+  (3) **Inhaltsbasiert** (Mundbewegung ↔ Sprachhüllkurve, Kreuzkorrelation) — experimentell, liefert nur einen **Vorschlag mit
+  Konfidenz**, wird nie ohne Bestätigung angewendet.
+* **M6 Ausgleich am früheren Strom.** Ton früh → Ton verzögern: fest per Sample-Index-Versatz (bitgleich), nachführend per Interpolation
+  nach dem Muster `omp-audio-delay/delay.rs` (Standard 1 ‰ = 1 ms je Sekunde, nie springend). Bild früh → Bild um ganze Bilder verzögern
+  (lokaler, begrenzter Ring), Rest im Ton. Totband (Standard 10 ms) gegen Pendeln; manuelle Übersteuerung und „Einfrieren“. Kanäle mit
+  nicht-PCM-Daten werden nur um ganze Samples verschoben, nie interpoliert oder resampelt. Vorzeichen wie `av_marker_probe`:
+  **Normkonvention (EBU R 37/ITU-R BT.1359): positiv = Ton eilt dem Bild voraus** → Ton verzögern; negativ (Ton hinkt nach) → Bild verzögern. Das Beispielprogramm `av_marker_probe` hatte bisher die umgekehrte Konvention und wird in 106.4 angeglichen (`docs/entwuerfe/ENTWURF-MCR.md` §1). Eigenanteil des Normalizers: höchstens 5 ms früh / 15 ms spät je Stufe (R 37).
+* **M7 Event als Orchestrator-Modul `mcr`** (Stufe 1, §28; eigene, modulversionierte Tabellen). Ein Event materialisiert **genau einen
+  Workflow**: je Leitung Eingangsrolle + Normalizer-Rolle, dazu Multiviewer; jede Leitung wird ein benannter `Interface`-Ausgang (Kap. 88),
+  Produktions-Workflows hängen sich per `Feed` an. **Quelle der Wahrheit** für Leitungs-Einstellungen, Hausformat-Abweichungen,
+  Messwerte und manuelle Offsets ist das Event in der Datenbank, nicht der Node — Stop/Start eines Workflows verliert nichts
+  (Startumgebung aus dem Event, Laufzeitänderungen werden zurückgeschrieben).
+* **M8 Lebenszyklus** `planned → testing → live → teardown → done`, außerdem `cancelled`; `testing → planned` erlaubt (Umbau), sonst nur
+  vorwärts; Prüfung über `internal/statemachine`. In `live`: `ConfirmStop` am Workflow, Änderungen am Ausgleich nur als Rampe,
+  Wechsel des Ausgleichsmodus nur mit Bestätigungsdialog.
+* **M9 Intercom über den Dienstvertrag** (Kap. 48/49): neue Vertragsroute „Event-Rückweg“ als Verallgemeinerung des Ton-Gasts.
+  Mix-minus liefert der Intercom-Kern; ist die gewünschte Rückweg-Quelle eine Summe, die den Kommentar bereits enthält, legt das MCR
+  einen N-1-Bus am Audiomischer an (`aux.<id>.setN1`). Fehlt beides, gibt es eine Warnung, keinen stillen Ersatz.
+* **M10 Neuer Leitungs-Node `omp-contribution`** (ein Binary, Richtung `in`/`out` je Instanz wie bei den Gateways): SRT
+  (Caller/Listener/Rendezvous, Stream-ID) und RIST ⇄ MXL mit Bild **und mehreren Tonspuren**, Leitungsstatistik, Endpunkte als
+  **Laufzeit-Parameter** (MCR-Leitungen wechseln oft), Passphrasen nur aus Dateien (≤ 0600), nie in Datenbank, Parametern oder Log.
+* **M11 Rollen je Event** (Verantwortung, Leitungstechnik, Kommentar, Beobachtung) werden auf Vorhandenes abgebildet: Modul-
+  Funktionsrechte (Muster `modules/ingest/access.go`), Workflow-Bindung, Zugriffsregeln mit Selektor `workflow`, Intercom-Parties
+  (`users`/`groups`). Keine neue Rechte-Ebene im Kern.
+* **M12 Monitoring folgt dem Event** (Nachtrag Nutzer 2026-11-20): Die Überwachung ist Teil der Materialisierung — Multiviewer-Event-
+  Ansicht und je Leitung eine `omp-scope`-Instanz im Überwachungsmodus (ohne Messbild) auf dem Normalizer-Ausgang. Hinzukommende oder
+  wegfallende Leitungen werden live nachgeführt, ohne andere Leitungen zu unterbrechen; der Abbau entfernt alles. Kann der Workflow-
+  Dienst Rollen eines laufenden Workflows nicht ändern, wird je Leitung ein kleiner Workflow gebildet und per `Feed` angebunden
+  (Prüfung in UMSETZUNG 106.13).
+* **M13 Signalfehler-Erkennung erweitert `omp-scope`, Alarme laufen über die vorhandenen Wege.** Prüfungen als gehaltene Bedingungen
+  (Muster `qc.rs`) mit Profilen `standard`/`strict`/`off` und wenigen Reglern; Meldung über `omp.alert.<node>`, Arten per
+  `alertsink.RegisterKind` (Gruppe `signal`) → Webhook/E-Mail/Empfängerregeln ohne neuen Versandweg. Das Modul `mcr` führt die
+  Alarme je Event/Leitung mit Beginn/Ende, Quittierung und **Historie** (eigene Tabelle) und gibt sie an Multiviewer (Badge/Rahmen),
+  Oberfläche (Toast) und `omp-gpio` weiter. Schwellen sind OMP-Voreinstellungen, keine Normwerte (außer dem R-128-Zielwert und dem
+  R-37-Fenster); das steht so in Katalog und Handbuch. Profile sind **editierbare Daten**, nicht im Code festgelegt.
+* **M14 Alarmreaktionen im Monitoring sind Daten** (Nutzer 2026-11-20): je Event Regeln Auslöser → Reaktion (Kachelrahmen, automatisches
+  Aufschalten der Quelle in ein dediziertes Alarm-PiP, Hinweis an Sprechstellen über `panel.notice`, GPIO), mit Haltezeit, Vorrang, Entprellen
+  und Operator-Sperre; zur Laufzeit änderbar, Stop/Start-fest (UMSETZUNG 106.13e).
+* **M15 Leitungsmitschnitt über den vorhandenen Ingest** (Nutzer 2026-11-20), kein eigener Speicherpfad im Leitungs-Node; Vorprüfung in 106.7,
+  ob der Ingest einen Strom-Eingang kennt oder nur MXL-Flows.
+
+### 33.3 Signalweg einer Leitung
+
+```text
+Leitung (SRT/RIST)  ─► omp-contribution(in) ─┬─► MXL nativ (Bild + Ton) ─► omp-normalizer ─► MXL Hausformat ─► Interface-Ausgang „PGM“
+ST 2110             ─► omp-2110-gateway      ┘   (Etiketten aus Quellzeit)   │ Kopie ODER Stufenkette          ├─► Multiviewer (Event-Layout)
+                                              ├─► Relay/Mitschnitt Original-TS │ A/V: Messung + Ausgleich         ├─► Aufnahme (Ingest/TAMS)
+                                              └─► Statistik (RTT, Verlust, Neusendungen, Bitrate)                  └─► Intercom-Programmeingang (Rückweg)
+```
+
+### 33.4 Normen (Nummern sind belegt; Versionen/Abschnitte vor dem jeweiligen Schritt im Originaltext prüfen, Regel 10)
+
+| Norm | Verwendung | Stand im Projekt |
+|---|---|---|
+| SMPTE ST 2110-10/-20/-30 | Zeitbezug der RTP-Zeitstempel, Video, Audio (Kanalreihenfolge im SDP `channel-order`) | -20/-30 im 2110-Gateway umgesetzt; `channel-order` dort nicht ausgewertet |
+| SMPTE ST 2059-1/-2 | PTP-Epoche, RTP-Zeitstempel = PTP-Zeit der Abtastung | Sendeseite umgesetzt (`ptp.rs`), Empfangsseite neu |
+| SMPTE ST 2022-7 | redundante Leitungswege 2110 | vorhanden (`st2022_7.rs`) |
+| AMWA NMOS IS-04 v1.3, IS-05, IS-08 | Registrierung, Verbindung, Vorbild für die Kanalzuordnung | IS-04/05 überall; IS-08 im 2110-Gateway |
+| EBU R 37 (R37-2007) | Ende-zu-Ende-Fenster Ton ≤ 40 ms vor / ≤ 60 ms nach Bild; je Stufe 5 ms früh / 15 ms spät; Blip/Flash-Testsignal | **im Originaltext gelesen (2026-11-20)**; `omp-scope` +40/−60 ms korrekt; die +45 ms in `docs/decisions.md` sind die Erkennbarkeitsschwelle aus BT.1359, Verwechslung |
+| ITU-R BT.1359-1 (1998) | Erkennbarkeit +45/−125 ms, Annehmbarkeit +90/−185 ms (positiv = Ton voraus); Hintergrund, **nicht** Alarmgrenze | im Originaltext gelesen (2026-11-20) |
+| SRT | Transport | IETF-Internet-Draft `draft-sharabayko-srt-01` (2021-09-07, abgelaufen, **kein RFC**) |
+| RIST (VSF TR-06-1 Simple Profile, TR-06-2 Main Profile) | Transport, Bündelung | TR-06-1:2020-06-25; TR-06-2 laut VSF-Seite aktuell 2024; GStreamer 1.22 `ristsrc` beschreibt sich als TR-06-1 (Simple Profile); Originaltext und Bündelungsverhalten vor 106.7 belegen |
+| SMPTE ST 337 | Kennung nicht-PCM-Daten im Tonkanal (keine Interpolation) | Nummer belegt, Abschnitt vor 106.5 prüfen |
+
+### 33.5 Grenzen / Nicht-Ziele
+
+Keine bewegungskompensierte Normwandlung (59,94 → 50 vorerst nur über `videorate`/`blend` als Übergang, später als austauschbarer Dienst), nur
+Mindest-Tone-Mapping SDR ↔ HDR (Qualitätsdienst später aus der Community), keine Live-Nachführung des A/V-Ausgleichs, keine native
+SRT-Verbindungsbündelung (GStreamer 1.22), keine Anbindung fremder Buchungs-/Leitungsverwaltungssysteme, kein neuer Rechte-Kern.
+In der Entwicklungsumgebung gibt es weder PTP-Netzkarte noch 2110-Netz und keine echte Mobilfunkstrecke: Etiketten aus RTP-Zeitstempeln
+und Leitungsverhalten sind dort nur mit Software-Mitteln (lokale Sender, Systemuhr statt PTP) belegbar und werden so gekennzeichnet.

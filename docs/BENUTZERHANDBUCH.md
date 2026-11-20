@@ -2170,6 +2170,20 @@ Sind Ihnen mehrere Playout-Channels zugewiesen, weist der Techniker Ihnen den Di
 - **Gruppen-Start:** Channels ankreuzen, dann *Next*, *Take*, *Next Live*, *Hold* oder *Auto* — wirkt auf alle gewählten Channels, bei mehr als einem nach Rückfrage.
 - **Bearbeiten und Wechseln:** *Bearbeiten* öffnet die volle Playlist des Channels; die Leiste oben schaltet mit einem Klick (oder **Alt+←/→**, **Alt+1…9**) zu einem anderen Channel, **Alt+0** zurück zur Übersicht. Die Restzeit der anderen Channels bleibt dort sichtbar.
 
+### Überwachung mit Alarmen (Profile)
+
+Im Überwachungsbetrieb meldet das Messgerät Signalfehler als **Alarm bei Eintritt** und **Entwarnung bei Ende**. Es prüft Schwarzbild, Standbild, Stille, Übersteuerung (Clipping), zu hohe Lautheit, Phasenfehler, Mono-Ausfall (ein Kanal still), Signalverlust und Abweichung vom erwarteten Format. Die Grenzwerte sind **OMP-Voreinstellungen**, keine Normwerte; sie stehen in Profilen und sind zur Laufzeit änderbar:
+
+| Parameter | Bedeutung |
+|---|---|
+| `qc.profile` | `standard`, `strict` (kürzere Haltezeiten) oder `off`; ein Wechsel verwirft eigene Abweichungen |
+| `qc.<Prüfung>.enabled` / `.threshold` / `.holdSeconds` / `.severity` | je Prüfung ein-/ausschalten, Schwelle, Haltezeit, Schweregrad |
+| `qc.expectedFormat` | erwartetes Format als JSON, z. B. `{"video":{"width":1920,"height":1080,"rate":"25/1"}}` |
+| `qc.line` | Name der Leitung im Alarmtext |
+| `qc.status` | Zustand aller Prüfungen (aktiv, angepasst, Dauer) |
+
+Ein Ereignis kürzer als die Haltezeit löst keinen Alarm aus; die Entwarnung kommt erst nach zwei Sekunden Ruhe, damit Flackern keine Alarmflut macht. Die Alarme erscheinen als Alarmarten `signal-black`, `signal-freeze` usw. in der Gruppe „signal“ und lassen sich wie alle Alarme an Empfänger leiten.
+
 ## 10a. Audiomischer-Konsole
 
 Die Konsole des Audiomischers zeigt Kanäle als **Kanalzüge** (Name, Pegel,
@@ -2972,3 +2986,74 @@ Einzelheiten und Grenzen: `docs/contracts/CONTRACT-TAMS.md`.
 
 **SRT mit komprimiertem Video.** Das SRT-Gateway kann Rohvideo oder H.264/HEVC (MPEG-TS über SRT), mit beliebiger Auflösung und Rate; Einstellungen im Handbuch (`docs/HANDBUCH.md`, Eintrag `omp-srt-gateway`).
 
+## 10k. Hauptkontrollraum (MCR): Leitungen ins Hausformat bringen
+
+Der **Normalizer** (Node „Normalizer (Hausformat)“) ist der erste Baustein des Hauptkontrollraums. Er nimmt eine ankommende Leitung entgegen und prüft, ob sie dem **Hausformat** entspricht (Bildgröße, Bildrate, Raster, Farbmatrix; beim Ton Abtastrate und Kanalzahl).
+
+- **Passt das Format**, wird **nichts bearbeitet**: Bild und Ton werden bitgleich weitergereicht (Zustand **copy**, Stufenliste leer). Das kostet kaum Rechenleistung und verändert kein Bild.
+- **Weicht es ab**, wandelt der Node nur die nötigen Stufen (Zustand **convert**). Umgesetzt sind Größe, Bildrate, Halbbild auflösen und erzeugen, Farbmatrix (BT.601/709/2020) sowie beim Ton Kanalzuordnung und Abtastrate. Die Übertragungsfunktion (SDR/HDR) wird nicht umgebogen, sondern gemeldet.
+- **Hausformat einstellen:** Parameter `normalize.houseFormat` (Video und Ton getrennt, jederzeit änderbar). Beispiel: `{"video":{"width":1920,"height":1080,"rate":"25/1","scan":"progressive"},"audio":{"sampleRate":48000,"channels":2}}`. Fehlt ein Teil, gilt für diesen Teil keine Anforderung (durchreichen). Die Einstellung bleibt bei Stop/Start erhalten.
+- **Modus** `normalize.mode`: `auto` (Standard) wandelt bei Abweichung; `copyOnly` wandelt nie, sondern meldet die Abweichung als Alarm (Zustand **blocked**).
+- **Anzeige:** `normalize.state`, `normalize.inputFormat` (was ankommt), `normalize.deviations` (was abweicht), `normalize.stages` (was gewandelt wird), `normalize.formatChanges` (Rasterwechsel der Leitung seit dem Start).
+- **Kanalzuordnung (Ton):** Parameter `normalize.audioMap`, z. B. `{"outputs":[{"out":1,"in":3}]}` = Eingangskanal 3 wird Hauskanal 1, nicht genannte Hauskanäle bleiben still. Ohne Angabe gilt Kanal i → Kanal i. Kanäle mit Datenkennung (`dataChannels`) werden nur 1:1 durchgereicht, nie gemischt oder umgerechnet.
+- **Übertragungsfunktion (SDR/HLG/PQ):** Parameter `normalize.transferPolicy`: `house` (Regel aus dem Hausformat), `warn` (Standard: unverändert durchreichen, mit Warnung), `block` (Leitung sperren) oder `map` (abbilden). Die eingebaute Abbildung ist eine **feste Mindest-Kennlinie nur auf der Helligkeit, ohne Qualitätsversprechen** (Farbigkeit bleibt unberührt). Mit `normalize.mapBackend` lässt sie sich durch einen externen Wandlungsdienst ersetzen (Vertrag: `docs/entwuerfe/ENTWURF-MCR.md` §6); fällt der Dienst aus, läuft das Bild unverändert weiter und es gibt einen Alarm.
+- **A/V-Versatz messen:** Methode `avsync.measure` (Dauer in Sekunden, Standard 10) misst am Eingang mit einem Marker-Testsignal (ein helles Bild und gleichzeitig ein Tonimpuls, etwa einmal je Sekunde, wie in EBU R 37 beschrieben). Ergebnis: `avsync.measuredMs` (**positiv = Ton eilt dem Bild voraus**, negativ = Ton hinkt nach), `avsync.confidence` (0 bis 1) und `avsync.method` (`marker` oder `none`). Ohne erkannten Marker bleibt der Messwert leer, es wird nichts erfunden. Eindeutig nur bis ± halbe Impulsperiode (bei einem Impuls je Sekunde ± 500 ms).
+- **A/V-Ausgleich:** Nach `avsync.measure` übernimmt `avsync.apply` den Messwert und hält ihn (`avsync.mode` = `once`, Standard). Ist der Ton zu früh, verzögert der Node den Ton Sample-genau; ist er zu spät, verzögert er das Bild um ganze Bilder und gleicht den Rest im Ton aus. Mit `avsync.mode` = `manual` und `avsync.manualMs` legst du den Wert selbst fest (überstimmt die Messung), mit `off` ist der Ausgleich aus. Innerhalb des Totbands (`avsync.deadbandMs`, Standard 10 ms) wird nichts verändert; die Kopie bleibt dann bitgleich. Änderungen im Betrieb gleiten höchstens mit `avsync.maxSlewPermille` (Standard 5 ‰), damit der Ton nicht springt. Der Ausgleich wirkt nur, solange der Node kopiert (Zustand `copy`); beim Wandeln wird nicht verzögert. `tracking` (Live-Nachführung) ist noch nicht umgesetzt.
+- **Halbbild und Bittiefe:** Das Auflösen und Erzeugen von Halbbildern läuft über 8-Bit-4:2:2; solche Wandlungen kosten Bittiefe. Reine Größen- und Ratenwandlung bleibt bei 10 Bit. Eine hochwertige Wandlung kommt später als austauschbarer Dienst.
+- **Grenze:** Halten nachgeschaltete Nodes den Ausgang offen, kann ein geändertes Hausformat den Ausgangs-Flow nicht ersetzen. Der Node zeigt dann `error` mit dem Hinweis, die Verbraucher kurz zu trennen und neu zu verbinden.
+
+## 10l. Leitungseingang (SRT)
+
+Der Node **Leitungseingang (SRT)** nimmt eine ankommende Leitung entgegen (zum Beispiel ein Mobilfunk-Bündelgerät oder einen Zuspielstrom) und macht daraus MXL-Flows im **Format der Leitung**: Bildgröße und Bildrate werden aus dem Strom erkannt, nichts wird umgerechnet. Das Hausformat stellt danach der Normalizer her (siehe 10k).
+
+- **Einstellungen im Betrieb:** `contrib.uri` (zum Beispiel `srt://10.0.0.5:9000`; bei Listener `srt://:9000`), `contrib.mode` (`caller`, `listener`, `rendezvous`), `contrib.latencyMs` (Standard 200), `contrib.streamId`, `contrib.audioPids` (zum Beispiel `0x101,0x102`; leer = alle in PID-Reihenfolge, höchstens 8). Jede Änderung baut die Verbindung neu auf, die Flow-IDs bleiben gleich.
+- **Ton:** Jede Ton-PID wird als Stereo geführt und alle zusammen als **ein** Tonfluss (zwei PIDs ergeben vier Kanäle).
+- **Passphrase:** Sie steht nie in der Adresse. Sie wird aus der Datei gelesen, die in `OMP_CONTRIB_PASSPHRASE_FILE` steht (Rechte 0600, 10 bis 79 Zeichen). Eine Adresse mit `passphrase=` wird abgelehnt. Bei falscher Passphrase zeigt `contrib.state` den Wert `error`, der Node bleibt am Laufen und versucht es mit wachsendem Abstand erneut.
+- **Anzeige:** `contrib.state`, `contrib.bitrateKbps`, `contrib.rttMs`, `contrib.lossPermille`, `contrib.retransmits`, `contrib.inputFormat`, `contrib.audioChannels`.
+- **RIST:** Statt `srt://…` kann `contrib.uri` eine Adresse `rist://adresse:port` sein (Simple Profile; der Port muss gerade sein). Mehrere Adressen, durch Komma getrennt (`rist://10.0.0.1:5004,10.0.1.1:5006`), bündeln mehrere Verbindungen, höchstens 4. Fällt eine aus, läuft das Bild über die anderen weiter.
+- **Relay:** `contrib.relayUri` (`srt://ziel:port` oder `rist://ziel:port`, leer = aus) gibt den ankommenden Transportstrom **unverändert** weiter, ohne ihn anzufassen. Das kostet etwas Rechenzeit (gemessen 4 bis 9 Prozent eines Kerns).
+- **Mitschnitt:** Eine Leitung wird über den vorhandenen Ingest aufgenommen, und zwar als **dekodierter MXL-Fluss** des Eingangs. Ein Mitschnitt des **Original-Transportstroms** ist damit **nicht** möglich; dafür dient das Relay an ein externes Aufnahmegerät.
+- **Grenzen:** Von RIST ist nur das Simple Profile umgesetzt (kein Main Profile, keine Verschlüsselung). SRT ist ein Internet-Draft, keine Norm. In der NMOS-Registry steht das beim Start deklarierte Format (`OMP_WIDTH` u. a.), der MXL-Fluss trägt das erkannte. Die Quelle muss regelmäßig Parametersätze (SPS/PPS) und Schlüsselbilder senden; ein Strom, der sie nur einmal am Anfang sendet, ist für spät zugeschaltete Empfänger nicht dekodierbar.
+
+## 10m. ST-2110-Empfang: Bild und Ton gleichzeitig halten
+
+Kommt eine Leitung als ST 2110 (zum Beispiel von einem Gastgeber-Sender), trägt jeder RTP-Zeitstempel die Zeit der Abtastung. Der Ingest des 2110-Gateways nutzt sie, wenn eine **synchrone PTP-Uhr** da ist (`OMP_PTP_DOMAIN`): Bild und Ton bekommen ihre Etiketten aus dem Strom und nicht aus dem Zeitpunkt, zu dem das Paket ankam. Dann bleibt der A/V-Versatz erhalten, auch wenn Bild und Ton unterschiedlich lange unterwegs waren.
+
+- `ingest.labelSource`: `rtp` (Standard, wenn eine Uhr da ist) oder `arrival` (wie bisher). `rtp` ohne Uhr wird abgelehnt.
+- `ingest.labelClock`: `ptp`, `none` oder `system` (nur Test ohne PTP-Karte, nicht für den Betrieb).
+- `ingest.labelFallbacks` zählt Pakete, die auf die Ankunft zurückfielen (Uhr nicht synchron oder Zeitstempel passt nicht zur Uhr); `ingest.labelMessage` nennt den Grund; `ingest.labelJumps` zählt Zeitsprünge.
+- **Grenze:** Mit echter PTP-Strecke ist das noch nicht geprüft; es wurde nur lokal mit der Systemuhr als Ersatz belegt.
+
+## 10n. Rückleitung zum Veranstaltungsort
+
+Der Node **Rückleitung (SRT/RIST)** schickt eine Quelle zurück zu dem, der die Leitung liefert, zum Beispiel den Kommentar oder das Programm. Verbinde in der Graph-Ansicht den Ton (und, wenn gewünscht, das Bild) der Quelle mit den Empfängern des Nodes.
+
+- **Ziel:** `contrib.uri` (`srt://host:port` oder `rist://host:port`), `contrib.mode` (Standard `caller`), `contrib.latencyMs`, `contrib.streamId`. Die Passphrase steht wie beim Eingang nur in der Datei `OMP_CONTRIB_PASSPHRASE_FILE`.
+- **Ton und Bild:** Ton wird als AAC gesendet (`contrib.audioBitrateKbps`, Standard 128). Das Bild ist aus, solange `contrib.videoEnabled` nicht gesetzt ist; dann hat der Transportstrom **keine** Bildspur. Mit Bild: H.264 (`contrib.videoBitrateKbps`).
+- **Anzeige:** `contrib.state`, `contrib.bitrateKbps`, `contrib.rttMs`, `contrib.lossPermille`, `contrib.retransmits`.
+- **Latenz:** Gemessen auf einem Rechner (Rückleitung → Leitungseingang) etwa **0,46 s**, davon 0,2 s SRT-Latenz. Über ein echtes Netz kommt die Laufzeit dazu.
+- **Grenzen:** Getestet mit Stereo-Ton und einem Bild von 640×480. Der Node verbindet sich nach einem Abbruch selbst neu.
+
+## 10o. Arbeitsplatz „MCR“ (Hauptkontrollraum)
+
+Der Tab **MCR** ist der Arbeitsplatz des Hauptkontrollraums. Er hat drei Seiten: **Events**, **Vorlagen** und **Hausformat**.
+
+**Events.** Links stehen alle Events als Karten mit Zustandsstreifen und der Zeit bis zum Beginn. Oben lässt sich filtern. Wähle ein Event, dann siehst du rechts:
+
+- Oben den **Ablauf** Geplant → Test → Auf Sendung → Abbau → Beendet. Genau ein farbiger Knopf führt zum nächsten Schritt. Alles, was auf Sendung wirkt oder abbaut, fragt vorher nach.
+- Darunter eine **Karte je Leitung**. Die Lampe zeigt den Zustand: grün = unverändert durchgereicht, cyan = wird gewandelt, orange = gesperrt, rot = Fehler. Der Signalweg zeigt das Format des Eingangs, die nötigen Wandlungsstufen und das Hausformat. Passt die Leitung schon, steht dort „unverändert durchgereicht“.
+- Das **Messgerät** zeigt den A/V-Versatz. Grün ist innerhalb der Toleranz je Stufe (+5 / −15 ms), gelb innerhalb der Sendegrenze (+40 / −60 ms), rot darüber. Positiv heißt: Der Ton eilt dem Bild voraus. **Messen** startet eine Messung von 10 Sekunden, **Übernehmen** hält den Wert und gleicht aus. **Aus / Einmal / Manuell** wählt den Modus; bei Manuell tippst du den Wert selbst ein.
+- Mit **+ Leitung hinzufügen** und dem Menü ⋯ an der Karte änderst du die Leitungen. Auf Sendung bleibt die Struktur gesperrt, Einstellungen lassen sich weiter ändern.
+
+**Vorlagen.** Eine Vorlage ist ein Gerüst aus Leitungen. Aus ihr legst du mit einem Klick ein Event an. Gespeichert wird erst mit **Speichern**.
+
+**Hausformat.** Das Format, auf das alle Leitungen gebracht werden. Ein Event und jede Leitung dürfen es überstimmen. Die gängigen Formate füllen nur die Felder aus, gespeichert wird, was darunter steht. Passphrasen stehen nie in diesen Einstellungen.
+
+
+**Quelle einer Leitung.** Beim Hinzufügen einer Leitung wählen Sie „Neu starten“ (OMP startet den passenden Eingang) oder „Vorhandener Node“: dann erscheinen die laufenden Nodes mit Sendern, etwa dedizierte SRT- oder ST-2110-Nodes. Bild- und Ton-Flow wählen Sie einzeln oder lassen sie automatisch bestimmen. Der Normalizer wird beim Start des Events mit dem gewählten Node verbunden.
+
+**Rechte und Bedienansicht.** Wer ein MCR-Recht hat (z. B. die Gruppe „hkr“), findet die Kachel „Hauptkontrollraum“ in der Bedienansicht – nicht als Verwaltungs-Tab. „Event bedienen“ (`mcr.live`) erlaubt Zustandswechsel sowie das Messen und Übernehmen des A/V-Versatzes; „Events und Leitungen verwalten“ (`mcr.manage`) erlaubt zusätzlich Anlegen, Ändern, Löschen und die Reiter Vorlagen und Hausformat. Knöpfe ohne Recht werden nicht angezeigt; der Server prüft sie ohnehin.
+
+**Tonspuren.** Bei „Vorhandener Node“ wählen Sie, welche Tonspuren die Leitung nimmt: eine Tonspur ist ein Name und eine Gruppe von Kanälen des Ton-Flows der Quelle (Kanalknöpfe, „Stereo-Paare“ legt sie automatisch an). Die Hauskanäle werden der Reihe nach mit den Spuren belegt. Ohne Auswahl laufen alle Kanäle unverändert. Dieselbe Quelle darf in mehreren Leitungen vorkommen, jede mit demselben Bild und anderen Tonspuren (z. B. Leitung „PGM Deutsch“: Spur 1–2, Leitung „International“: Spur 3–4). Die Zuordnung wird auch bei Stop/Start wiederhergestellt. Grenze: Tonspuren stammen aus **einem** Ton-Flow je Leitung; Spuren aus mehreren getrennten Ton-Flows in einer Leitung sind noch nicht möglich.
+
+**Leitungen als Quelle überall.** Sobald ein Event im Test oder auf Sendung läuft, erscheint jede Leitung in allen Quellenauswahlen (X/Y-Panel, Mischer, Playout …) unter dem Namen **MCR/Eventname/Leitung** (der Ton mit dem Zusatz „(Ton)“). Wird das Event oder die Leitung umbenannt, folgt der Name nach wenigen Sekunden.
