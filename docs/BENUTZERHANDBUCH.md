@@ -2933,6 +2933,18 @@ Der **Studio-Mischer** (`omp-lowlat-mixer`) ist für Wege gedacht, bei denen jed
 
 **Wichtig für verlässliche Zeiten:** Der Mischer braucht Echtzeit-Rechte (`RLIMIT_RTPRIO`, z. B. `@audio - rtprio 95` in `limits.d`) und am besten feste CPU-Kerne (`OMP_CPU_AFFINITY`). Ohne diese Rechte läuft er mit normaler Priorität; die Kennzahl *Echtzeit* zeigt das. Aussetzer des Rechners fängt er dann mit einer größeren Eingangs-Reserve ab (*Reserve gewachsen*) — die Latenz steigt entsprechend. Die Zielwerte (2–15 ms Rundlauf) sind auf einem echten Host zu messen: `tools/lowlat-mixer/measure.py`, Karte mit Schleifenkabel.
 
+## 10j. Aufnahme und Wiedergabe mit einem Medienspeicher (TAMS)
+
+Ein **TAMS-Speicher** (Time-addressable Media Store, API 8.2) legt Aufnahmen nach der **Uhrzeit** ab, nicht nach Dateinamen. Daraus lässt sich jeder Zeitbereich abspielen oder die laufende Aufnahme zeitverschoben wiedergeben. OMP ist dabei nur Nutzer eines Speichers, den Sie bereitstellen. **Noch ohne Bedienoberfläche** und noch an keinem echten Speicher geprüft; gesteuert wird über die Methoden der Nodes.
+
+**Einrichten (beide Nodes):** Adresse des Speichers `OMP_TAMS_URL` (mit Versionspfad, https; http nur lokal), Anmeldung `OMP_TAMS_AUTH` (`none`, `bearer`, `basic`, `url_token`). Das Passwort bzw. Token steht **nur** in einer Datei (`OMP_TAMS_TOKEN_FILE`, Rechte höchstens 0600) oder in `OMP_TAMS_TOKEN`, nie in den Einstellungen im Browser. Fehlt die Einrichtung, startet der Node trotzdem und zeigt den Grund bei **tams.lastError**.
+
+**Aufnehmen (TAMS-Aufnahme):** Quelle in der Kreuzschiene mit den Eingängen **Video** und **Audio** verbinden, dann **tams.start**. Fällt der Speicher aus, sammelt der Node die Segmente auf der Platte und lädt sie später nach; ist die Warteschlange voll (Standard 2 GB), gehen die ältesten Segmente verloren (Lücke, sichtbar in **tams.droppedOverflow** und als Alarm). **tams.lagMs** zeigt, wie weit die Registrierung hinter live liegt.
+
+**Abspielen (TAMS-Wiedergabe):** **tams.play** mit den Flow-IDs von Video und/oder Ton (Flow-IDs der Aufnahme, siehe Speicher) und entweder **start**/**end** als Zeitstempel `Sekunden:Nanosekunden` oder **agoSeconds** („vor N Sekunden“) mit **durationSeconds**. Der Anfang erscheint nach etwa 2 s Vorlauf an den Ausgängen **Video**/**Audio** (zum Mischer oder Viewer verbinden). **tams.follow** gibt die Aufnahme mit **delayMs** Verzögerung wieder (mindestens 1000, praktisch Segmentlänge plus einige Sekunden). **tams.stop** beendet. Fehlt ein Stück Aufnahme, bleibt das letzte Bild stehen (oder Schwarz mit `OMP_TAMS_GAP=black`), der Ton schweigt.
+
+Einzelheiten und Grenzen: `docs/contracts/CONTRACT-TAMS.md`.
+
 ## 11. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,
