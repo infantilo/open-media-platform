@@ -3291,6 +3291,8 @@ export const en: Record<keyof typeof de, string> = {
   "tams.exportDone": "Done: {p0} (gaps in the recording: {p1}). The file is on the playback node's machine.",
   "tams.exportFailed": "Export failed: {p0}",
   "tams.exportTimeout": "The export is taking unusually long — check the node status (tams.exportStatus).",
+  "tams.registerAsset": "Register as asset",
+  "tams.exportTitle": "{p0} (export)",
   "wf.ui.heading": "Workflows",
   "wf.ui.count": "{p0} total · {p1} running",
   "wf.ui.f.all": "All",

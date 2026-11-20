@@ -3290,6 +3290,8 @@ export const de = {
   "tams.exportDone": "Fertig: {p0} (Lücken in der Aufnahme: {p1}). Die Datei liegt auf dem Rechner des Wiedergabe-Nodes.",
   "tams.exportFailed": "Export fehlgeschlagen: {p0}",
   "tams.exportTimeout": "Der Export dauert ungewöhnlich lange — Status am Node prüfen (tams.exportStatus).",
+  "tams.registerAsset": "Als Asset registrieren",
+  "tams.exportTitle": "{p0} (Export)",
   "wf.ui.heading": "Workflows",
   "wf.ui.count": "{p0} insgesamt · {p1} laufen",
   "wf.ui.f.all": "Alle",

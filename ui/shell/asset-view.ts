@@ -1588,6 +1588,44 @@ class AssetView extends HTMLElement {
     }
   }
 
+  /** Export-Datei als eigenes Asset anlegen (Datei-Darstellung, veröffentlicht). Der Pfad gilt auf dem Rechner des Orchestrators:
+   *  läuft der Wiedergabe-Node auf einem anderen Host, ist die Darstellung dort nicht erreichbar (die Dateiprüfung zeigt es). */
+  async #registerExportAsset(path: string): Promise<boolean> {
+    const src = this.#assets.find((a) => a.id === this.#selectedId);
+    const json = { "Content-Type": "application/json" };
+    const created = await apiFetch("/api/v1/assets", {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ type: "video", title: tt("tams.exportTitle", { p0: src?.title ?? "TAMS" }), description: "" }),
+    });
+    if (!created.ok) {
+      await this.#reportError(tt("asset.6212ff"), created);
+      return false;
+    }
+    const asset = (await created.json()) as Asset;
+    const ver = await apiFetch(`/api/v1/assets/${asset.id}/versions`, { method: "POST", headers: json, body: JSON.stringify({ parentVersionId: "", changeReason: "TAMS-Export" }) });
+    if (!ver.ok) {
+      await this.#reportError(tt("asset.78e208"), ver);
+      return false;
+    }
+    const version = (await ver.json()) as AssetVersion;
+    const container = path.includes(".") ? path.slice(path.lastIndexOf(".") + 1).toLowerCase() : undefined;
+    const rep = await apiFetch(`/api/v1/asset-versions/${version.id}/representations`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ type: "exported", storage: { provider: "filesystem", uri: path }, container }),
+    });
+    if (!rep.ok) {
+      await this.#reportError(tt("asset.d6bd6d"), rep);
+      return false;
+    }
+    await apiFetch(`/api/v1/asset-versions/${version.id}/publish`, { method: "POST" });
+    showToast(tt("asset.f4379f", { p0: asset.title }), { variant: "info" });
+    await this.#refresh();
+    await this.#select(asset.id);
+    return true;
+  }
+
   async #openTamsPlayModal(tp: TamsPlay) {
     const readers = await this.#tamsReaders();
     this.#openModal(tt("tams.title"), (modal, close) => {
@@ -1671,6 +1709,17 @@ class AssetView extends HTMLElement {
                 info = JSON.parse(text);
               } catch { /* Anzeige bleibt leer */ }
               result.textContent = tt("tams.exportDone", { p0: info.path ?? "", p1: info.gaps ?? 0 });
+              if (info.path) {
+                const path = info.path;
+                const reg = document.createElement("button");
+                reg.textContent = tt("tams.registerAsset");
+                reg.setAttribute("data-role", "tams-export-register");
+                reg.style.marginLeft = "var(--omp-space-2)";
+                reg.addEventListener("click", () => {
+                  void this.#guard(reg, () => this.#registerExportAsset(path), close);
+                });
+                result.append(document.createElement("br"), reg);
+              }
               return false; // Dialog offen lassen: der Pfad soll lesbar bleiben
             }
           }
