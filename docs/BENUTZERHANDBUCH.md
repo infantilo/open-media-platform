@@ -2945,7 +2945,7 @@ Ein **TAMS-Speicher** (Time-addressable Media Store, API 8.2) legt Aufnahmen nac
 
 **Als Datei exportieren:** Im Dialog „Im TAMS-Leser abspielen“ der Asset-Ansicht (oder per `tams.export` am Wiedergabe-Node) einen Dateinamen eingeben und **Als Datei exportieren** wählen. Standard ist schnell und verlustfrei, der Ausschnitt reicht dann auf ganze Segmente (etwa 2 s) hinaus; mit **Bildgenau schneiden** wird neu kodiert. Das Ergebnis liegt im Export-Ordner des Wiedergabe-Nodes (`OMP_TAMS_EXPORT_DIR`, Standard `data/tams-export`); fehlt ein Stück der Aufnahme, ist die Datei dort kürzer (die Zahl der Lücken steht im Ergebnis).
 
-**Aufbewahrung:** Mit `OMP_TAMS_RETENTION_HOURS` (am Aufnahme-Node, z. B. 168 für eine Woche) löscht der Node Segmente seiner eigenen Aufnahmen automatisch, sobald sie älter sind. Ohne den Wert bleibt alles erhalten. Über den Aufnahme-Zeitplan herausgelöste Sendungen (Profil „TAMS-Speicher“, Metadaten-Kopie) behalten ihre Medien auch dann.
+**Aufbewahrung:** Mit `OMP_TAMS_RETENTION_HOURS` (am Aufnahme-Node, z. B. 168 für eine Woche) löscht der Node Segmente seiner eigenen Aufnahmen automatisch, sobald sie älter sind. Ohne den Wert bleibt alles erhalten. Soll die Aufbewahrung dauerhaft laufen (auch wenn der Aufnahme-Node nach der Sendung endet), einen Node **TAMS-Aufbewahrung** starten: er räumt alle Flows mit Aufbewahrungs-Tag nach dem Wert des jeweiligen Flows auf. Über den Aufnahme-Zeitplan herausgelöste Sendungen (Profil „TAMS-Speicher“, Metadaten-Kopie) behalten ihre Medien auch dann.
 
 Einzelheiten und Grenzen: `docs/contracts/CONTRACT-TAMS.md`.
 

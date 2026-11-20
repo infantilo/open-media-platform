@@ -72,6 +72,13 @@ pub fn last_change_ns(flow: &serde_json::Value) -> Option<i128> {
     ["metadata_updated", "segments_updated"].iter().filter_map(|k| flow.get(*k)?.as_str().and_then(parse_rfc3339_ns)).max()
 }
 
+/// Offset eines Retention-Tags in Sekunden (Timestamp `S:N`); nur nicht negative Werte.
+pub fn tag_offset_s(flow: &serde_json::Value, tag: &str) -> Option<u64> {
+    let t = flow.get("tags")?.get(tag)?.as_str()?;
+    let ts = Timestamp::parse(t).ok()?;
+    u64::try_from(ts.ns() / 1_000_000_000).ok()
+}
+
 /// Wert des Tags `flow_retention_offset` in Sekunden (Timestamp `S:N`); nur ganze, nicht negative Offsets.
 pub fn flow_offset_s(flow: &serde_json::Value) -> Option<u64> {
     let t = flow.get("tags")?.get(FLOW_TAG)?.as_str()?;

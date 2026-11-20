@@ -353,6 +353,16 @@
     "expectedResources": "moderat während der Wiedergabe (Dekodieren), je Spur ein Hol- und ein Wiedergabe-Thread"
   },
   {
+    "type": "omp-tams-janitor",
+    "label": "TAMS-Aufbewahrung",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-tams-janitor"],
+    "mediaKind": "any", "env": {},
+    "description": "Dauerläufer für die Aufbewahrung in einem zeitadressierten Medienspeicher (TAMS, API 8.2, AppNote 0019): findet Flows über die Tags segment_retention_offset und flow_retention_offset und löscht alte Segmente bzw. abgelaufene Flows nach dem Wert jedes Flows; leere Flows mit Tag optional (OMP_TAMS_EMPTY_FLOW_HOURS). Flows ohne Tag werden nie angefasst. Die Tags setzt der Aufnahme-Node (OMP_TAMS_RETENTION_HOURS, OMP_TAMS_FLOW_RETENTION_HOURS) bzw. das Aufnahmeprofil „tams“. Einrichtung über Umgebungsvariablen (OMP_TAMS_URL, OMP_TAMS_AUTH, Token nur aus Datei OMP_TAMS_TOKEN_FILE oder OMP_TAMS_TOKEN, OMP_TAMS_JANITOR_INTERVAL_S). Braucht Löschrecht am Flow. Methode tams.sweepNow, Kennzahlen tams.*. Nur gegen einen Testserver geprüft.",
+    "i18n": { "en": {"label": "TAMS retention", "description": "Long-running retention worker for a time-addressable media store (TAMS, API 8.2, AppNote 0019): finds flows via the tags segment_retention_offset and flow_retention_offset and deletes old segments or expired flows according to each flow's own value; optionally empty flows with a tag (OMP_TAMS_EMPTY_FLOW_HOURS). Flows without a tag are never touched. The tags are set by the recording node (OMP_TAMS_RETENTION_HOURS, OMP_TAMS_FLOW_RETENTION_HOURS) or the \"tams\" recording profile. Configured by environment variables (OMP_TAMS_URL, OMP_TAMS_AUTH, token only from file OMP_TAMS_TOKEN_FILE or OMP_TAMS_TOKEN, OMP_TAMS_JANITOR_INTERVAL_S). Needs delete permission on the flows. Method tams.sweepNow, metrics tams.*. Only tested against a test server."}},
+    "expectedResources": "sehr gering (eine Abfrage je Durchlauf)"
+  },
+  {
     "type": "omp-vfa",
     "label": "Video folgt Audio",
     "runner": "process",

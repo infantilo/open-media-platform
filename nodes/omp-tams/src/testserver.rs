@@ -188,6 +188,16 @@ fn handle(st: &Arc<Mutex<State>>, base: &str, method: &Method, url: &str, auth: 
                 }
             }
         }
+        ("GET", ["tams", "v8.2", "flows"]) => {
+            let mut v: Vec<Value> = s.flows.values().map(|f| f.json.clone()).collect();
+            for (k, val) in &q {
+                if let Some(tag) = k.strip_prefix("tag_exists.") {
+                    let want = val == "true";
+                    v.retain(|f| f.get("tags").and_then(|t| t.get(tag)).is_some() == want);
+                }
+            }
+            out(200, Value::Array(v))
+        }
         ("DELETE", ["tams", "v8.2", "flows", id]) => match s.flows.get(*id) {
             Some(f) if f.read_only => err(403, "Flow ist schreibgeschützt"),
             Some(_) => {

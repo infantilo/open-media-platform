@@ -205,6 +205,46 @@ impl Client {
         }
     }
 
+    /// `GET /flows?tag_exists.<tag>=true` (AppNote 0019: Worker finden ihre Flows über das Tag), folgt den Seiten.
+    /// `max_flows` schützt vor unbegrenzten Antworten.
+    pub fn list_flows_with_tag(&self, tag: &str, max_flows: usize) -> Result<Vec<serde_json::Value>, Error> {
+        if tag.is_empty() || !tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.') {
+            return Err(Error::Config(format!("ungültiger Tag-Name {tag:?}")));
+        }
+        let mut all: Vec<serde_json::Value> = Vec::new();
+        let mut url = format!("{}/flows?tag_exists.{tag}=true", self.base);
+        let mut seen: Vec<String> = Vec::new();
+        loop {
+            let r = self.call("GET", &url, None, true, self.cfg.max_api_response)?;
+            if r.status != 200 {
+                return Err(unexpected(r.status, &r));
+            }
+            let page: Vec<serde_json::Value> = decode(&r)?;
+            all.extend(page);
+            if all.len() > max_flows {
+                return Err(Error::Protocol(format!("mehr als {max_flows} Flows in der Antwort")));
+            }
+            let next = match (&r.link, &r.next_key) {
+                (Some(l), _) => parse_link_next(l).map(|u| absolute(&self.origin, &u)),
+                (None, Some(k)) => Some(add_query(&url_without_page(&url), "page", k)),
+                _ => None,
+            };
+            match next {
+                Some(n) => {
+                    if origin_of(&n).as_deref() != Some(self.origin.as_str()) {
+                        return Err(Error::Protocol(format!("Folgeseite zeigt auf fremden Ursprung: {}", redact_url(&n))));
+                    }
+                    if seen.contains(&n) {
+                        return Err(Error::Protocol("Seitenabruf dreht sich im Kreis".into()));
+                    }
+                    seen.push(n.clone());
+                    url = n;
+                }
+                None => return Ok(all),
+            }
+        }
+    }
+
     /// `GET /flows/{id}`: Beschreibung eines Flows (als JSON, damit auch unbekannte Felder erhalten bleiben).
     pub fn get_flow(&self, flow_id: &str) -> Result<serde_json::Value, Error> {
         check_id(flow_id)?;
