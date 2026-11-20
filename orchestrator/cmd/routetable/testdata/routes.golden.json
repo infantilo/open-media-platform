@@ -1659,6 +1659,102 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/mcr/events",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/mcr/events",
+    "auth": "feature:FeatManage",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/mcr/events/{id}",
+    "auth": "feature:FeatManage",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/mcr/events/{id}",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/mcr/events/{id}",
+    "auth": "feature:FeatManage",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/mcr/events/{id}/lines/{lineId}/avsync",
+    "auth": "feature:FeatLive|FeatManage",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/mcr/events/{id}/lines/{lineId}/measure",
+    "auth": "feature:FeatLive|FeatManage",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/mcr/events/{id}/members",
+    "auth": "feature:FeatManage",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/mcr/events/{id}/status",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/mcr/events/{id}/transition",
+    "auth": "feature:FeatLive",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/mcr/settings",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/mcr/settings",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/mcr/templates",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/mcr/templates",
+    "auth": "feature:FeatManage",
+    "domain": "core"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/v1/mcr/templates/{id}",
+    "auth": "feature:FeatManage",
+    "domain": "core"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/v1/mcr/templates/{id}",
+    "auth": "feature:FeatManage",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/me/consoles",
     "auth": "auth",
     "domain": "core"

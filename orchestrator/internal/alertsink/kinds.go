@@ -32,7 +32,7 @@ type KindInfo struct {
 var (
 	kindMu    sync.RWMutex
 	kindList  []KindInfo
-	kindNamed = regexp.MustCompile(`^[a-z0-9][a-z0-9._:-]{0,63}$`)
+	kindNamed = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$`)
 )
 
 // RegisterKind meldet eine Alarmart an (erneutes Anmelden ersetzt sie).
@@ -125,6 +125,15 @@ func init() {
 		{Kind: "file-force-delete", Severity: SevWarning, Group: "files", Label: "Gesperrte Datei erzwungen gelöscht"},
 		{Kind: "marker", Severity: SevWarning, Group: "support", Label: "Marker „Problem jetzt“ gesetzt", OptIn: true},
 		{Kind: "freeze", Severity: SevInfo, Group: "support", Label: "Momentaufnahme (Freeze) erstellt", OptIn: true},
+		{Kind: "signal-black", Severity: SevCritical, Group: "signal", Label: "Signal: Schwarzbild", LabelEN: "Signal: black picture"},
+		{Kind: "signal-freeze", Severity: SevWarning, Group: "signal", Label: "Signal: Standbild", LabelEN: "Signal: frozen picture"},
+		{Kind: "signal-silence", Severity: SevCritical, Group: "signal", Label: "Signal: Stille", LabelEN: "Signal: silence"},
+		{Kind: "signal-clipping", Severity: SevWarning, Group: "signal", Label: "Signal: Übersteuerung", LabelEN: "Signal: clipping"},
+		{Kind: "signal-loudness", Severity: SevWarning, Group: "signal", Label: "Signal: Lautheit zu hoch", LabelEN: "Signal: loudness too high"},
+		{Kind: "signal-phase", Severity: SevWarning, Group: "signal", Label: "Signal: Phasenfehler", LabelEN: "Signal: phase error"},
+		{Kind: "signal-monoDropout", Severity: SevWarning, Group: "signal", Label: "Signal: Mono-Ausfall", LabelEN: "Signal: mono dropout"},
+		{Kind: "signal-signalLoss", Severity: SevCritical, Group: "signal", Label: "Signal: Signalverlust", LabelEN: "Signal: signal loss"},
+		{Kind: "signal-formatMismatch", Severity: SevWarning, Group: "signal", Label: "Signal: Format weicht ab", LabelEN: "Signal: format mismatch"},
 		{Kind: "user-action", Severity: SevInfo, Group: "user", Label: "Manuelle Benutzeraktion", OptIn: true},
 	} {
 		RegisterKind(k)

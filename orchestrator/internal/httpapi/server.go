@@ -963,7 +963,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Active-Directory-Anbindung) — global VerbAdmin, dieselbe Stufe wie
 	// Rollenbindungen/Organisationen/Nutzerverwaltung selbst.
 	if options.sourceTags != nil {
-		mux.HandleFunc("GET /api/v1/sources", g.requireAuth(guard(func(h http.HandlerFunc) http.HandlerFunc { return access.filterSources(h) }, handleListSources(nodes, options.sourceTags, workflowSvc.FindRoleForNode))))
+		mux.HandleFunc("GET /api/v1/sources", g.requireAuth(guard(func(h http.HandlerFunc) http.HandlerFunc { return access.filterSources(h) }, handleListSources(nodes, options.sourceTags, workflowSvc.FindRoleForNode, options.sourceNamer))))
 		mux.HandleFunc("PUT /api/v1/sources/{senderId}/tags", g.requireVerbGlobal(authz.VerbConfigure, handlePutSourceTags(nodes, options.sourceTags, options.domainAudit)))
 		mux.HandleFunc("GET /api/v1/sinks", g.requireAuth(guard(func(h http.HandlerFunc) http.HandlerFunc { return access.filterSinks(h) }, handleListSinks(nodes, options.sourceTags, workflowSvc.FindRoleForNode))))
 		mux.HandleFunc("PUT /api/v1/sinks/{receiverId}/tags", g.requireVerbGlobal(authz.VerbConfigure, handlePutSinkTags(nodes, options.sourceTags, options.domainAudit)))

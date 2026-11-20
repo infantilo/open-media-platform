@@ -166,6 +166,54 @@ func main() {
 		}
 	}
 
+	// Event-Rückwege (optionale Rollen, Kapitel 106.12): anlegen (zweimal = idempotent), Form prüfen, abbauen.
+	if *mutate {
+		var cr, del *extsvc.RouteDef
+		for i := range mf.Routes {
+			switch mf.Routes[i].Role {
+			case "event.return.create":
+				cr = &mf.Routes[i]
+			case "event.return.delete":
+				del = &mf.Routes[i]
+			}
+		}
+		if cr != nil && del != nil {
+			body := []byte(`{"key":"konformanz/pgm","event":"konformanz","name":"Konformanz","mode":"mix"}`)
+			var first []byte
+			code, b, err := r.do(cr.Method, mf.Base+cr.Path, body, true, feats)
+			if err == nil && code != 201 {
+				err = fmt.Errorf("HTTP %d: %s", code, strings.TrimSpace(string(b)))
+			}
+			if err == nil {
+				first = b
+				err = extsvc.CheckShape(mf.Kind, "event.return.create", b)
+			}
+			r.check("Rolle event.return.create", err)
+			code, b, err = r.do(cr.Method, mf.Base+cr.Path, body, true, feats)
+			if err == nil && code/100 != 2 {
+				err = fmt.Errorf("zweiter Aufruf mit gleichem key: HTTP %d", code)
+			}
+			if err == nil {
+				var x, y struct {
+					Return struct {
+						RetIn int `json:"ret_in"`
+					} `json:"return"`
+				}
+				_ = json.Unmarshal(first, &x)
+				_ = json.Unmarshal(b, &y)
+				if x.Return.RetIn != y.Return.RetIn {
+					err = fmt.Errorf("nicht idempotent: ret_in %d dann %d", x.Return.RetIn, y.Return.RetIn)
+				}
+			}
+			r.check("Rolle event.return.create (idempotent)", err)
+			code, b, err = r.do(del.Method, mf.Base+strings.Replace(del.Path, "{id}", "konformanz", 1), nil, true, feats)
+			if err == nil && code != 200 {
+				err = fmt.Errorf("HTTP %d: %s", code, strings.TrimSpace(string(b)))
+			}
+			r.check("Rolle event.return.delete", err)
+		}
+	}
+
 	// Oberfläche: relative Bundles müssen unter `<Base>/ui/<Datei>` auslieferbar sein.
 	seen := map[string]bool{}
 	var bundles []string

@@ -247,10 +247,29 @@ func FromEvent(ev sse.Event) (Alert, bool) {
 		NodeID   string `json:"node_id"`
 		Message  string `json:"message"`
 		Severity string `json:"severity"`
+		// Strukturierte Signalalarme (omp-scope, Kapitel 106.13c): Art, Zustand raised/cleared, Leitung.
+		Kind  string `json:"kind"`
+		State string `json:"state"`
+		Line  string `json:"line"`
 	}
 	_ = json.Unmarshal(ev.Data, &p)
 	if p.Message == "" {
 		p.Message = string(ev.Data)
+	}
+	if strings.HasPrefix(p.Kind, "signal-") {
+		if _, known := lookupKind(p.Kind); known {
+			sev := SevWarning
+			switch p.Severity {
+			case "error", "critical":
+				sev = SevCritical
+			case "info":
+				sev = SevInfo
+			}
+			if p.State == "cleared" {
+				sev = SevInfo // Entwarnung
+			}
+			return Alert{Kind: p.Kind, Subject: id, Name: p.Line, Message: p.Message, Severity: sev}, true
+		}
 	}
 	return Alert{Kind: "node-alert", Subject: id, Message: p.Message, Severity: p.Severity}, true
 }

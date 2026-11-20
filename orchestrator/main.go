@@ -73,6 +73,7 @@ import (
 	filesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/files"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
 	jobsmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/jobs"
+	mcrmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/mcr"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
@@ -417,7 +418,8 @@ func main() {
 	extsvcMod := extsvcmod.New(extsvcmod.Services{}) // Registry, Launcher und Node-Client folgen weiter unten
 	jobsMod := jobsmod.New()                         // ffmpeg-Jobs: Host-Auswahl, Lastverteilung, Sendeschutz (Kapitel 52)
 	filesMod := filesmod.New()                       // Dateien: Explorer, Papierkorb, „Datei fehlt“ (Kapitel 86); Anbindungen folgen unten
-	registerModules(modules, playoutSvc, audioRulesSvc, reviewMod, ingestMod, extsvcMod, jobsMod, filesMod)
+	mcrMod := mcrmod.New()                           // Hauptkontrollraum (Kapitel 106): Workflow-Dienst und Nodes folgen unten
+	registerModules(modules, playoutSvc, audioRulesSvc, reviewMod, ingestMod, extsvcMod, jobsMod, filesMod, mcrMod)
 	if err := modules.Migrate(ctx, database); err != nil {
 		slog.Error("module migration failed (affected modules are not mounted)", "error", err)
 	}
@@ -1245,6 +1247,10 @@ func main() {
 	reviewMod.ProxyRunner = &jobrun.Runner{D: jobDisp, Caller: "proxy", Class: jobrun.ClassInteractive}
 	ingestMod.S = ingestmod.Services{Assets: assetStore, Launcher: launcherSvc, Nodes: store, Graph: graphSvc, FFmpeg: ingestFFmpeg,
 		Jobs: &jobrun.Runner{D: jobDisp, Caller: "convert", Class: jobrun.ClassScheduled}}
+	workflowSvc.RegisterRoleEnvHook(mcrMod.RoleEnvHook)
+	mcrMod.SetRuntime(&mcrmod.Runtime{Wf: workflowSvc, Nodes: mcrNodes{nodes: store, http: nodeHTTPClient}, SecretsDir: mcrSecretsDir,
+		Sources:  mcrFabric{nodes: store, graph: graphSvc},
+		Intercom: &mcrmod.Intercom{Svc: extsvcMod, Fabric: mcrFabric{nodes: store, graph: graphSvc}}})
 	extsvcMod.S = extsvcmod.Services{Nodes: store, Secrets: serviceSecrets{l: launcherSvc, token: serviceToken}, HTTP: &http.Client{Transport: nodeauth.Wrap(nodeTransport), Timeout: 10 * time.Second}}
 	processStore := process.NewStore(database)
 	// EventPublisher = nc direkt (erfüllt process.EventPublisher: Publish
@@ -1767,7 +1773,7 @@ func main() {
 	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
 	go timelineRec.Run(ctx, hub, timelineSink)
 	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithAccessRules(accessRuleStore, accessEngine), httpapi.WithDirectory(dirMgr, dirMap), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithMXLDomains(mxlDomainStore), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithHostSoftware(hostSoftwareSvc), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithAlertStatus(alertStatusFn), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithAccessRules(accessRuleStore, accessEngine), httpapi.WithDirectory(dirMgr, dirMap), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithSourceNamer(mcrMod.SourceName), httpapi.WithMXLDomains(mxlDomainStore), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithHostSoftware(hostSoftwareSvc), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithAlertStatus(alertStatusFn), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
 		h, err := housekeeping.CheckHealth(ctx, database)
 		housekeeping.AddVolume(&h, os.Getenv("OMP_DB_VOLUME_PATH"))
 		return h, err

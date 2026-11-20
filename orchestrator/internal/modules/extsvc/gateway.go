@@ -726,3 +726,65 @@ func (m *Module) serveUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, 8<<20))
 }
+
+// CallRole ruft eine Vertragsrolle eines Dienstes vom Typ `kind` auf (interner Aufruf, z. B. durch das MCR-Modul). Die Rechte der
+// handelnden Person prüft der Aufrufer; der Dienst bekommt alle seine Funktionsrechte (wie die Verwaltung). `params` ersetzen die
+// Platzhalter `{…}` der Route der Reihe nach. Gibt Statuscode und Antwortkörper zurück.
+func (m *Module) CallRole(ctx context.Context, kind, role string, params []string, body any, actor string) (int, []byte, error) {
+	var l live
+	found := false
+	for _, c := range m.liveServices() {
+		if c.manifest.Kind == kind {
+			l, found = c, true
+			break
+		}
+	}
+	if !found {
+		return 0, nil, fmt.Errorf("kein laufender Dienst vom Typ %q", kind)
+	}
+	var route RouteDef
+	ok := false
+	for _, r := range l.manifest.Routes {
+		if r.Role == role {
+			route, ok = r, true
+			break
+		}
+	}
+	if !ok {
+		return 0, nil, fmt.Errorf("Dienst %q hat keine Rolle %q", l.manifest.Name, role)
+	}
+	path := route.Path
+	for _, p := range params {
+		i := strings.Index(path, "{")
+		j := strings.Index(path, "}")
+		if i < 0 || j < i {
+			return 0, nil, fmt.Errorf("zu viele Parameter für %s", route.Path)
+		}
+		path = path[:i] + url.PathEscape(p) + path[j+1:]
+	}
+	var raw []byte
+	if body != nil {
+		var err error
+		if raw, err = json.Marshal(body); err != nil {
+			return 0, nil, err
+		}
+	}
+	hdr := http.Header{}
+	hdr.Set("Content-Type", "application/json")
+	hdr.Set(HUser, actor)
+	var have []string
+	for _, f := range l.manifest.Features {
+		have = append(have, f.ID)
+	}
+	hdr.Set(HFeatures, strings.Join(have, ","))
+	hdr.Set(HGroups, "")
+	hdr.Set(HRequestHost, "localhost")
+	resp, err := m.callNode(ctx, l, route.Method, path, raw, hdr)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	m.audit(l.manifest.Name, actor, resp)
+	return resp.StatusCode, out, nil
+}

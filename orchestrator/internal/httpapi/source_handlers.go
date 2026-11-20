@@ -113,14 +113,14 @@ func hasAllTags(s SourceInfo, want []string) bool {
 	return true
 }
 
-func handleListSources(nodes NodeLister, store SourceTagStore, roles func(string) (string, string, string, bool)) http.HandlerFunc {
+func handleListSources(nodes NodeLister, store SourceTagStore, roles func(string) (string, string, string, bool), namer func(workflowID, role string) (string, bool)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		explicit, err := store.All()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		list := buildSources(nodes.List(), explicit, roles)
+		list := applySourceNames(buildSources(nodes.List(), explicit, roles), namer)
 		// Optionale Filter: ?tag=a&tag=b (alle müssen passen), ?mediaType=audio, ?workflowId=…
 		q := r.URL.Query()
 		wantTags := q["tag"]
@@ -314,4 +314,43 @@ func handlePutSinkTags(nodes NodeLister, store SourceTagStore, domainAudit Domai
 		logDomainAudit(domainAudit, actor, "sink_tags", receiverID, "set", map[string]any{"node": key.NodeID, "label": key.SenderLabel, "tags": tags})
 		writeJSON(w, http.StatusOK, map[string]any{"receiverId": receiverID, "explicitTags": tags})
 	}
+}
+
+// applySourceNames gibt Quellen, deren Node einem Modul-Eintrag (z. B. einer MCR-Leitung) gehört, den Anzeigenamen des Moduls:
+// Bild „MCR/Event/Leitung“, Ton mit Zusatz „(Ton)“, Daten „(Daten)“. Gruppe und Node-Name folgen, damit Quellenauswahlen sie
+// gemeinsam zeigen.
+func applySourceNames(list []SourceInfo, namer func(workflowID, role string) (string, bool)) []SourceInfo {
+	if namer == nil {
+		return list
+	}
+	for i := range list {
+		s := &list[i]
+		name, ok := namer(s.WorkflowID, s.Role)
+		if !ok {
+			continue
+		}
+		old := s.NodeLabel
+		s.NodeLabel = name
+		switch s.MediaType {
+		case "video":
+			s.Label = name
+		case "audio":
+			s.Label = name + " (Ton)"
+		default:
+			s.Label = name + " (Daten)"
+		}
+		if old != "" && strings.HasPrefix(s.GroupHint, old) {
+			s.GroupHint = name + strings.TrimPrefix(s.GroupHint, old)
+		}
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].NodeLabel != list[j].NodeLabel {
+			return list[i].NodeLabel < list[j].NodeLabel
+		}
+		if list[i].Label != list[j].Label {
+			return list[i].Label < list[j].Label
+		}
+		return list[i].SenderID < list[j].SenderID
+	})
+	return list
 }

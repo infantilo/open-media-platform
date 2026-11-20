@@ -135,3 +135,18 @@ func TestWatchHostsReportsTransitionsOnly(t *testing.T) {
 		t.Fatalf("%v", kinds)
 	}
 }
+
+func TestFromEventSignalAlarmKeepsKindLineAndClears(t *testing.T) {
+	a, ok := FromEvent(sse.Event{Type: "omp.alert.n1", Data: []byte(`{"node_id":"n1","message":"PGM: Schwarzbild","kind":"signal-black","state":"raised","severity":"error","line":"PGM"}`)})
+	if !ok || a.Kind != "signal-black" || a.Name != "PGM" || a.Severity != SevCritical {
+		t.Fatalf("%+v", a)
+	}
+	c, _ := FromEvent(sse.Event{Type: "omp.alert.n1", Data: []byte(`{"node_id":"n1","message":"PGM: Schwarzbild – beendet","kind":"signal-black","state":"cleared","severity":"error","line":"PGM"}`)})
+	if c.Severity != SevInfo || c.Kind != "signal-black" {
+		t.Fatalf("Entwarnung muss Info sein: %+v", c)
+	}
+	u, _ := FromEvent(sse.Event{Type: "omp.alert.n1", Data: []byte(`{"node_id":"n1","message":"x","kind":"signal-unbekannt"}`)})
+	if u.Kind != "node-alert" {
+		t.Fatalf("unbekannte Art fällt auf node-alert zurück: %+v", u)
+	}
+}

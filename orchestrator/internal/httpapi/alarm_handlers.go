@@ -44,6 +44,7 @@ type handlerOptions struct {
 	accessStore         AccessRuleStore
 	accessEngine        AccessEngine
 	sourceTags          SourceTagStore
+	sourceNamer         func(workflowID, role string) (string, bool)
 	ffmpegTools         FFmpegToolsService
 	updates             UpdateService
 	updateSup           UpdateSupervisor
@@ -165,6 +166,11 @@ func WithOrganizations(svc OrganizationService) HandlerOption {
 // WithSourceTags verdrahtet den Tag-Overlay (Kapitel 27 / P4).
 func WithSourceTags(store SourceTagStore) HandlerOption {
 	return func(o *handlerOptions) { o.sourceTags = store }
+}
+
+// WithSourceNamer: Module (MCR) geben ihren Quellen einen Anzeigenamen (z. B. „MCR/Event/Leitung“) für alle Quellenauswahlen.
+func WithSourceNamer(fn func(workflowID, role string) (string, bool)) HandlerOption {
+	return func(o *handlerOptions) { o.sourceNamer = fn }
 }
 
 func WithGroups(svc GroupService) HandlerOption {

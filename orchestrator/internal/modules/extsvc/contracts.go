@@ -36,6 +36,9 @@ var Contracts = map[string]Contract{
 		"channels":     {Method: "GET", Params: 0},
 		"guest.create": {Method: "POST", Params: 0},
 		"guest.revoke": {Method: "DELETE", Params: 1},
+		// Event-Rückwege (Kapitel 106.12): Rückweg zu einer Leitung eines Events anlegen/abbauen.
+		"event.return.create": {Method: "POST", Params: 0},
+		"event.return.delete": {Method: "DELETE", Params: 1},
 	},
 }
 
@@ -151,6 +154,12 @@ func CheckShape(kind, role string, body []byte) error {
 		}
 	case "guest.create":
 		return need(v, "Gast", "id", "url", "expires")
+	case "event.return.create":
+		if err := need(v, "Rückweg", "return"); err != nil {
+			return err
+		}
+		r, _ := v["return"].(map[string]any)
+		return need(r, "return", "key", "ret_channel", "ret_in")
 	case "deck.state":
 		if err := need(v, "Zustand", "me", "channels", "parties"); err != nil {
 			return err

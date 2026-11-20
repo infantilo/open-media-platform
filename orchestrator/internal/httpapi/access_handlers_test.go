@@ -71,7 +71,7 @@ func TestAccessFiltersSourcesAndSinksPerUser(t *testing.T) {
 			{SubjectType: "user", Subject: "anna", Kind: "sink", Action: "see", Effect: "allow", SelectorType: "node", SelectorValue: "mon"},
 		},
 	})
-	h := ac.filterSources(handleListSources(ac.nodes, emptyTags{}, nil))
+	h := ac.filterSources(handleListSources(ac.nodes, emptyTags{}, nil, nil))
 	rec := httptest.NewRecorder()
 	h(rec, asUser(httptest.NewRequest("GET", "/api/v1/sources", nil), "anna"))
 	var src []SourceInfo

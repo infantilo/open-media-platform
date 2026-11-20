@@ -85,3 +85,31 @@ func TestBuildSinksMergesTagsAndKeepsSenderKeysApart(t *testing.T) {
 		t.Fatalf("video sink = %+v", got[1])
 	}
 }
+
+func TestApplySourceNamesRenamesModuleSources(t *testing.T) {
+	list := []SourceInfo{
+		{SenderID: "v", Label: "pgm-norm Sender 1", NodeLabel: "pgm-norm", WorkflowID: "wf1", Role: "pgm-norm", MediaType: "video", GroupHint: "pgm-norm:high"},
+		{SenderID: "a", Label: "pgm-norm Sender 2", NodeLabel: "pgm-norm", WorkflowID: "wf1", Role: "pgm-norm", MediaType: "audio"},
+		{SenderID: "x", Label: "Source Sender 1", NodeLabel: "Source", WorkflowID: "", Role: "", MediaType: "video"},
+	}
+	namer := func(wf, role string) (string, bool) {
+		if wf == "wf1" && role == "pgm-norm" {
+			return "MCR/Fussball/PGM", true
+		}
+		return "", false
+	}
+	got := applySourceNames(list, namer)
+	byID := map[string]SourceInfo{}
+	for _, s := range got {
+		byID[s.SenderID] = s
+	}
+	if byID["v"].Label != "MCR/Fussball/PGM" || byID["a"].Label != "MCR/Fussball/PGM (Ton)" || byID["v"].GroupHint != "MCR/Fussball/PGM:high" {
+		t.Fatalf("%+v", got)
+	}
+	if byID["x"].Label != "Source Sender 1" {
+		t.Fatal("fremde Quellen bleiben unverändert")
+	}
+	if len(applySourceNames(list[:1], nil)) != 1 {
+		t.Fatal("ohne Namensgeber unverändert")
+	}
+}

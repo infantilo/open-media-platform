@@ -25,6 +25,7 @@ import (
 	filesmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/files"
 	ingestmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/ingest"
 	jobsmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/jobs"
+	mcrmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/mcr"
 	playoutmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/playout"
 	radiomod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/radio"
 	reviewmod "github.com/infantilo/openmediaplatform/orchestrator/internal/modules/review"
@@ -36,8 +37,8 @@ import (
 // registerModules meldet die Module des Orchestrators an (UMSETZUNG.md Kapitel 36). Cloud (36.6), Audio-Ausgabe (36.7),
 // Playout (36.8), Eingang/Review (Kapitel 43) sind Module; `extsvc` ist das Dienst-Gateway (Kapitel 48), über das Fachdienste in eigenen
 // Nodes (z. B. Intercom) Rechte, Oberfläche, Metriken und Audit in die Plattform einbringen.
-func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, audioRulesSvc *audiorulesmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module, extsvcMod *extsvcmod.Module, jobsMod *jobsmod.Module, filesMod *filesmod.Module) {
-	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(audioRulesSvc), reviewMod, ingestMod, extsvcMod, jobsMod, filesMod, radiomod.New()} {
+func registerModules(reg *module.Registry, playoutSvc *playoutmod.Services, audioRulesSvc *audiorulesmod.Services, reviewMod *reviewmod.Module, ingestMod *ingestmod.Module, extsvcMod *extsvcmod.Module, jobsMod *jobsmod.Module, filesMod *filesmod.Module, mcrMod *mcrmod.Module) {
+	for _, m := range []module.Module{cloudmod.New(), playoutmod.New(playoutSvc), audiorulesmod.New(audioRulesSvc), reviewMod, ingestMod, extsvcMod, jobsMod, filesMod, radiomod.New(), mcrMod} {
 		if err := reg.Register(m); err != nil {
 			slog.Error("module registration failed", "module", m.Name(), "error", err)
 		}
