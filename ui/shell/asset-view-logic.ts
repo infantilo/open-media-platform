@@ -109,7 +109,7 @@ export const REPRESENTATION_TYPE_SUGGESTIONS = [
   "caption",
   "transcoded",
 ];
-export const STORAGE_PROVIDER_SUGGESTIONS = ["filesystem", "s3", "http"];
+export const STORAGE_PROVIDER_SUGGESTIONS = ["filesystem", "s3", "http", "tams"];
 
 // ---- Metadaten-Editor ------------------------------------------------------------------------
 
@@ -322,4 +322,55 @@ export function coerceMetadata(metadata: AssetMetadata, defs: MetaFieldDef[]): A
     out[cat] = next;
   }
   return out;
+}
+
+// ---- TAMS-Verweise (Kapitel 105.6) ---------------------------------------------------------------------------------------------
+// Eine Aufnahme in einen TAMS-Speicher ist kein Datei-Asset, sondern ein Verweis: Darstellung `tams-video`/`tams-audio` mit
+// Anbieter `tams` und URI `tams://<Flow-ID>?timerange=[<von>_<bis>)` (Zeiten als Sekunden:Nanosekunden).
+
+export interface TamsRef {
+  flowId: string;
+  start: string;
+  end: string;
+}
+
+export function parseTamsUri(uri: string): TamsRef | null {
+  const m = /^tams:\/\/([0-9a-fA-F-]{36})\?timerange=(.+)$/.exec(uri);
+  if (!m) return null;
+  let range: string;
+  try {
+    range = decodeURIComponent(m[2]);
+  } catch {
+    return null;
+  }
+  const r = /^\[(-?\d+:\d+)_(-?\d+:\d+)\)$/.exec(range);
+  return r ? { flowId: m[1], start: r[1], end: r[2] } : null;
+}
+
+export interface TamsPlay {
+  videoFlow: string;
+  audioFlow: string;
+  start: string;
+  end: string;
+}
+
+/** Argumente für `tams.play` aus den Darstellungen einer Version; `null`, wenn keine TAMS-Verweise darin liegen. */
+export function tamsPlayArgs(reps: Representation[]): TamsPlay | null {
+  let video: TamsRef | null = null;
+  let audio: TamsRef | null = null;
+  for (const r of reps) {
+    if (r.storage.provider !== "tams") continue;
+    const ref = parseTamsUri(r.storage.uri);
+    if (!ref) continue;
+    if (r.type === "tams-video") video ??= ref;
+    else if (r.type === "tams-audio") audio ??= ref;
+  }
+  const base = video ?? audio;
+  if (!base) return null;
+  return { videoFlow: video?.flowId ?? "", audioFlow: audio?.flowId ?? "", start: base.start, end: base.end };
+}
+
+/** Ob ein Node-Descriptor die Wiedergabe-Methode des TAMS-Lesers anbietet. */
+export function hasTamsPlay(descriptor: { methods?: { name?: string }[] } | null | undefined): boolean {
+  return !!descriptor?.methods?.some((m) => m.name === "tams.play");
 }

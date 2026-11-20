@@ -25,6 +25,7 @@ import {
   FILE_FILTERS,
   filterAssets,
   type LifecycleGraph,
+  hasTamsPlay,
   METADATA_CATEGORIES,
   type MetadataRows,
   type MetaFieldDef,
@@ -36,6 +37,8 @@ import {
   rowsToMetadata,
   statusLabel,
   STORAGE_PROVIDER_SUGGESTIONS,
+  type TamsPlay,
+  tamsPlayArgs,
 } from "./asset-view-logic.ts";
 
 const POLL_INTERVAL_MS = 15000;
@@ -1551,7 +1554,81 @@ class AssetView extends HTMLElement {
     }
     table.appendChild(tbody);
     card.appendChild(table);
+    // TAMS-Verweis (Kapitel 105.6): kein Datei-Asset, sondern Flow + Zeitbereich — abspielen über einen TAMS-Leser
+    const tp = tamsPlayArgs(this.#reps);
+    if (tp) {
+      const play = document.createElement("button");
+      play.textContent = tt("tams.play");
+      play.setAttribute("data-role", "rep-tams-play");
+      play.addEventListener("click", () => void this.#openTamsPlayModal(tp));
+      head.appendChild(play);
+    }
     return card;
+  }
+
+  /** Online-Nodes, die `tams.play` anbieten (der Descriptor verrät es; der Katalogtyp steht nicht in der Node-Liste). */
+  async #tamsReaders(): Promise<{ id: string; label: string }[]> {
+    try {
+      const res = await apiFetch("/api/v1/nodes");
+      if (!res.ok) return [];
+      const nodes = (await res.json()) as { id: string; label: string; online: boolean }[];
+      const found = await Promise.all(
+        nodes.filter((n) => n.online).map(async (n) => {
+          try {
+            const d = await apiFetch(`/api/v1/nodes/${n.id}/descriptor`);
+            return d.ok && hasTamsPlay(await d.json()) ? { id: n.id, label: n.label } : null;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      return found.filter((x): x is { id: string; label: string } => x !== null);
+    } catch {
+      return [];
+    }
+  }
+
+  async #openTamsPlayModal(tp: TamsPlay) {
+    const readers = await this.#tamsReaders();
+    this.#openModal(tt("tams.title"), (modal, close) => {
+      const info = document.createElement("div");
+      info.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);word-break:break-all;";
+      info.textContent = tt("tams.range", { p0: tp.start, p1: tp.end });
+      modal.appendChild(info);
+      if (readers.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "omp-empty";
+        empty.textContent = tt("tams.noReader");
+        modal.appendChild(empty);
+        return;
+      }
+      const sel = document.createElement("select");
+      for (const r of readers) {
+        const o = document.createElement("option");
+        o.value = r.id;
+        o.textContent = r.label;
+        sel.appendChild(o);
+      }
+      const btn = document.createElement("button");
+      btn.textContent = tt("tams.play");
+      btn.setAttribute("data-role", "tams-play-go");
+      btn.addEventListener("click", () => {
+        void this.#guard(btn, async () => {
+          const res = await apiFetch(`/api/v1/nodes/${sel.value}/methods/tams.play`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(tp),
+          });
+          if (res.ok) {
+            showToast(tt("tams.started"), { variant: "info" });
+            return true;
+          }
+          showToast(tt("misc.failedWith", { p0: "tams.play", p1: (await res.text()).trim() || res.status }), { variant: "error" });
+          return false;
+        }, close);
+      });
+      modal.append(this.#field(tt("tams.reader"), sel), btn);
+    }, "520px");
   }
 
   // ---- Modals (persistent, vom Poll-Rerender unberührt) ----------------------------------------

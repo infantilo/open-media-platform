@@ -4,6 +4,9 @@ import {
   filterAssets,
   formatBitrate,
   formatBytes,
+  hasTamsPlay,
+  parseTamsUri,
+  tamsPlayArgs,
   metadataToRows,
   parseOptionalNumber,
   representationSummary,
@@ -142,4 +145,26 @@ Deno.test("matchesFileState: Dateifilter (Kapitel 86)", () => {
   // ohne Angabe zum Asset (Modul aus / neu) gilt „nie geprüft“
   assertEquals(matchesFileState("unchecked", undefined), true);
   assertEquals(matchesFileState("ok", undefined), false);
+});
+
+Deno.test("TAMS-Verweise: URI lesen, Abspiel-Argumente bilden, Reader erkennen", () => {
+  const F = "11111111-1111-4111-8111-111111111111";
+  const G = "22222222-2222-4222-8222-222222222222";
+  const uri = (f: string) => `tams://${f}?timerange=${encodeURIComponent("[1790000000:500_1790000060:0)")}`;
+  assertEquals(parseTamsUri(uri(F)), { flowId: F, start: "1790000000:500", end: "1790000060:0" });
+  assertEquals(parseTamsUri("tams://x?timerange=[1:0_2:0)"), null);
+  assertEquals(parseTamsUri("file:///a.mxf"), null);
+  assertEquals(parseTamsUri(`tams://${F}?timerange=%E0%A4%A`), null);
+  const rep = (type: string, provider: string, u: string) => ({ id: "r", assetVersionId: "v", type, storage: { provider, uri: u }, createdAt: "" });
+  assertEquals(tamsPlayArgs([rep("recorded", "filesystem", "/a.mxf")]), null);
+  assertEquals(tamsPlayArgs([rep("tams-video", "tams", uri(F)), rep("tams-audio", "tams", uri(G))]), {
+    videoFlow: F,
+    audioFlow: G,
+    start: "1790000000:500",
+    end: "1790000060:0",
+  });
+  assertEquals(tamsPlayArgs([rep("tams-audio", "tams", uri(G))])?.videoFlow, "");
+  assertEquals(hasTamsPlay({ methods: [{ name: "tams.stop" }, { name: "tams.play" }] }), true);
+  assertEquals(hasTamsPlay({ methods: [] }), false);
+  assertEquals(hasTamsPlay(null), false);
 });
