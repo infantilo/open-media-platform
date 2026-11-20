@@ -247,3 +247,55 @@ fn record_then_replay_gap_fill_and_time_shift() {
     assert_cadence(&f.recs, FRAME, "Mitlaufen");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// Mitlaufen **während** die Aufnahme noch läuft: Schreiber und Uploader arbeiten gleichzeitig, der Leser holt neue
+/// Segmente per Abfrage nach. Die Ausgabe liegt `delay` hinter der Aufnahme; nichts darf zu spät sein.
+#[test]
+fn follow_a_recording_that_is_still_running() {
+    let dir = std::env::temp_dir().join(format!("omp-tams-reader-live-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let spool = Arc::new(Spool::open(&dir, 64 << 20).unwrap());
+    let fake = Fake::start();
+    let flows = vec![FlowDef { flow_id: VFLOW.into(), body: video_flow_body(VFLOW, "cccccccc-3333-4333-8333-cccccccccccc", "V", 320, 180, 25, 1, Some("progressive"), 2, 500), container: "video/mp2t".into() }];
+    let done = Arc::new(AtomicBool::new(false));
+    let (sp, d2) = (spool.clone(), done.clone());
+    let mut up = Uploader::new(mk_client(&fake), spool.clone(), FlowRegistry::new(spool.clone(), flows), Box::new(tai_now_ns));
+    let uploader = std::thread::spawn(move || {
+        let _ = &sp;
+        while !d2.load(Ordering::Relaxed) {
+            if matches!(up.step(), Step::Idle) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        for _ in 0..50 {
+            if matches!(up.step(), Step::Idle) {
+                break;
+            }
+        }
+    });
+    let sp2 = spool.clone();
+    let recorder = std::thread::spawn(move || record(sp2, 12));
+    std::thread::sleep(Duration::from_millis(300));
+    // Das Ende der Aufnahme liegt in der Zukunft: Mitlaufen ab „jetzt − Verzögerung“, offenes Ende
+    let delay = 6 * S;
+    let now = tai_now_ns();
+    let course = Course { start_ns: plan::follow_start(now, delay), end_ns: None };
+    let f = play(client(&fake), VFLOW, true, course, delay, GapMode::Hold, Some(150));
+    let t0 = recorder.join().unwrap();
+    done.store(true, Ordering::Relaxed);
+    uploader.join().unwrap();
+    assert!(f.recs.len() >= 150, "nur {} Bilder, Fehler {:?}", f.recs.len(), f.stats.last_error.lock().unwrap());
+    assert_eq!(f.stats.late_dropped.load(Ordering::Relaxed), 0, "Bilder kamen zu spät");
+    assert_cadence(&f.recs, FRAME, "Mitlaufen live");
+    // Ausgabe = Aufnahmezeit + Verzögerung, erstes Bild nahe am Aufnahmeanfang
+    let first_flow = f.recs[0].tai as i128 - delay;
+    assert!((first_flow - t0 as i128).abs() < 3 * S, "erstes Bild {} ns nach dem Aufnahmestart", first_flow - t0 as i128);
+    // Debug-Build, Kodierer und Hochladen im selben Prozess: Ausschläge bis einige 100 ms sind Last, kein Taktfehler
+    let worst = f.recs.iter().map(|r| r.arrived as i128 - r.tai as i128).max().unwrap();
+    eprintln!("größte Verspätung am Ausgang: {} ms", worst / 1_000_000);
+    for r in &f.recs {
+        let late = r.arrived as i128 - r.tai as i128;
+        assert!((-60_000_000..600_000_000).contains(&late), "Bild kam {late} ns nach seiner Ausgabezeit");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
