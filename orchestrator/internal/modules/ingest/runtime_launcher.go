@@ -39,6 +39,7 @@ type LauncherRuntime struct {
 	HTTP         *http.Client
 	ReadyWait    time.Duration // Wartezeit auf die Registrierung (Standard 30 s)
 	RecorderType string        // Standard omp-recorder
+	TamsType     string        // Standard omp-tams-writer (Profil-Ziel „tams“)
 }
 
 const instanceLabelPrefix = "ingest-"
@@ -57,6 +58,31 @@ func (r *LauncherRuntime) recorderType() string {
 	return "omp-recorder"
 }
 
+func (r *LauncherRuntime) tamsType() string {
+	if r.TamsType != "" {
+		return r.TamsType
+	}
+	return "omp-tams-writer"
+}
+
+// typeFor: Node-Typ für das Ziel des Auftrags.
+func (r *LauncherRuntime) typeFor(ctx context.Context) string {
+	if targetOf(ctx) == TargetTAMS {
+		return r.tamsType()
+	}
+	return r.recorderType()
+}
+
+// isTams: ob die Instanz ein TAMS-Schreiber ist (nach Typ im Launcher).
+func (r *LauncherRuntime) isTams(instanceID string) bool {
+	for _, in := range r.Launcher.List() {
+		if in.ID == instanceID {
+			return in.Type == r.tamsType()
+		}
+	}
+	return false
+}
+
 func (r *LauncherRuntime) node(instanceID string) (registry.NodeView, bool) {
 	for _, n := range r.Nodes.List() {
 		if n.InstanceID == instanceID && n.Online {
@@ -70,7 +96,7 @@ func (r *LauncherRuntime) Prepare(ctx context.Context, jobID, hostID, label, med
 	var inst launcher.Instance
 	found := false
 	for _, in := range r.Launcher.List() {
-		if in.Label == label && in.Type == r.recorderType() && !in.Crashed {
+		if in.Label == label && in.Type == r.typeFor(ctx) && !in.Crashed {
 			inst, found = in, true
 			break
 		}
@@ -78,10 +104,12 @@ func (r *LauncherRuntime) Prepare(ctx context.Context, jobID, hostID, label, med
 	if !found {
 		var err error
 		env := map[string]string{"OMP_MEDIA_DIR": mediaDir}
-		if audioInputs > 1 {
+		if targetOf(ctx) == TargetTAMS {
+			env = map[string]string{} // Zugang zum Speicher (OMP_TAMS_*) steht in der Umgebung des Orchestrators/Katalogs, nie hier (Entscheidung D-T3)
+		} else if audioInputs > 1 {
 			env["OMP_RECORDER_AUDIO_INPUTS"] = strconv.Itoa(audioInputs)
 		}
-		inst, err = r.Launcher.StartLabeled(r.recorderType(), "", hostID, label, env)
+		inst, err = r.Launcher.StartLabeled(r.typeFor(ctx), "", hostID, label, env)
 		if err != nil {
 			return Session{}, err
 		}
@@ -263,6 +291,16 @@ func (r *LauncherRuntime) StartRecording(ctx context.Context, s Session, fileRel
 	if !ok {
 		return fmt.Errorf("Rekorder nicht erreichbar")
 	}
+	if r.isTams(s.InstanceID) {
+		body, code, err := r.do(ctx, http.MethodPost, n.APIBaseURL+"/methods/tams.start", map[string]any{})
+		if err != nil {
+			return err
+		}
+		if code != http.StatusOK {
+			return fmt.Errorf("tams.start: HTTP %d %s", code, strings.TrimSpace(string(body)))
+		}
+		return nil
+	}
 	if mcaPlan != "" {
 		if _, code, err := r.do(ctx, http.MethodPatch, n.APIBaseURL+"/params/record.mcaPlan", map[string]any{"value": mcaPlan}); err != nil || code >= 300 {
 			return fmt.Errorf("MCA-Plan nicht setzbar (HTTP %d)", code)
@@ -288,7 +326,11 @@ func (r *LauncherRuntime) Status(ctx context.Context, s Session) (string, int64,
 	if !ok {
 		return "", 0, fmt.Errorf("Rekorder nicht erreichbar")
 	}
-	body, code, err := r.do(ctx, http.MethodGet, n.APIBaseURL+"/params/record.status", nil)
+	statusParam := "record.status"
+	if r.isTams(s.InstanceID) {
+		statusParam = "tams.status"
+	}
+	body, code, err := r.do(ctx, http.MethodGet, n.APIBaseURL+"/params/"+statusParam, nil)
 	if err != nil || code != http.StatusOK {
 		return "", 0, fmt.Errorf("Status nicht lesbar (HTTP %d): %v", code, err)
 	}
@@ -297,6 +339,9 @@ func (r *LauncherRuntime) Status(ctx context.Context, s Session) (string, int64,
 	}
 	_ = json.Unmarshal(body, &v)
 	var dur int64
+	if statusParam == "tams.status" {
+		return v.Value, 0, nil
+	}
 	if b2, c2, e2 := r.do(ctx, http.MethodGet, n.APIBaseURL+"/params/record.durationMs", nil); e2 == nil && c2 == http.StatusOK {
 		var d struct {
 			Value float64 `json:"value"`
@@ -312,12 +357,16 @@ func (r *LauncherRuntime) StopRecording(ctx context.Context, s Session) error {
 	if !ok {
 		return nil // nichts mehr zu stoppen
 	}
-	_, code, err := r.do(ctx, http.MethodPost, n.APIBaseURL+"/methods/record.stop", map[string]any{})
+	stopMethod := "record.stop"
+	if r.isTams(s.InstanceID) {
+		stopMethod = "tams.stop"
+	}
+	_, code, err := r.do(ctx, http.MethodPost, n.APIBaseURL+"/methods/"+stopMethod, map[string]any{})
 	if err != nil {
 		return err
 	}
 	if code != http.StatusOK {
-		return fmt.Errorf("record.stop: HTTP %d", code)
+		return fmt.Errorf("%s: HTTP %d", stopMethod, code)
 	}
 	return nil
 }
@@ -334,9 +383,111 @@ func (r *LauncherRuntime) Teardown(ctx context.Context, instanceID string) error
 func (r *LauncherRuntime) Instances(ctx context.Context) []string {
 	var out []string
 	for _, in := range r.Launcher.List() {
-		if in.Type == r.recorderType() && strings.HasPrefix(in.Label, instanceLabelPrefix) {
+		if (in.Type == r.recorderType() || in.Type == r.tamsType()) && strings.HasPrefix(in.Label, instanceLabelPrefix) {
 			out = append(out, in.ID)
 		}
 	}
 	return out
 }
+
+func (r *LauncherRuntime) paramValue(ctx context.Context, base, name string) (any, bool) {
+	b, code, err := r.do(ctx, http.MethodGet, base+"/params/"+name, nil)
+	if err != nil || code != http.StatusOK {
+		return nil, false
+	}
+	var v struct {
+		Value any `json:"value"`
+	}
+	if json.Unmarshal(b, &v) != nil {
+		return nil, false
+	}
+	return v.Value, true
+}
+
+// flowIDs: IS-04-Flow-IDs (Video, Audio) der Quelle. Der Schreiber nutzt die MXL-Flow-ID als TAMS-Flow-ID.
+func (r *LauncherRuntime) flowIDs(src Source) (video, audio string) {
+	for _, n := range r.Nodes.List() {
+		if !n.Online || (src.InstanceID != "" && n.InstanceID != src.InstanceID) {
+			continue
+		}
+		for _, s := range n.Senders {
+			if src.SenderID != "" && s.ID != src.SenderID {
+				continue
+			}
+			if src.SenderID == "" && src.SenderLabel != "" && s.Label != src.SenderLabel {
+				continue
+			}
+			switch {
+			case strings.Contains(s.Format, "video") && video == "":
+				video = s.FlowID
+			case strings.Contains(s.Format, "audio") && audio == "":
+				audio = s.FlowID
+			}
+		}
+	}
+	return video, audio
+}
+
+func nsTimestamp(t time.Time) string {
+	ns := t.UnixNano()
+	return fmt.Sprintf("%d:%d", ns/1e9, ns%1e9)
+}
+
+// CopyRange: siehe TamsRuntime. Wartet bis zu 60 s, bis die Warteschlange des Schreibers leer ist (letzte Segmente sind registriert),
+// ruft tams.copyRange und wartet auf tams.copyStatus.
+func (r *LauncherRuntime) CopyRange(ctx context.Context, s Session, src Source, start, end time.Time, label string) (TamsRef, error) {
+	n, ok := r.node(s.InstanceID)
+	if !ok {
+		return TamsRef{}, fmt.Errorf("TAMS-Schreiber nicht erreichbar")
+	}
+	vflow, aflow := r.flowIDs(src)
+	if vflow == "" && aflow == "" {
+		return TamsRef{}, fmt.Errorf("Quelle hat keine Flow-IDs")
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		q, ok := r.paramValue(ctx, n.APIBaseURL, "tams.queueSegments")
+		if f, isNum := q.(float64); ok && isNum && f == 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return TamsRef{}, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	// Der Schreiber registriert asynchron: kurz Zeit für das letzte Segment nach dem Leerlauf der Warteschlange
+	time.Sleep(1500 * time.Millisecond)
+	body, code, err := r.do(ctx, http.MethodPost, n.APIBaseURL+"/methods/tams.copyRange", map[string]any{
+		"videoFlow": vflow, "audioFlow": aflow, "start": nsTimestamp(start), "end": nsTimestamp(end), "label": label,
+	})
+	if err != nil {
+		return TamsRef{}, err
+	}
+	if code != http.StatusOK {
+		return TamsRef{}, fmt.Errorf("tams.copyRange: HTTP %d %s", code, strings.TrimSpace(string(body)))
+	}
+	for time.Now().Before(deadline.Add(60 * time.Second)) {
+		st, _ := r.paramValue(ctx, n.APIBaseURL, "tams.copyStatus")
+		res, _ := r.paramValue(ctx, n.APIBaseURL, "tams.lastCopy")
+		text, _ := res.(string)
+		switch st {
+		case "done":
+			var ref TamsRef
+			if err := json.Unmarshal([]byte(text), &ref); err != nil {
+				return TamsRef{}, fmt.Errorf("Ergebnis der Kopie nicht lesbar: %w", err)
+			}
+			return ref, nil
+		case "error":
+			return TamsRef{}, fmt.Errorf("Metadaten-Kopie fehlgeschlagen: %s", text)
+		}
+		select {
+		case <-ctx.Done():
+			return TamsRef{}, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return TamsRef{}, fmt.Errorf("Metadaten-Kopie nicht rechtzeitig fertig")
+}
+
+var _ TamsRuntime = (*LauncherRuntime)(nil)

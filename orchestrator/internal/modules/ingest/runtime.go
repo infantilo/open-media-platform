@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // Runtime ist die Schnittstelle zur Laufzeit (Launcher, Registry, IS-05, Node-Methoden). Der Ablauf kennt nur diese Schnittstelle —
@@ -41,3 +42,40 @@ var (
 	// ErrSourceUnavailable: Quelle (noch) nicht da — löst die Verspätungsrichtlinie aus, ist kein harter Fehler.
 	ErrSourceUnavailable = errors.New("Quelle nicht verfügbar")
 )
+
+// ---- Ziel „TAMS“ (Kapitel 105.6) ------------------------------------------------------------------------------------------------
+
+type targetKey struct{}
+
+// WithTarget merkt das Aufnahmeziel des Profils im Kontext; die Laufzeit wählt danach den Node-Typ (omp-recorder oder omp-tams-writer).
+func WithTarget(ctx context.Context, target string) context.Context {
+	return context.WithValue(ctx, targetKey{}, target)
+}
+
+func targetOf(ctx context.Context) string {
+	t, _ := ctx.Value(targetKey{}).(string)
+	return t
+}
+
+// TamsFlowRef: eine Metadaten-Kopie (neuer Flow, gleiche Objects) einer Essenz.
+type TamsFlowRef struct {
+	SourceFlow string `json:"sourceFlow"`
+	FlowID     string `json:"flowId"`
+	SourceID   string `json:"sourceId"`
+	Segments   int    `json:"segments"`
+	From       string `json:"from"`
+	To         string `json:"to"`
+}
+
+// TamsRef: Ergebnis einer Aufnahme in den Speicher — Verweise statt Datei.
+type TamsRef struct {
+	Video *TamsFlowRef `json:"video,omitempty"`
+	Audio *TamsFlowRef `json:"audio,omitempty"`
+}
+
+// TamsRuntime ist die optionale Erweiterung der Laufzeit für Profile mit Ziel „tams“.
+type TamsRuntime interface {
+	// CopyRange wartet, bis der Schreiber alles registriert hat, und legt je Essenz der Quelle eine Metadaten-Kopie von [start, end) an.
+	// Der Bereich wird auf ganze Segmente erweitert (siehe CONTRACT-TAMS.md). Muss vor Teardown laufen (die Zugangsdaten leben im Node).
+	CopyRange(ctx context.Context, s Session, src Source, start, end time.Time, label string) (TamsRef, error)
+}

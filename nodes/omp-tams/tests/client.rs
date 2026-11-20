@@ -376,3 +376,41 @@ fn invalid_ids_never_reach_the_network() {
     }
     assert!(f.state.lock().unwrap().hits.is_empty());
 }
+
+#[test]
+fn metadata_copy_shares_objects_and_covers_whole_segments() {
+    use omp_tams::copy::{CopyError, copy_range};
+    const COPY: &str = "33333333-3333-4333-8333-333333333333";
+    const SRC2: &str = "44444444-4444-4444-8444-444444444444";
+    let f = Fake::start();
+    let c = client(&f, Auth::None);
+    c.put_flow(FLOW, &flow()).unwrap();
+    for (i, r) in ["[10:0_12:0)", "[12:0_14:0)", "[14:0_16:0)", "[16:0_18:0)"].iter().enumerate() {
+        assert_eq!(write_segment(&c, r, format!("seg{i}").as_bytes()), Registered::All);
+    }
+    let objects_before = f.state.lock().unwrap().objects.len();
+    // Bereich 13 s … 15 s trifft zwei Segmente; der Bereich wird auf ganze Segmente erweitert
+    let rep = copy_range(&c, FLOW, COPY, SRC2, Some("Sendung 1"), omp_tams::copy::range_ns(13_000_000_000, 15_000_000_000)).unwrap();
+    assert_eq!(rep.segments, 2);
+    assert_eq!((rep.from_ns, rep.to_ns), (12_000_000_000, 16_000_000_000));
+    // gleiche Objects, keine neuen Mediendaten
+    assert_eq!(f.state.lock().unwrap().objects.len(), objects_before);
+    let orig = c.list_segments(FLOW, &SegmentQuery { timerange: Some(omp_tams::copy::range_ns(12_000_000_000, 16_000_000_000)), ..Default::default() }, 10).unwrap();
+    let copy = c.list_segments(COPY, &SegmentQuery::default(), 10).unwrap();
+    assert_eq!(copy.len(), 2);
+    assert_eq!(orig.iter().map(|s| &s.object_id).collect::<Vec<_>>(), copy.iter().map(|s| &s.object_id).collect::<Vec<_>>());
+    assert_eq!(copy[0].ts_offset.as_deref(), Some("0:0"));
+    // neuer Flow: neue Identität, gleiche Technik
+    let nf = c.get_flow(COPY).unwrap();
+    assert_eq!(nf["source_id"], SRC2);
+    assert_eq!(nf["label"], "Sendung 1");
+    assert_eq!(nf["container"], "video/mp2t");
+    // Der Quell-Flow bleibt unverändert
+    assert_eq!(c.list_segments(FLOW, &SegmentQuery::default(), 10).unwrap().len(), 4);
+    // leerer Bereich → Fehler, kein neuer Flow
+    let e = copy_range(&c, FLOW, "55555555-5555-4555-8555-555555555555", SRC2, None, omp_tams::copy::range_ns(100_000_000_000, 101_000_000_000)).unwrap_err();
+    assert!(matches!(e, CopyError::Empty));
+    assert!(c.get_flow("55555555-5555-4555-8555-555555555555").is_err());
+    // unbekannter Quell-Flow
+    assert!(copy_range(&c, "66666666-6666-4666-8666-666666666666", COPY, SRC2, None, omp_tams::copy::range_ns(0, 1)).is_err());
+}

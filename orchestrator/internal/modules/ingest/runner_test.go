@@ -36,6 +36,8 @@ type simRuntime struct {
 	startedAud   *AudioPlan
 	resolved     []Source
 	extraDown    string // Label einer weiteren Quelle, die „fehlt“
+	copyErr      error
+	copies       []string
 }
 
 type simInst struct {
@@ -149,6 +151,17 @@ func (r *simRuntime) Instances(ctx context.Context) []string {
 		out = append(out, id)
 	}
 	return out
+}
+
+// CopyRange: Simulator der Metadaten-Kopie (Ziel „tams“).
+func (r *simRuntime) CopyRange(ctx context.Context, s Session, src Source, start, end time.Time, label string) (TamsRef, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.copyErr != nil {
+		return TamsRef{}, r.copyErr
+	}
+	r.copies = append(r.copies, fmt.Sprintf("%s|%s|%s", start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339), label))
+	return TamsRef{Video: &TamsFlowRef{SourceFlow: "sf", FlowID: "11111111-1111-4111-8111-111111111111", SourceID: "s1", Segments: 3, From: "1:0", To: "7:0"}}, nil
 }
 
 func (r *simRuntime) count() int {
@@ -701,5 +714,72 @@ func TestMeasuredStatsReplaceDefaultsAfterARecording(t *testing.T) {
 	st, _ = e.svc.St.Stats(ctx, "mxf-h264")
 	if st.Samples != 3 {
 		t.Fatalf("a completed recording must add a sample: %+v", st)
+	}
+}
+
+func TestTamsTargetRecordsWithoutFileAndRegistersAReferenceAsset(t *testing.T) {
+	e := newIEnv(t, nil)
+	ctx := context.Background()
+	j := e.adhoc(t, 10, 20, func(in *AdHocInput) { in.ProfileID = "tams" })
+	e.atSec(10*60 - 20)
+	e.svc.Step(ctx)
+	g := e.job(t, j.ID)
+	if g.FileRel != "" || g.FilePath != "" {
+		t.Fatalf("TAMS-Auftrag darf keinen Dateipfad bekommen: %+v", g)
+	}
+	e.at(10)
+	e.svc.Step(ctx)
+	e.at(30)
+	e.svc.Step(ctx) // Stopp → finalizing
+	e.svc.Step(ctx) // Kopie + Verweis → completed
+	g = e.job(t, j.ID)
+	if g.State != StCompleted || g.AssetID == "" || e.rt.count() != 0 {
+		t.Fatalf("completed: %+v instances=%d error=%q", g, e.rt.count(), g.Error)
+	}
+	if len(e.rt.copies) != 1 || !strings.Contains(e.rt.copies[0], "2026-10-20T10:10:00Z|2026-10-20T10:30:00Z|Test 2026-10-20 10:10") {
+		t.Fatalf("Kopie angefordert für: %v", e.rt.copies)
+	}
+	a, err := e.svc.Assets.GetAsset(g.AssetID)
+	if err != nil || a.Status == asset.StatusRegistered {
+		t.Fatalf("Verweis-Asset darf nicht in den Eingang (registered): %v %+v", err, a)
+	}
+	reps, _ := e.svc.Assets.ListRepresentations(a.CurrentVersionID)
+	if len(reps) != 1 || reps[0].Storage.Provider != "tams" || reps[0].Type != "tams-video" || !strings.HasPrefix(reps[0].Storage.URI, "tams://11111111-1111-4111-8111-111111111111?timerange=") {
+		t.Fatalf("representations: %+v", reps)
+	}
+}
+
+func TestTamsCopyFailureFailsVisiblyInFinalize(t *testing.T) {
+	e := newIEnv(t, nil)
+	ctx := context.Background()
+	e.rt.copyErr = errors.New("Speicher nicht erreichbar")
+	j := e.adhoc(t, 10, 20, func(in *AdHocInput) { in.ProfileID = "tams" })
+	e.atSec(10*60 - 20)
+	e.svc.Step(ctx)
+	e.at(10)
+	e.svc.Step(ctx)
+	e.at(30)
+	e.svc.Step(ctx)
+	e.svc.Step(ctx)
+	g := e.job(t, j.ID)
+	if g.State != StFailed || g.FailedStage != "finalize" || !strings.Contains(g.Error, "Speicher nicht erreichbar") {
+		t.Fatalf("expected failed/finalize: %+v", g)
+	}
+}
+
+func TestTamsProfileConfigRules(t *testing.T) {
+	c := DefaultConfig()
+	c.Profiles["bad"] = Profile{ID: "bad", Target: "ftp", Ext: ".mxf"}
+	if err := c.Normalize(); err == nil {
+		t.Fatal("unbekanntes Ziel muss abgelehnt werden")
+	}
+	c = DefaultConfig()
+	c.Profiles["t2"] = Profile{ID: "t2", Target: TargetTAMS, Convert: &ConvertStep{Ext: ".mp4", Args: []string{"-c", "copy"}}}
+	if err := c.Normalize(); err == nil {
+		t.Fatal("TAMS-Profil mit Nachbearbeitung muss abgelehnt werden")
+	}
+	c = DefaultConfig()
+	if err := c.Normalize(); err != nil || c.Profiles["tams"].Ext != "" {
+		t.Fatalf("Standardprofil tams ohne Endung muss gültig sein: %v", err)
 	}
 }

@@ -188,6 +188,10 @@ fn handle(st: &Arc<Mutex<State>>, base: &str, method: &Method, url: &str, auth: 
                 }
             }
         }
+        ("GET", ["tams", "v8.2", "flows", id]) => match s.flows.get(*id) {
+            Some(f) => out(200, f.json.clone()),
+            None => err(404, "Flow unbekannt"),
+        },
         ("POST", ["tams", "v8.2", "flows", id, "storage"]) => {
             let Some(f) = s.flows.get(*id) else { return err(404, "Flow unbekannt") };
             if f.read_only {

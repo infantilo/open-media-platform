@@ -205,6 +205,16 @@ impl Client {
         }
     }
 
+    /// `GET /flows/{id}`: Beschreibung eines Flows (als JSON, damit auch unbekannte Felder erhalten bleiben).
+    pub fn get_flow(&self, flow_id: &str) -> Result<serde_json::Value, Error> {
+        check_id(flow_id)?;
+        let r = self.call("GET", &format!("{}/flows/{flow_id}", self.base), None, true, self.cfg.max_api_response)?;
+        if r.status != 200 {
+            return Err(unexpected(r.status, &r));
+        }
+        decode(&r)
+    }
+
     /// `POST /flows/{id}/storage`: Plätze für neue Objects.
     pub fn request_storage(&self, flow_id: &str, req: &StorageRequest) -> Result<StorageResponse, Error> {
         check_id(flow_id)?;

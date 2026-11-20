@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,8 +115,10 @@ func (s *Service) advance(ctx context.Context, id string) {
 			x.State = StStarting
 			x.Attempt++
 			p := s.Cfg().Profiles[x.ProfileID]
-			x.FileRel = s.fileRel(*x, x.Attempt, p.Ext)
-			x.FilePath = filepath.Join(s.Cfg().MediaDir, filepath.FromSlash(x.FileRel))
+			if p.Target != TargetTAMS {
+				x.FileRel = s.fileRel(*x, x.Attempt, p.Ext)
+				x.FilePath = filepath.Join(s.Cfg().MediaDir, filepath.FromSlash(x.FileRel))
+			}
 			x.Error = ""
 			return map[string]any{"file": x.FileRel, "host": x.HostID}, nil
 		})
@@ -147,6 +150,7 @@ func (s *Service) label(j Job) string { return "ingest-" + j.ID[:min(8, len(j.ID
 func (s *Service) prepareAndMaybeStart(ctx context.Context, j Job) {
 	now := s.now()
 	cfg := s.Cfg()
+	ctx = WithTarget(ctx, cfg.Profiles[j.ProfileID].Target)
 	if j.InstanceID == "" {
 		sess, err := s.Runtime.Prepare(ctx, j.ID, hostRuntimeID(j.HostID), s.label(j), cfg.MediaDir, 1+len(j.Audio.inputs()))
 		if err != nil {
@@ -343,8 +347,10 @@ func (s *Service) recordingFailed(ctx context.Context, j Job, msg string) {
 			x.InstanceID = ""
 			x.Attempt++
 			p := cfg.Profiles[x.ProfileID]
-			x.FileRel = s.fileRel(*x, x.Attempt, p.Ext)
-			x.FilePath = filepath.Join(cfg.MediaDir, filepath.FromSlash(x.FileRel))
+			if p.Target != TargetTAMS {
+				x.FileRel = s.fileRel(*x, x.Attempt, p.Ext)
+				x.FilePath = filepath.Join(cfg.MediaDir, filepath.FromSlash(x.FileRel))
+			}
 			x.ActualStart = nil
 			if partial != "" {
 				x.AssetID = partial // Teilaufnahme bleibt erhalten und verknüpft
@@ -467,6 +473,10 @@ func (s *Service) publishAsset(ctx context.Context, j Job) {
 
 func (s *Service) finalize(ctx context.Context, j Job) {
 	cfg := s.Cfg()
+	if cfg.Profiles[j.ProfileID].Target == TargetTAMS {
+		s.finalizeTams(ctx, j)
+		return
+	}
 	size := fileSize(j.FilePath)
 	if size <= 0 {
 		s.fail(ctx, j, "finalize", "Aufnahmedatei fehlt oder ist leer: "+j.FilePath)
@@ -510,6 +520,80 @@ func (s *Service) finalize(ctx context.Context, j Job) {
 			metrics.Completed.Add(1)
 		}
 	}
+}
+
+// finalizeTams: Ziel „TAMS“ — keine Datei. Der Schreiber registriert weiter, bis seine Warteschlange leer ist; danach entsteht je Essenz eine
+// Metadaten-Kopie des Aufnahmebereichs (neuer Flow, gleiche Objects) und ein Asset als **Verweis** (Flow + Zeitbereich). Fehlt die Kopie, bleibt die
+// Aufnahme im Speicher erhalten (der Langläufer-Flow gehört dem Schreiber); der Auftrag schlägt in der Stufe „finalize“ fehl.
+func (s *Service) finalizeTams(ctx context.Context, j Job) {
+	tr, ok := s.Runtime.(TamsRuntime)
+	if !ok || j.ActualStart == nil || j.ActualEnd == nil {
+		s.fail(ctx, j, "finalize", "TAMS-Aufnahme nicht abschließbar (Laufzeit ohne TAMS-Unterstützung oder keine Aufnahme gelaufen)")
+		return
+	}
+	ctx = WithTarget(ctx, TargetTAMS)
+	sess := Session{InstanceID: j.InstanceID, HostID: j.HostID}
+	title := fmt.Sprintf("%s %s", j.Name, j.PlannedStart.UTC().Format("2006-01-02 15:04"))
+	ref, err := tr.CopyRange(ctx, sess, j.Source, *j.ActualStart, *j.ActualEnd, title)
+	if err != nil {
+		s.fail(ctx, j, "finalize", "Metadaten-Kopie fehlgeschlagen (die Aufnahme liegt im Speicher): "+err.Error())
+		return
+	}
+	id, err := s.registerTamsAsset(ctx, j, title, ref)
+	if err != nil {
+		s.fail(ctx, j, "finalize", "Asset nicht registrierbar (Kopie im Speicher vorhanden): "+err.Error())
+		return
+	}
+	s.teardownInstance(ctx, j)
+	aborted := j.Error == "abgebrochen"
+	out, err := s.St.Mutate(ctx, j.ID, -1, "TAMS-Verweis gesichert, Asset "+id, func(x *Job) (map[string]any, error) {
+		if x.State != StFinalizing {
+			return nil, errNoop
+		}
+		x.AssetID = id
+		x.State = StCompleted
+		if aborted {
+			x.State = StCancelled
+		}
+		return map[string]any{"asset": id, "tams": ref}, nil
+	})
+	if err == nil && out.State == StCompleted {
+		metrics.Completed.Add(1)
+	}
+}
+
+// registerTamsAsset: Asset mit Darstellungen vom Anbieter „tams“ (URI tams://<flow>?timerange=…). Der Eingang (Kapitel 43) bekommt es nicht:
+// das Asset wird nicht auf „registered“ gesetzt (keine Datei, keine QC).
+func (s *Service) registerTamsAsset(ctx context.Context, j Job, title string, ref TamsRef) (string, error) {
+	if j.AssetID != "" {
+		return j.AssetID, nil
+	}
+	if s.Assets == nil {
+		return "", fmt.Errorf("kein Asset-Speicher konfiguriert")
+	}
+	a, err := s.Assets.CreateAsset("video", title, "", "ingest", "")
+	if err != nil {
+		return "", err
+	}
+	v, err := s.Assets.CreateVersion(a.ID, "", "TAMS-Aufnahme", "ingest")
+	if err != nil {
+		return "", err
+	}
+	for kind, f := range map[string]*TamsFlowRef{"video": ref.Video, "audio": ref.Audio} {
+		if f == nil {
+			continue
+		}
+		uri := fmt.Sprintf("tams://%s?timerange=%s", f.FlowID, url.QueryEscape("["+f.From+"_"+f.To+")"))
+		if _, err := s.Assets.CreateRepresentation(asset.Representation{AssetVersionID: v.ID, Type: "tams-" + kind, Storage: asset.StorageLocation{Provider: "tams", URI: uri}, Container: "video/mp2t"}); err != nil {
+			return "", err
+		}
+	}
+	md := asset.Metadata{System: map[string]any{"ingestJob": j.ID, "source": j.Source.Label, "profile": j.ProfileID, "plannedStart": j.PlannedStart, "recorded": true, "tams": ref, "versionId": v.ID}, Descriptive: j.Metadata}
+	if cur, err := s.Assets.GetAsset(a.ID); err == nil {
+		_, _ = s.Assets.UpdateAssetMetadata(a.ID, cur.RowVersion, md, "ingest")
+	}
+	_, _ = s.Assets.PublishVersion(v.ID)
+	return a.ID, nil
 }
 
 // process: optionale Nachbearbeitung (ffmpeg). Fehler → Auftrag „failed“ (Stufe processing), die Rohaufnahme bleibt als Asset erhalten.

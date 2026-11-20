@@ -50,7 +50,13 @@ type Profile struct {
 	McaPlan string             `json:"mcaPlan,omitempty"`
 	// Convert: optionale Nachbearbeitung (ffmpeg). Entfällt, wenn das Aufnahmeformat schon das Ziel ist.
 	Convert *ConvertStep `json:"convert,omitempty"`
+	// Target: "" = Datei (Standard), "tams" = Aufnahme in einen TAMS-Speicher (Kapitel 105.6, Vertrag docs/contracts/CONTRACT-TAMS.md):
+	// statt omp-recorder läuft omp-tams-writer, es gibt keine Datei und keine Nachbearbeitung; am Ende entsteht eine Metadaten-Kopie
+	// des Aufnahmebereichs (neuer Flow, gleiche Objects) und ein Asset als Verweis.
+	Target string `json:"target,omitempty"`
 }
+
+const TargetTAMS = "tams"
 
 type ConvertStep struct {
 	Ext  string   `json:"ext"`  // Endung der Ausgabe, z. B. ".mp4"
@@ -75,8 +81,9 @@ var defaultDemand = map[string]float64{ResRecorders: 1, ResCPU: 1.0, ResMem: 800
 
 func DefaultConfig() Config {
 	p := Profile{ID: "mxf-h264", Label: "MXF (H.264 + PCM 24 Bit)", Ext: ".mxf"}
+	t := Profile{ID: "tams", Label: "TAMS-Speicher (Zeitachse, MPEG-TS)", Target: TargetTAMS, Demand: map[string]float64{ResDiskMBps: 0}}
 	return Config{
-		Profiles:      map[string]Profile{p.ID: p},
+		Profiles:      map[string]Profile{p.ID: p, t.ID: t},
 		DefaultBudget: HostBudget{Hard: map[string]float64{ResRecorders: 2, ResCPU: 4, ResMem: 6144, ResDiskMBps: 200, ResDiskGB: 200, ResNetMbps: 800, ResMXLShm: 1024, ResConverter: 1}, SoftFrac: 0.8, Functions: []string{"recorder", "converter"}},
 		HostBudgets:   map[string]HostBudget{},
 		Rules:         RulesConfig{SourceLimit: 4},
@@ -99,7 +106,14 @@ func (c *Config) Normalize() error {
 		if p.ID != k {
 			return fmt.Errorf("Profil %q: id %q passt nicht zum Schlüssel", k, p.ID)
 		}
-		if !strings.HasPrefix(p.Ext, ".") || len(p.Ext) < 3 || len(p.Ext) > 6 {
+		if p.Target != "" && p.Target != TargetTAMS {
+			return fmt.Errorf("Profil %q: Ziel %q unbekannt (leer oder tams)", k, p.Target)
+		}
+		if p.Target == TargetTAMS {
+			if p.Convert != nil {
+				return fmt.Errorf("Profil %q: Ziel tams kennt keine Nachbearbeitung", k)
+			}
+		} else if !strings.HasPrefix(p.Ext, ".") || len(p.Ext) < 3 || len(p.Ext) > 6 {
 			return fmt.Errorf("Profil %q: Endung %q ungültig (z. B. .mxf)", k, p.Ext)
 		}
 		for r, v := range p.Demand {

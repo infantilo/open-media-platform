@@ -43,6 +43,9 @@ AppNote addiert (2^33−1)/90000 s, das wäre um 11 µs falsch).
 `OMP_TAMS_TOKEN`, nie aus Parametern, Datenbank oder Log. TLS ist Pflicht außer Loopback. Keine Weiterleitungen; Zugangsdaten gehen nur an den Ursprung der API-Adresse, nie an
 fremde Objekt-Adressen; ein `Link` auf fremden Ursprung ist ein Fehler. Ohne gültige Einrichtung läuft der Node trotzdem und nennt den Grund in `tams.lastError`.
 
+## 4a. Metadaten-Kopie und geplante Aufnahme
+`tams.copyRange(videoFlow, audioFlow, start, end, label)` (Schreiber) legt je angegebenem Flow einen **neuen Flow mit neuer Source** an, dessen Segmente auf dieselben Objects zeigen (kein Kopieren von Medien); der Bereich wird auf **ganze Segmente erweitert**. Läuft im Hintergrund: `tams.copyStatus` (`idle|running|done|error`), Ergebnis als JSON in `tams.lastCopy` (je Essenz `sourceFlow`, `flowId`, `sourceId`, `segments`, `from`, `to`). Der Aufnahme-Zeitplan (Kapitel 42) kennt das Profil-Ziel `tams`: der Auftrag startet den Schreiber, und nach dem Stopp entsteht die Kopie des Aufnahmebereichs samt **Verweis-Asset** (Darstellungen Anbieter `tams`, URI `tams://<Flow>?timerange=…`). Schlägt die Kopie fehl, bleibt die Aufnahme im Speicher; der Auftrag steht auf `failed` (Stufe `finalize`).
+
 ## 5. Bedienfelder
 Beide Nodes liefern `/ui/manifest.json` und `/ui/bundle.js` (Web-Komponenten `omp-tams-writer-panel`, `omp-tams-reader-panel`, Muster wie `omp-ptz`, eigene de/en-Texte im Bundle). Die Felder nutzen nur die Parameter und Methoden dieses Vertrags.
 

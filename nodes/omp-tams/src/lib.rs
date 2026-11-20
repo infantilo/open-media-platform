@@ -7,6 +7,7 @@
 //!
 //! * [`auth`]   — Zugangsdaten (D-T3): Geheimnis aus Datei/Umgebung, Maskierung.
 //! * [`client`] — HTTP-Client (105.2).
+//! * [`copy`]   — Metadaten-Kopie eines Zeitbereichs in einen neuen Flow (gleiche Objects, kein Kopieren von Medien).
 //! * [`time`]   — `Timestamp` und `TimeRange` (Format, Vergleich, Überlappung, Verschiebung).
 //! * [`index`]  — MXL-Index ↔ Timestamp, bitgleich zur MXL-Bibliothek (`IndexConversion.hpp`).
 //! * [`mpegts`] — MPEG-TS-Zeit: `ts_offset` und PTS-Überlauf (AppNote 0002).
@@ -14,6 +15,7 @@
 
 pub mod auth;
 pub mod client;
+pub mod copy;
 pub mod index;
 pub mod mpegts;
 pub mod time;

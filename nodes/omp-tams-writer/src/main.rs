@@ -18,14 +18,14 @@ use omp_node_sdk::connection::{
     ReceiverConnection, ReceiverControl, ReceiverResource, bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery,
 };
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
-use omp_node_sdk::{Descriptor, InvokeError, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, Range, RawResponse, ReceiverSpec, SetError};
+use omp_node_sdk::{Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, Range, RawResponse, ReceiverSpec, SetError};
 use omp_tams::auth::{Auth, redact_url, secret_from_env};
 use omp_tams::client::{Client, ClientConfig};
 use omp_tams_writer::runtime::{self, Handle, RecStatus};
 use omp_tams_writer::spool::Spool;
 use omp_tams_writer::uploader::{FlowRegistry, Uploader, UploaderStatus};
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 struct WriterReceiverControl {
@@ -60,6 +60,17 @@ struct WriterStore {
     video_connection: Arc<ReceiverConnection<WriterReceiverControl>>,
     audio_connection: Arc<ReceiverConnection<WriterReceiverControl>>,
     monitor: Arc<omp_node_sdk::Monitor>,
+    /// Zweiter Client für Metadaten-Kopien (Zugang wie der Uploader, Entscheidung D-T3); `None` ohne Einrichtung.
+    copier: Option<Arc<Client>>,
+    copy_state: Arc<Mutex<CopyState>>,
+}
+
+#[derive(Default, Clone)]
+struct CopyState {
+    /// `idle` | `running` | `done` | `error`
+    status: String,
+    /// JSON des letzten Ergebnisses bzw. die Fehlermeldung
+    result: String,
 }
 
 fn num(name: &str, unit: Option<&str>) -> ParamSpec {
@@ -67,6 +78,68 @@ fn num(name: &str, unit: Option<&str>) -> ParamSpec {
 }
 fn text(name: &str) -> ParamSpec {
     ParamSpec { name: name.to_string(), kind: ParamType::String, unit: None, range: None, readonly: true }
+}
+
+/// Flow-ID muss eine UUID sein (nie in einen Pfad gesetzt, was keine ist).
+fn uuid_arg(args: &serde_json::Map<String, Value>, key: &str) -> Result<Option<String>, InvokeError> {
+    match args.get(key).and_then(Value::as_str).map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(s) if s.len() == 36 && s.chars().enumerate().all(|(i, c)| if [8, 13, 18, 23].contains(&i) { c == '-' } else { c.is_ascii_hexdigit() }) => Ok(Some(s.to_string())),
+        Some(_) => Err(InvokeError::Message(format!("{key}: keine gültige Flow-ID (UUID)"))),
+    }
+}
+
+impl WriterStore {
+    /// `tams.copyRange`: Metadaten-Kopie (neuer Flow, gleiche Objects) je angegebenem Flow. Läuft im Hintergrund
+    /// (`tams.copyStatus`, Ergebnis als JSON in `tams.lastCopy`), damit der Node nicht blockiert.
+    fn copy_range(&self, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        let client = self.copier.clone().ok_or_else(|| InvokeError::Message("kein TAMS-Speicher eingerichtet".into()))?;
+        let (video, audio) = (uuid_arg(args, "videoFlow")?, uuid_arg(args, "audioFlow")?);
+        if video.is_none() && audio.is_none() {
+            return Err(InvokeError::Message("weder videoFlow noch audioFlow angegeben".into()));
+        }
+        let ts = |k: &str| -> Result<i128, InvokeError> {
+            let t = args.get(k).and_then(Value::as_str).map(str::trim).unwrap_or("");
+            omp_tams::time::Timestamp::parse(t).map(|x| x.ns()).map_err(|e| InvokeError::Message(format!("{k}: kein Zeitstempel (Sekunden:Nanosekunden): {e}")))
+        };
+        let (start, end) = (ts("start")?, ts("end")?);
+        if end <= start {
+            return Err(InvokeError::Message("Ende liegt nicht nach dem Anfang".into()));
+        }
+        let label = args.get("label").and_then(Value::as_str).map(str::trim).filter(|l| !l.is_empty()).map(|l| l.chars().take(120).collect::<String>());
+        {
+            let mut st = self.copy_state.lock().expect("lock poisoned");
+            if st.status == "running" {
+                return Err(InvokeError::Message("eine Kopie läuft bereits".into()));
+            }
+            *st = CopyState { status: "running".into(), result: String::new() };
+        }
+        let state = self.copy_state.clone();
+        std::thread::spawn(move || {
+            let range = omp_tams::copy::range_ns(start, end);
+            let mut out = serde_json::Map::new();
+            let mut failure = None;
+            for (kind, flow) in [("video", video), ("audio", audio)] {
+                let Some(flow) = flow else { continue };
+                let (new_flow, new_source) = (omp_node_sdk::idgen::new_v4(), omp_node_sdk::idgen::new_v4());
+                match omp_tams::copy::copy_range(&client, &flow, &new_flow, &new_source, label.as_deref(), range) {
+                    Ok(r) => {
+                        out.insert(kind.into(), serde_json::json!({"sourceFlow": flow, "flowId": r.flow_id, "sourceId": r.source_id, "segments": r.segments, "from": omp_tams::time::Timestamp::from_ns(r.from_ns).to_string(), "to": omp_tams::time::Timestamp::from_ns(r.to_ns).to_string()}));
+                    }
+                    Err(e) => {
+                        failure = Some(format!("{kind}: {e}"));
+                        break;
+                    }
+                }
+            }
+            let mut st = state.lock().expect("lock poisoned");
+            match failure {
+                None => *st = CopyState { status: "done".into(), result: Value::Object(out).to_string() },
+                Some(f) => *st = CopyState { status: "error".into(), result: f },
+            }
+        });
+        Ok(())
+    }
 }
 
 impl ParamStore for WriterStore {
@@ -90,9 +163,16 @@ impl ParamStore for WriterStore {
             num("tams.errors", None),
             num("tams.lagMs", Some("ms")),
             text("tams.lastError"),
+            text("tams.copyStatus"),
+            text("tams.lastCopy"),
         ];
         parameters.extend(self.monitor.param_specs("monitor"));
-        let mut methods = vec![MethodSpec { name: "tams.start".to_string(), args: vec![] }, MethodSpec { name: "tams.stop".to_string(), args: vec![] }];
+        let arg = |n: &str, k: ParamType| MethodArg { name: n.to_string(), kind: k };
+        let mut methods = vec![
+            MethodSpec { name: "tams.start".to_string(), args: vec![] },
+            MethodSpec { name: "tams.stop".to_string(), args: vec![] },
+            MethodSpec { name: "tams.copyRange".to_string(), args: vec![arg("videoFlow", ParamType::String), arg("audioFlow", ParamType::String), arg("start", ParamType::String), arg("end", ParamType::String), arg("label", ParamType::String)] },
+        ];
         methods.extend(self.monitor.method_specs("monitor"));
         Descriptor { latency: None, parameters, methods }
     }
@@ -112,6 +192,8 @@ impl ParamStore for WriterStore {
             "tams.segmentsWritten" => Some(serde_json::json!(self.handle.counters.segments_written.load(Ordering::Relaxed))),
             "tams.errors" => Some(serde_json::json!(u.errors.load(Ordering::Relaxed))),
             "tams.lagMs" => Some(serde_json::json!(u.lag_ms.load(Ordering::Relaxed))),
+            "tams.copyStatus" => Some(serde_json::json!(self.copy_state.lock().expect("lock poisoned").status.clone())),
+            "tams.lastCopy" => Some(serde_json::json!(self.copy_state.lock().expect("lock poisoned").result.clone())),
             "tams.lastError" => Some(serde_json::json!(self.config_problem.clone().unwrap_or_else(|| u.error_text()))),
             _ => self.monitor.get("monitor", name, None, Vec::new),
         }
@@ -125,7 +207,7 @@ impl ParamStore for WriterStore {
         }
     }
 
-    fn invoke(&self, name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+    fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
         match name {
             "tams.start" => {
                 if let Some(p) = &self.config_problem {
@@ -144,6 +226,7 @@ impl ParamStore for WriterStore {
                     }
                 }
             }
+            "tams.copyRange" => self.copy_range(args),
             "tams.stop" => match self.handle.stop() {
                 Ok(()) => {
                     self.monitor.deactivate();
@@ -276,7 +359,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver));
     monitor.deactivate();
     let media_handle = handle.clone();
-    let store: Arc<dyn ParamStore> = Arc::new(WriterStore { handle, config_problem, uploader: upload_status, service_display, video_connection, audio_connection, monitor: monitor.clone() });
+    let copier = client_from_env().ok().map(|(c, _)| Arc::new(c));
+    let store: Arc<dyn ParamStore> = Arc::new(WriterStore { copier, copy_state: Arc::new(Mutex::new(CopyState { status: "idle".into(), result: String::new() })), handle, config_problem, uploader: upload_status, service_display, video_connection, audio_connection, monitor: monitor.clone() });
 
     let node = omp_node_sdk::start(
         NodeConfig {
