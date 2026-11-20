@@ -330,6 +330,12 @@ fn get_segments(s: &State, base: &str, id: &str, q: &BTreeMap<String, String>) -
             let oid = v["object_id"].as_str().unwrap().to_string();
             let with_urls = q.get("accept_get_urls").map(|a| !a.is_empty()).unwrap_or(true);
             v["get_urls"] = if with_urls { json!([{"url": format!("{base}/objects/{oid}"), "label": "fake", "presigned": false}]) } else { json!([]) };
+            // Init-Segment (AppNote 0024): die Antwort nennt es als `init_object` mit eigenen Adressen
+            if let Some(iid) = v.get("init_object_id").and_then(|x| x.as_str()).map(str::to_string) {
+                // wie ein echter Dienst: in der Antwort steht `init_object`, nicht `init_object_id`
+                v.as_object_mut().map(|o| o.remove("init_object_id"));
+                v["init_object"] = json!({"object_id": iid, "get_urls": [{"url": format!("{base}/objects/{iid}"), "label": "fake", "presigned": false}]});
+            }
             v
         })
         .collect();

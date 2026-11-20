@@ -34,6 +34,10 @@ pub struct SegmentMeta {
     pub size: u64,
     #[serde(default)]
     pub slot: Option<SlotMeta>,
+    /// Fragmentiertes MP4 (Kapitel 105.3b): Dateiname des **Init-Segments** (`ftyp` + `moov`) im Spool-Verzeichnis. Die
+    /// Segmentdatei enthält dann nur `moof`/`mdat`. `None` = MPEG-TS (ein in sich geschlossenes Object).
+    #[serde(default)]
+    pub init_file: Option<String>,
 }
 
 #[derive(Debug)]
@@ -61,7 +65,7 @@ impl Spool {
             let p = e?.path();
             let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
             match ext {
-                "ts" | "mp4" if !p.with_extension("json").exists() => {
+                "ts" | "mp4" | "m4s" if !p.with_extension("json").exists() => {
                     let _ = fs::remove_file(&p);
                 }
                 "tmp" => {
@@ -105,6 +109,12 @@ impl Spool {
     pub fn remove(&self, meta: &SegmentMeta) {
         let _ = fs::remove_file(self.file_path(&meta.file));
         let _ = fs::remove_file(self.meta_path(&meta.file));
+        // Das Init-Segment gehört mehreren Segmenten: erst mit dem letzten Verweis entfernen
+        if let Some(init) = &meta.init_file
+            && !self.pending().iter().any(|m| m.init_file.as_deref() == Some(init.as_str()))
+        {
+            let _ = fs::remove_file(self.file_path(init));
+        }
     }
 
     /// Bekannte Flow-Beschreibungen (damit Segmente einer früheren Aufnahme auch nach einem Neustart angelegt werden können).
@@ -173,7 +183,7 @@ mod tests {
     }
 
     fn seg(flow: &str, n: u64, start: u64, size: u64) -> SegmentMeta {
-        SegmentMeta { flow_id: flow.into(), file: format!("{flow}-{n:06}.ts"), start_ns: start, end_ns: start + 2_000_000_000, key_frame_count: 1, size, slot: None }
+        SegmentMeta { flow_id: flow.into(), file: format!("{flow}-{n:06}.ts"), start_ns: start, end_ns: start + 2_000_000_000, key_frame_count: 1, size, slot: None, init_file: None }
     }
 
     fn put(s: &Spool, m: &SegmentMeta) {

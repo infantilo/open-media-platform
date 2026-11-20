@@ -414,3 +414,26 @@ fn metadata_copy_shares_objects_and_covers_whole_segments() {
     // unbekannter Quell-Flow
     assert!(copy_range(&c, "66666666-6666-4666-8666-666666666666", COPY, SRC2, None, omp_tams::copy::range_ns(0, 1)).is_err());
 }
+
+#[test]
+fn metadata_copy_keeps_the_init_segment_reference() {
+    use omp_tams::copy::{copy_range, range_ns};
+    const COPY: &str = "77777777-7777-4777-8777-777777777777";
+    let f = Fake::start();
+    let c = client(&f, Auth::None);
+    c.put_flow(FLOW, &flow()).unwrap();
+    let slots = c.request_storage(FLOW, &StorageRequest { limit: Some(2), ..Default::default() }).unwrap().media_objects;
+    c.upload_object(&slots[0], CONTAINER_MPEGTS, b"INIT").unwrap();
+    c.upload_object(&slots[1], CONTAINER_MPEGTS, b"MEDIA").unwrap();
+    let post = SegmentPost { object_id: slots[1].object_id.clone(), timerange: "[10:0_12:0)".into(), ts_offset: Some("0:0".into()), object_timerange: None, last_duration: None, sample_offset: None, sample_count: None, key_frame_count: Some(1), init_object_id: Some(slots[0].object_id.clone()) };
+    assert_eq!(c.register_segments(FLOW, &[post]).unwrap(), Registered::All);
+    // wie bei einem echten Dienst nennt die Antwort das Init-Segment als `init_object`
+    let orig = c.list_segments(FLOW, &SegmentQuery::default(), 10).unwrap();
+    assert!(orig[0].init_object_id.is_none());
+    assert_eq!(orig[0].init_object.as_ref().unwrap()["object_id"], slots[0].object_id.as_str());
+    copy_range(&c, FLOW, COPY, "88888888-8888-4888-8888-888888888888", None, range_ns(10_000_000_000, 12_000_000_000)).unwrap();
+    let copy = c.list_segments(COPY, &SegmentQuery::default(), 10).unwrap();
+    assert_eq!(copy.len(), 1);
+    assert_eq!(copy[0].object_id, slots[1].object_id);
+    assert_eq!(copy[0].init_object.as_ref().unwrap()["object_id"], slots[0].object_id.as_str(), "die Kopie verweist auf dasselbe Init-Segment");
+}

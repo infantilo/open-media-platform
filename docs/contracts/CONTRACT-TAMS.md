@@ -23,6 +23,9 @@ AppNote addiert (2^33−1)/90000 s, das wäre um 11 µs falsch).
 - Die Live-Kette wird **nie blockiert**: Ausfall des Speichers füllt eine Warteschlange auf der Platte (Standard bis 2 GB, überlebt Neustart); ist sie voll, werden die **ältesten** Segmente verworfen (Lücke, nie Überlappung; Alarm).
 - Unklarer Ausgang einer Registrierung wird beim Speicher **nachgefragt**, nicht blind wiederholt.
 
+### 2a. Fragmentiertes MP4 mit Init-Segment (AppNote 0024)
+`OMP_TAMS_CONTAINER=mp4` (Schreiber; Profilfeld `container`): Flow `container` `video/mp4` bzw. `audio/mp4`, `essence_parameters.init_segments = true`. Je Flow **ein Init-Object** (`ftyp`+`moov`), das alle Segmente per `init_object_id` nutzen; ein Segment-Object ist `moof`+`mdat`. `ts_offset = Segmentanfang − (tfdt + kleinster Kompositionsversatz)/Zeitskala`. Erzeugt wird ISO-BMFF-Fragmentierung (GStreamer `qtmux`, ohne B-Bilder), **keine** auf CMAF-Marken geprüfte Ausgabe. Leser und Export erkennen das Format am Inhalt; der Export setzt alle Segmente zu einem durchgehenden Strom zusammen und lehnt einen Init-Wechsel im Bereich ab.
+
 ## 3. Wiedergabe (`omp-tams-reader`)
 - Zwei IS-04-Sender (Video, Audio), Format des Videos = Konfiguration (`OMP_WIDTH/HEIGHT/FRAMERATE_NUM/DEN`, Standard 1280×720@25); abweichende Aufnahmen werden skaliert/angepasst.
 
@@ -56,4 +59,4 @@ fremde Objekt-Adressen; ein `Link` auf fremden Ursprung ist ein Fehler. Ohne gü
 Beide Nodes liefern `/ui/manifest.json` und `/ui/bundle.js` (Web-Komponenten `omp-tams-writer-panel`, `omp-tams-reader-panel`, Muster wie `omp-ptz`, eigene de/en-Texte im Bundle). Die Felder nutzen nur die Parameter und Methoden dieses Vertrags.
 
 ## 6. Grenzen
-CMAF/fragmentiertes MP4 (braucht `cmafmux`), Webhook, Rechte nach AppNote 0016 im OMP, Aufbewahrung/Löschen, Metadaten-Kopie je Sendung, Mehrkanal-Sammel-Flow: **offen** (Kapitel 105.3b, 105.6).
+Strikte CMAF-Konformität (braucht `cmafmux`), Webhook, Rechte nach AppNote 0016 im OMP, Aufbewahrung/Löschen, Metadaten-Kopie je Sendung, Mehrkanal-Sammel-Flow: **offen** (Kapitel 105.3b, 105.6).

@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 gstreamer = "0.25.3"
+gstreamer-app = "0.25"
 omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
 omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
 omp-tams = { version = "0.1.0", path = "../omp-tams" }

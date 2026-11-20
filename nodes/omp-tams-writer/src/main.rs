@@ -13,6 +13,7 @@
 //! * `OMP_TAMS_RETENTION_HOURS` Aufbewahrung der eigenen Flows (Standard 0 = unbegrenzt); Tag `segment_retention_offset` + Löschlauf (AppNote 0019)
 //! * `OMP_TAMS_FLOW_RETENTION_HOURS` ganze Flows löschen, wenn so lange unverändert (Standard 0 = nie); Tag `flow_retention_offset`
 //! * `OMP_TAMS_EMPTY_FLOW_HOURS` leere Flows ohne Segmente nach so vielen Stunden aufräumen (Standard 0 = nie)
+//! * `OMP_TAMS_CONTAINER`      `mpegts` (Standard) | `mp4` (fragmentiertes MP4 mit Init-Segment, AppNote 0024; ISO-BMFF-Fragmente wie `qtmux`, keine CMAF-Markenprüfung)
 //! * `OMP_TAMS_SEGMENT_SECONDS` Segmentlänge (Standard 2; wirksam an der nächsten GOP-Grenze)
 //! * `OMP_TAMS_VIDEO_KBPS`, `OMP_TAMS_AUDIO_BPS`  Bitraten (Standard 4000 kbit/s und 192000 bit/s)
 
@@ -357,6 +358,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         uploader_status: upload_status.clone(),
         retention_s,
         flow_retention_s: policy.flow_s,
+        container: {
+            let name = env_or("OMP_TAMS_CONTAINER", "mpegts");
+            runtime::Container::from_name(&name).unwrap_or_else(|| {
+                eprintln!("omp-tams-writer: OMP_TAMS_CONTAINER={name:?} unbekannt (mpegts|mp4) — nehme mpegts");
+                runtime::Container::MpegTs
+            })
+        },
     };
     let pipeline_shutdown = shutdown.clone();
     let heartbeat = Arc::new(AtomicU64::new(0));

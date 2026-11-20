@@ -118,6 +118,8 @@ pub struct Uploader {
     flows_ready: bool,
     min_object_timeout_s: u64,
     now_tai_ns: Box<dyn Fn() -> u64 + Send>,
+    /// Fragmentiertes MP4: schon registrierte Init-Objects je (Flow, Init-Datei) — Init-Segmente werden wiederverwendet (AppNote 0024).
+    init_objects: std::collections::HashMap<(String, String), String>,
 }
 
 fn unix_s() -> u64 {
@@ -126,7 +128,7 @@ fn unix_s() -> u64 {
 
 impl Uploader {
     pub fn new(client: Client, spool: Arc<Spool>, flows: Arc<FlowRegistry>, now_tai_ns: Box<dyn Fn() -> u64 + Send>) -> Uploader {
-        Uploader { client, spool, flows, status: Arc::new(UploaderStatus { lag_ms: AtomicI64::new(-1), ..Default::default() }), flows_ready: false, min_object_timeout_s: 600, now_tai_ns }
+        Uploader { client, spool, flows, status: Arc::new(UploaderStatus { lag_ms: AtomicI64::new(-1), ..Default::default() }), flows_ready: false, min_object_timeout_s: 600, now_tai_ns, init_objects: Default::default() }
     }
 
     /// Dienst prüfen (Version, D-T4) und alle Flows anlegen. Muss nach jedem Verbindungsverlust erneut gelingen.
@@ -215,11 +217,34 @@ impl Uploader {
                 return Step::Rejected(format!("Segmentdatei {} fehlt", seg.file));
             }
         };
-        let Some(pts) = first_pts(&data) else {
-            self.spool.remove(seg);
-            return Step::Rejected(format!("Segment {} enthält keinen lesbaren PTS (kein gültiges MPEG-TS)", seg.file));
+        // Container-Zeit des ersten Samples: MPEG-TS = erster PTS; fragmentiertes MP4 = (tfdt + Kompositionsversatz) / Zeitskala
+        let init_bytes = match &seg.init_file {
+            Some(f) => match std::fs::read(self.spool.file_path(f)) {
+                Ok(b) => Some(b),
+                Err(_) => {
+                    self.spool.remove(seg);
+                    return Step::Rejected(format!("Init-Segment {f} fehlt"));
+                }
+            },
+            None => None,
         };
-        let ts_offset = Timestamp::from_ns(seg.start_ns as i128 - ticks_to_ns(pts));
+        let first_ns: i128 = match &init_bytes {
+            Some(init) => match omp_tams::mp4::first_pts_ns(init, &data) {
+                Some(n) => n,
+                None => {
+                    self.spool.remove(seg);
+                    return Step::Rejected(format!("Segment {} enthält keine lesbare Zeit (kein gültiges fragmentiertes MP4)", seg.file));
+                }
+            },
+            None => match first_pts(&data) {
+                Some(pts) => ticks_to_ns(pts),
+                None => {
+                    self.spool.remove(seg);
+                    return Step::Rejected(format!("Segment {} enthält keinen lesbaren PTS (kein gültiges MPEG-TS)", seg.file));
+                }
+            },
+        };
+        let ts_offset = Timestamp::from_ns(seg.start_ns as i128 - first_ns);
         let range = TimeRange::half_open(Timestamp::from_ns(seg.start_ns as i128), Timestamp::from_ns(seg.end_ns as i128));
 
         // Platz reservieren (oder den vorhandenen weiterverwenden, solange der Dienst ihn nicht verworfen hat)
@@ -246,6 +271,29 @@ impl Uploader {
             }
             return self.classify(seg, &range, e, "Object hochladen");
         }
+        // Fragmentiertes MP4: Init-Segment einmal hochladen und wiederverwenden (AppNote 0024)
+        let mut new_init: Option<((String, String), String)> = None;
+        let init_object_id = match (&seg.init_file, &init_bytes) {
+            (Some(f), Some(bytes)) => {
+                let key = (seg.flow_id.clone(), f.clone());
+                match self.init_objects.get(&key) {
+                    Some(id) => Some(id.clone()),
+                    None => {
+                        let slots = match self.client.request_storage(&seg.flow_id, &StorageRequest { limit: Some(1), ..Default::default() }) {
+                            Ok(r) => r,
+                            Err(e) => return self.classify(seg, &range, e, "Speicher für Init-Segment reservieren"),
+                        };
+                        let Some(o) = slots.media_objects.into_iter().next() else { return Step::Retry("Dienst lieferte keinen Speicherplatz für das Init-Segment".into()) };
+                        if let Err(e) = self.client.upload_object(&o, &flow.container, bytes) {
+                            return self.classify(seg, &range, e, "Init-Segment hochladen");
+                        }
+                        new_init = Some((key, o.object_id.clone()));
+                        Some(o.object_id)
+                    }
+                }
+            }
+            _ => None,
+        };
         let post = SegmentPost {
             object_id: slot.object_id.clone(),
             timerange: range.to_string(),
@@ -255,10 +303,13 @@ impl Uploader {
             sample_offset: None,
             sample_count: None,
             key_frame_count: Some(seg.key_frame_count),
-            init_object_id: None,
+            init_object_id: init_object_id.clone(),
         };
         match self.client.register_segments(&seg.flow_id, std::slice::from_ref(&post)) {
             Ok(Registered::All) => {
+                if let Some((k, id)) = new_init {
+                    self.init_objects.insert(k, id); // erst jetzt gilt es als verwendet (sonst verwirft der Dienst es nach dem Timeout)
+                }
                 self.spool.remove(seg);
                 Step::Registered
             }
@@ -356,6 +407,17 @@ pub fn video_flow_body(flow_id: &str, source_id: &str, label: &str, width: u32, 
         "segment_duration": {"numerator": segment_s},
         "avg_bit_rate": bitrate_kbps,
     })
+}
+
+/// Flow-Nutzlast auf fragmentiertes MP4 umstellen (Kapitel 105.3b, AppNote 0024): Container `video/mp4` bzw. `audio/mp4`,
+/// `essence_parameters.init_segments = true` (jedes Segment verweist auf ein Init-Segment).
+pub fn to_mp4_body(mut body: serde_json::Value, audio: bool) -> (serde_json::Value, String) {
+    let container = if audio { "audio/mp4" } else { "video/mp4" };
+    body["container"] = container.into();
+    if let Some(ep) = body.get_mut("essence_parameters").and_then(|e| e.as_object_mut()) {
+        ep.insert("init_segments".into(), true.into());
+    }
+    (body, container.to_string())
 }
 
 /// Nutzlast für einen Audio-Flow (AAC in MPEG-TS).

@@ -60,6 +60,8 @@ type Profile struct {
 	RetentionHours     float64 `json:"retentionHours,omitempty"`
 	FlowRetentionHours float64 `json:"flowRetentionHours,omitempty"`
 	EmptyFlowHours     float64 `json:"emptyFlowHours,omitempty"`
+	// Container der TAMS-Segmente (Ziel „tams“): "" / "mpegts" (Standard) oder "mp4" (fragmentiertes MP4 mit Init-Segment, AppNote 0024).
+	Container string `json:"container,omitempty"`
 }
 
 // tamsEnv: Umgebung für den Schreiber aus den Aufbewahrungsangaben des Profils.
@@ -69,6 +71,9 @@ func (p Profile) tamsEnv() map[string]string {
 		if v > 0 {
 			env[k] = strconv.FormatFloat(v, 'f', -1, 64)
 		}
+	}
+	if p.Container == "mp4" {
+		env["OMP_TAMS_CONTAINER"] = "mp4"
 	}
 	return env
 }
@@ -129,7 +134,10 @@ func (c *Config) Normalize() error {
 		if p.RetentionHours < 0 || p.FlowRetentionHours < 0 || p.EmptyFlowHours < 0 {
 			return fmt.Errorf("Profil %q: Aufbewahrung darf nicht negativ sein", k)
 		}
-		if p.Target != TargetTAMS && (p.RetentionHours > 0 || p.FlowRetentionHours > 0 || p.EmptyFlowHours > 0) {
+		if p.Container != "" && p.Container != "mpegts" && p.Container != "mp4" {
+			return fmt.Errorf("Profil %q: Container %q unbekannt (mpegts oder mp4)", k, p.Container)
+		}
+		if p.Target != TargetTAMS && (p.Container != "" || p.RetentionHours > 0 || p.FlowRetentionHours > 0 || p.EmptyFlowHours > 0) {
 			return fmt.Errorf("Profil %q: Aufbewahrung gilt nur beim Ziel tams", k)
 		}
 		if p.Target == TargetTAMS {

@@ -14,6 +14,7 @@
 use crate::spool::{SegmentMeta, Spool};
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use gstreamer_app;
 use omp_tams::index::{Rate, index_to_ns};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -49,6 +50,22 @@ pub struct Branch {
     ring: Arc<Mutex<VecDeque<(u64, u64)>>>,
     opened: Mutex<HashMap<String, u64>>,
     chain_next: Mutex<Option<u64>>,
+    /// Ereignisse, die nicht über die Bus-Meldungen von `splitmuxsink` kommen (fragmentiertes MP4: `appsink`-Thread).
+    events: Mutex<Vec<Event>>,
+    /// Zustand des fragmentierten MP4-Zweigs (`None` = MPEG-TS über `splitmuxsink`).
+    mp4: Option<Mp4State>,
+}
+
+/// Fragmentiertes MP4 (Kapitel 105.3b): ein `qtmux` je Zweig liefert `ftyp`+`moov` (Init-Segment), dann `moof`+`mdat` je Fragment.
+struct Mp4State {
+    stream: Mutex<omp_tams::mp4::BoxStream>,
+    init_bytes: Mutex<Vec<u8>>,
+    init_file: Mutex<Option<String>>,
+    moof: Mutex<Option<(Vec<u8>, Option<u64>)>>,
+    counter: AtomicU64,
+    t0: u64,
+    /// Laufzeit des ersten Puffers vor dem Encoder: die Objektzeit des `qtmux` beginnt bei 0 mit dem ersten Sample.
+    first_rt: Arc<Mutex<Option<u64>>>,
 }
 
 fn short(id: &str) -> String {
@@ -60,7 +77,7 @@ fn unix_ms() -> u64 {
 }
 
 /// Pad-Probe: je Puffer (Laufzeit, Ursprungs-Index) merken.
-fn arm_probe(tail: &gst::Element, ring: Arc<Mutex<VecDeque<(u64, u64)>>>, origin: OriginFn) -> Result<(), String> {
+fn arm_probe(tail: &gst::Element, ring: Arc<Mutex<VecDeque<(u64, u64)>>>, origin: OriginFn, first_rt: Option<Arc<Mutex<Option<u64>>>>) -> Result<(), String> {
     let pad = tail.static_pad("src").ok_or("Eingang ohne src-Pad")?;
     pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
         if let Some(gst::PadProbeData::Buffer(buf)) = &info.data
@@ -70,6 +87,9 @@ fn arm_probe(tail: &gst::Element, ring: Arc<Mutex<VecDeque<(u64, u64)>>>, origin
                 .sticky_event::<gst::event::Segment>(0)
                 .and_then(|e| e.segment().downcast_ref::<gst::format::Time>().and_then(|s| s.to_running_time(pts)))
                 .unwrap_or(pts);
+            if let Some(f) = &first_rt {
+                f.lock().expect("lock poisoned").get_or_insert(rt.nseconds());
+            }
             if let Some(idx) = origin(buf) {
                 let mut r = ring.lock().expect("lock poisoned");
                 if r.len() >= RING_CAP {
@@ -132,8 +152,8 @@ fn build_branch(
     last.static_pad("src").ok_or("Zweig ohne src-Pad")?.link(&pad).map_err(|e| format!("link zu splitmuxsink: {e}"))?;
 
     let ring = Arc::new(Mutex::new(VecDeque::with_capacity(RING_CAP)));
-    arm_probe(tail, ring.clone(), origin)?;
-    Ok(Arc::new(Branch { flow_id: flow_id.to_string(), kind, rate, sink_name, spool, ring, opened: Mutex::new(HashMap::new()), chain_next: Mutex::new(None) }))
+    arm_probe(tail, ring.clone(), origin, None)?;
+    Ok(Arc::new(Branch { flow_id: flow_id.to_string(), kind, rate, sink_name, spool, ring, opened: Mutex::new(HashMap::new()), chain_next: Mutex::new(None), events: Mutex::new(Vec::new()), mp4: None }))
 }
 
 /// Video-Zweig: `tail ! videoconvert ! x264enc ! h264parse ! splitmuxsink(mpegtsmux)`.
@@ -198,6 +218,155 @@ pub fn add_audio_branch(
     build_branch(pipeline, tail, flow_id, Kind::Audio, rate, segment_ns, spool, origin, vec![convert, resample, enc, parse, caps, queue], "audio_%u", segment_ns)
 }
 
+/// Zweig mit fragmentiertem MP4: `tail ! … ! qtmux(fragment-duration) ! appsink`. Das Init-Segment (`ftyp`+`moov`) wird einmal
+/// abgelegt (`<flow>-<hash>.init`), jedes `moof`+`mdat`-Paar wird ein Segment (`<flow>-<t0>-<n>.m4s`) mit Verweis darauf.
+#[allow(clippy::too_many_arguments)]
+fn build_mp4_branch(
+    pipeline: &gst::Pipeline,
+    tail: &gst::Element,
+    flow_id: &str,
+    kind: Kind,
+    rate: Rate,
+    segment_ns: u64,
+    spool: Arc<Spool>,
+    origin: OriginFn,
+    chain: Vec<gst::Element>,
+) -> Result<Arc<Branch>, String> {
+    let muxer = make("qtmux")?;
+    muxer.set_property("fragment-duration", (segment_ns / 1_000_000) as u32);
+    muxer.set_property_from_str("fragment-mode", "dash-or-mss");
+    let sink = gst::ElementFactory::make("appsink").property("sync", false).property("max-buffers", 0u32).build().map_err(|e| format!("appsink: {e}"))?;
+    pipeline.add_many([&muxer, &sink]).map_err(|e| format!("add qtmux: {e}"))?;
+    pipeline.add_many(&chain).map_err(|e| format!("add Zweig: {e}"))?;
+    let mut all: Vec<&gst::Element> = vec![tail];
+    all.extend(chain.iter());
+    all.push(&muxer);
+    all.push(&sink);
+    gst::Element::link_many(all).map_err(|e| format!("link Zweig: {e}"))?;
+    let ring = Arc::new(Mutex::new(VecDeque::with_capacity(RING_CAP)));
+    let first_rt = Arc::new(Mutex::new(None));
+    arm_probe(tail, ring.clone(), origin, Some(first_rt.clone()))?;
+    let sink_name = format!("mp4-{}-{}", short(flow_id), if kind == Kind::Video { "v" } else { "a" });
+    let state = Mp4State { stream: Mutex::new(Default::default()), init_bytes: Mutex::new(Vec::new()), init_file: Mutex::new(None), moof: Mutex::new(None), counter: AtomicU64::new(0), t0: unix_ms(), first_rt };
+    let branch = Arc::new(Branch { flow_id: flow_id.to_string(), kind, rate, sink_name, spool, ring, opened: Mutex::new(HashMap::new()), chain_next: Mutex::new(None), events: Mutex::new(Vec::new()), mp4: Some(state) });
+    let b2 = Arc::downgrade(&branch);
+    let appsink = sink.downcast::<gstreamer_app::AppSink>().map_err(|_| "appsink-Typ".to_string())?;
+    appsink.set_callbacks(
+        gstreamer_app::AppSinkCallbacks::builder()
+            .new_sample(move |s| {
+                let sample = s.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                let Some(b) = b2.upgrade() else { return Err(gst::FlowError::Eos) };
+                b.on_mp4_sample(&sample);
+                Ok(gst::FlowSuccess::Ok)
+            })
+            .build(),
+    );
+    Ok(branch)
+}
+
+/// Video-Zweig mit fragmentiertem MP4 (`x264enc ! h264parse ! qtmux`): wie [`add_video_branch`], Container `video/mp4`.
+#[allow(clippy::too_many_arguments)]
+pub fn add_video_branch_mp4(pipeline: &gst::Pipeline, tail: &gst::Element, flow_id: &str, fps: Rate, segment_ns: u64, bitrate_kbps: u32, spool: Arc<Spool>, origin: OriginFn) -> Result<Arc<Branch>, String> {
+    let gop = (((segment_ns as f64) / 1e9) * fps.num as f64 / fps.den as f64).round().max(1.0) as u32;
+    let convert = make("videoconvert")?;
+    let enc = gst::ElementFactory::make("x264enc").property("bitrate", bitrate_kbps).property("key-int-max", gop).property("bframes", 0u32).build().map_err(|e| format!("x264enc: {e}"))?;
+    enc.set_property_from_str("speed-preset", "veryfast");
+    enc.set_property_from_str("tune", "zerolatency");
+    let parse = make("h264parse")?;
+    let caps = gst::ElementFactory::make("capsfilter").property("caps", gst::Caps::builder("video/x-h264").field("stream-format", "avc").field("alignment", "au").build()).build().map_err(|e| format!("capsfilter: {e}"))?;
+    let queue = make("queue")?;
+    build_mp4_branch(pipeline, tail, flow_id, Kind::Video, fps, segment_ns, spool, origin, vec![convert, enc, parse, caps, queue])
+}
+
+/// Audio-Zweig mit fragmentiertem MP4 (`avenc_aac ! aacparse ! qtmux`, rohes AAC).
+#[allow(clippy::too_many_arguments)]
+pub fn add_audio_branch_mp4(pipeline: &gst::Pipeline, tail: &gst::Element, flow_id: &str, sample_rate: u32, segment_ns: u64, bitrate_bps: i32, spool: Arc<Spool>, origin: OriginFn) -> Result<Arc<Branch>, String> {
+    let convert = make("audioconvert")?;
+    let resample = make("audioresample")?;
+    let enc = make("avenc_aac")?;
+    enc.set_property("bitrate", bitrate_bps);
+    let parse = make("aacparse")?;
+    let caps = gst::ElementFactory::make("capsfilter").property("caps", gst::Caps::builder("audio/mpeg").field("mpegversion", 4i32).field("stream-format", "raw").build()).build().map_err(|e| format!("capsfilter: {e}"))?;
+    let queue = make("queue")?;
+    let rate = Rate::new(sample_rate, 1).ok_or("Abtastrate 0")?;
+    build_mp4_branch(pipeline, tail, flow_id, Kind::Audio, rate, segment_ns, spool, origin, vec![convert, resample, enc, parse, caps, queue])
+}
+
+impl Branch {
+    /// Ein Puffer des `qtmux`: Kästen sammeln; `moov` schließt das Init-Segment, `mdat` das Segment.
+    fn on_mp4_sample(&self, sample: &gst::Sample) {
+        let Some(st) = &self.mp4 else { return };
+        let Some(buf) = sample.buffer() else { return };
+        let rt = buf.pts().and_then(|pts| sample.segment().and_then(|s| s.downcast_ref::<gst::format::Time>().and_then(|t| t.to_running_time(pts)))).map(|t| t.nseconds());
+        let Ok(map) = buf.map_readable() else { return };
+        let boxes = match st.stream.lock().expect("lock poisoned").push(map.as_slice()) {
+            Ok(b) => b,
+            Err(e) => {
+                self.events.lock().expect("lock poisoned").push(Event::Dropped { flow_id: self.flow_id.clone(), reason: e });
+                return;
+            }
+        };
+        for (typ, bytes) in boxes {
+            match &typ {
+                b"ftyp" | b"moov" => {
+                    st.init_bytes.lock().expect("lock poisoned").extend_from_slice(&bytes);
+                    if &typ == b"moov" {
+                        self.store_init(st);
+                    }
+                }
+                b"moof" => *st.moof.lock().expect("lock poisoned") = Some((bytes, rt)),
+                b"mdat" => {
+                    let moof = st.moof.lock().expect("lock poisoned").take();
+                    if let Some((mut media, moof_rt)) = moof {
+                        media.extend_from_slice(&bytes);
+                        if let Some(e) = self.finish_mp4_fragment(st, media, moof_rt) {
+                            self.events.lock().expect("lock poisoned").push(e);
+                        }
+                    }
+                }
+                _ => {} // mfra, free, styp … ignorieren
+            }
+        }
+    }
+
+    fn store_init(&self, st: &Mp4State) {
+        let init = std::mem::take(&mut *st.init_bytes.lock().expect("lock poisoned"));
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        init.hash(&mut h);
+        let name = format!("{}-{:016x}.init", short(&self.flow_id), h.finish());
+        if std::fs::write(self.spool.file_path(&name), &init).is_ok() {
+            *st.init_file.lock().expect("lock poisoned") = Some(name);
+        }
+    }
+
+    /// Ein Fragment (`moof`+`mdat`) als Segmentdatei ablegen und wie ein geschlossenes `splitmuxsink`-Fragment behandeln.
+    fn finish_mp4_fragment(&self, st: &Mp4State, media: Vec<u8>, moof_rt: Option<u64>) -> Option<Event> {
+        let Some(init_file) = st.init_file.lock().expect("lock poisoned").clone() else {
+            return Some(Event::Dropped { flow_id: self.flow_id.clone(), reason: "Fragment vor dem Init-Segment".into() });
+        };
+        let info = omp_tams::mp4::fragment_info(&media);
+        let ts = std::fs::read(self.spool.file_path(&init_file)).ok().and_then(|i| omp_tams::mp4::timescale(&i));
+        let (Some(info), Some(ts)) = (info, ts) else {
+            return Some(Event::Dropped { flow_id: self.flow_id.clone(), reason: "Fragment ohne lesbare Zeitangaben (tfdt/Zeitskala)".into() });
+        };
+        // Laufzeit des Fragmentanfangs: Laufzeit des ersten Puffers + Objektzeit (tfdt) — die Puffer des `qtmux` tragen keine Zeitstempel
+        let tfdt_ns = (info.base_decode_time as u128 * 1_000_000_000 / ts as u128) as u64;
+        let _ = moof_rt;
+        let Some(first) = *st.first_rt.lock().expect("lock poisoned") else {
+            return Some(Event::Dropped { flow_id: self.flow_id.clone(), reason: "Fragment ohne Zeitbezug (kein Puffer vor dem Encoder gesehen)".into() });
+        };
+        let start_rt = first + tfdt_ns;
+        let dur_ns = (info.duration_ticks as u128 * 1_000_000_000 / ts as u128) as u64;
+        let name = format!("{}-{}-{:06}.m4s", short(&self.flow_id), st.t0, st.counter.fetch_add(1, Ordering::Relaxed));
+        let path = self.spool.file_path(&name);
+        if let Err(e) = std::fs::write(&path, &media) {
+            return Some(Event::Dropped { flow_id: self.flow_id.clone(), reason: format!("Segmentdatei nicht schreibbar: {e}") });
+        }
+        self.close_fragment_with_init(&path.to_string_lossy(), start_rt, start_rt + dur_ns.max(1), Some(init_file))
+    }
+}
+
 impl Branch {
     /// Index zur Laufzeit `rt` (nächster gemerkter Eintrag) und Abstand in Indexeinheiten.
     fn lookup(&self, rt: u64) -> Option<u64> {
@@ -224,6 +393,11 @@ impl Branch {
     /// Fragment meldet beim EOS mal die Laufzeit des letzten Bildes, mal dessen Ende). `None`, wenn nicht lesbar.
     fn count_in_file(&self, location: &str) -> Option<u64> {
         let data = std::fs::read(location).ok()?;
+        if location.ends_with(".m4s") {
+            let samples = omp_tams::mp4::fragment_info(&data)?.sample_count;
+            let n = if self.kind == Kind::Audio { samples * AAC_FRAME } else { samples };
+            return (n > 0).then_some(n);
+        }
         let n = match self.kind {
             Kind::Video => omp_tams::mpegts::video_frame_count(&data)? as u64,
             Kind::Audio => omp_tams::mpegts::aac_frame_count(&data)? as u64 * AAC_FRAME,
@@ -243,6 +417,11 @@ impl Branch {
             }
         }
         n
+    }
+
+    /// Ereignisse aus dem `appsink`-Thread des fragmentierten MP4-Zweigs (leer bei MPEG-TS).
+    pub fn drain_events(&self) -> Vec<Event> {
+        std::mem::take(&mut *self.events.lock().expect("lock poisoned"))
     }
 
     /// Verarbeitet Meldungen von `splitmuxsink`. Andere Meldungen und fremde Zweige: `None`.
@@ -274,6 +453,10 @@ impl Branch {
 
     /// `None` bei leeren Fragmenten (entstehen beim Beenden: `splitmuxsink` öffnet am EOS noch ein Fragment) — kein Fehler.
     fn close_fragment(&self, location: &str, start_rt: u64, end_rt: u64) -> Option<Event> {
+        self.close_fragment_with_init(location, start_rt, end_rt, None)
+    }
+
+    fn close_fragment_with_init(&self, location: &str, start_rt: u64, end_rt: u64, init_file: Option<String>) -> Option<Event> {
         let size = std::fs::metadata(location).map(|m| m.len()).unwrap_or(0);
         if size == 0 || end_rt <= start_rt {
             let _ = std::fs::remove_file(location);
@@ -299,7 +482,7 @@ impl Branch {
         let start_ns = index_to_ns(start_idx, self.rate);
         let end_ns = index_to_ns(end_idx, self.rate);
         let file = std::path::Path::new(location).file_name().and_then(|f| f.to_str()).unwrap_or(location).to_string();
-        let meta = SegmentMeta { flow_id: self.flow_id.clone(), file, start_ns, end_ns, key_frame_count: 1, size, slot: None };
+        let meta = SegmentMeta { flow_id: self.flow_id.clone(), file, start_ns, end_ns, key_frame_count: 1, size, slot: None, init_file };
         Some(match self.spool.add(&meta) {
             Ok(()) => Event::Segment { flow_id: self.flow_id.clone(), start_ns, end_ns, bytes: size },
             Err(e) => self.drop_file(location, format!("Warteschlange nicht beschreibbar: {e}")),
@@ -327,6 +510,8 @@ mod tests {
             ring: Arc::new(Mutex::new(VecDeque::new())),
             opened: Mutex::new(HashMap::new()),
             chain_next: Mutex::new(None),
+            events: Mutex::new(Vec::new()),
+            mp4: None,
         }
     }
 

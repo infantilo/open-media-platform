@@ -100,6 +100,7 @@ fn range_from(cursor_ns: i128, end_ns: Option<i128>) -> TimeRange {
 /// gezählt und wiederholt, ein nicht ladbares Object wird übersprungen (es entsteht eine Lücke, die gefüllt wird).
 pub fn fetch_loop(client: &Client, flow: &str, course: Course, tx: &SyncSender<Fetched>, ctl: &Control, stats: &Stats) {
     let mut cursor = course.start_ns;
+    let mut inits: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
     while !ctl.stop.load(Ordering::Relaxed) {
         if course.end_ns.is_some_and(|e| cursor >= e) {
             return;
@@ -148,11 +149,46 @@ pub fn fetch_loop(client: &Client, flow: &str, course: Course, tx: &SyncSender<F
                 }
             }
             let Some(data) = data else { continue };
-            let Some(pts) = first_pts(&data) else {
-                stats.error(format!("Object {} ohne lesbaren PTS", seg.timerange));
-                continue;
+            // Fragmentiertes MP4: Init-Segment dazuholen (je Object-ID nur einmal) und vor das Segment setzen
+            let mut data = data;
+            let first_ns: i128 = if omp_tams::mp4::looks_like_mp4(&data) {
+                let Some(init_id) = seg.init_object_id.clone().or_else(|| seg.init_object.as_ref().and_then(|o| o["object_id"].as_str()).map(str::to_string)) else {
+                    stats.error(format!("Segment {} ist fragmentiertes MP4, nennt aber kein Init-Segment", seg.timerange));
+                    continue;
+                };
+                if !inits.contains_key(&init_id) {
+                    let url = seg.init_object.as_ref().and_then(|o| o["get_urls"][0]["url"].as_str()).map(str::to_string);
+                    let Some(url) = url else {
+                        stats.error(format!("Init-Segment {init_id} ohne Adresse (Antwort ohne init_object?)"));
+                        continue;
+                    };
+                    match client.download_object(&url, 16 << 20) {
+                        Ok(b) => {
+                            inits.insert(init_id.clone(), b);
+                        }
+                        Err(e) => {
+                            stats.error(format!("Init-Segment laden ({init_id}): {e}"));
+                            continue;
+                        }
+                    }
+                }
+                let init = &inits[&init_id];
+                let Some(ns) = omp_tams::mp4::first_pts_ns(init, &data) else {
+                    stats.error(format!("Segment {}: keine lesbare Zeit (tfdt/Zeitskala)", seg.timerange));
+                    continue;
+                };
+                let mut whole = init.clone();
+                whole.extend_from_slice(&data);
+                data = whole;
+                ns
+            } else {
+                let Some(pts) = first_pts(&data) else {
+                    stats.error(format!("Object {} ohne lesbaren PTS", seg.timerange));
+                    continue;
+                };
+                omp_tams::mpegts::ticks_to_ns(pts)
             };
-            let Some(base_ns) = plan::segment_base_ns(seg.ts_offset.as_deref(), pts) else {
+            let Some(base_ns) = plan::segment_base_ns_from(seg.ts_offset.as_deref(), first_ns) else {
                 stats.error(format!("Segment {}: ts_offset unlesbar", seg.timerange));
                 continue;
             };

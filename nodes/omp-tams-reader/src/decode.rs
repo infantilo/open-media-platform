@@ -1,4 +1,5 @@
-//! Ein MPEG-TS-Object dekodieren: eine kleine Pipeline je Segment (`appsrc ! tsdemux ! Parser ! Decoder ! appsink`).
+//! Ein Segment dekodieren — MPEG-TS (`tsdemux`) oder fragmentiertes MP4 mit Init-Segment (`qtdemux`, Kapitel 105.3b; der Aufrufer
+//! reicht Init + Medien-Segment hintereinander): eine kleine Pipeline je Segment (`appsrc ! Demuxer ! Parser ! Decoder ! appsink`).
 //!
 //! Je Segment eine eigene Pipeline, weil jedes Object seine **eigene Containerzeit** hat (der Schreiber legt `ts_offset`
 //! je Segment fest, AppNote 0002): ein durchgehender Demuxer würde an jeder Segmentgrenze einen Zeitsprung sehen.
@@ -20,13 +21,20 @@ where
     F: FnMut(&gst::Sample) -> Result<bool, String>,
 {
     gst::init().map_err(|e| format!("gst init: {e}"))?;
-    let pipeline = gst::parse::launch(description)
+    // Der Demuxer richtet sich nach dem Inhalt: Beschreibungen sind für MPEG-TS geschrieben, bei MP4 wird der Demuxer getauscht
+    let description = if omp_tams::mp4::looks_like_mp4(&data) {
+        description.replace("tsdemux name=d d. ! video/x-h264 !", "qtdemux name=d d. ! video/x-h264 !").replace("tsdemux name=d d. ! audio/mpeg !", "qtdemux name=d d. ! audio/mpeg !")
+    } else {
+        description.to_string()
+    };
+    let pipeline = gst::parse::launch(&description)
         .map_err(|e| format!("Dekodier-Pipeline: {e}"))?
         .downcast::<gst::Pipeline>()
         .map_err(|_| "Dekodier-Pipeline: kein Pipeline-Objekt".to_string())?;
     let src = pipeline.by_name("src").and_then(|e| e.downcast::<gst_app::AppSrc>().ok()).ok_or("appsrc fehlt")?;
     let sink = pipeline.by_name("sink").and_then(|e| e.downcast::<gst_app::AppSink>().ok()).ok_or("appsink fehlt")?;
-    src.set_caps(Some(&gst::Caps::builder("video/mpegts").field("systemstream", true).field("packetsize", 188i32).build()));
+    let mp4 = omp_tams::mp4::looks_like_mp4(&data);
+    src.set_caps(Some(&if mp4 { gst::Caps::builder("video/quicktime").build() } else { gst::Caps::builder("video/mpegts").field("systemstream", true).field("packetsize", 188i32).build() }));
     pipeline.set_state(gst::State::Playing).map_err(|e| format!("Dekodieren starten: {e}"))?;
     let result = (|| {
         src.push_buffer(gst::Buffer::from_slice(data)).map_err(|e| format!("Object übergeben: {e:?}"))?;

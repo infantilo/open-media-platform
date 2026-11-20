@@ -87,7 +87,8 @@ pub fn copy_range(client: &Client, src_flow: &str, new_flow_id: &str, new_source
             sample_offset: s.sample_offset,
             sample_count: s.sample_count,
             key_frame_count: s.key_frame_count,
-            init_object_id: s.init_object_id.clone(),
+            // Die Antwort des Dienstes nennt das Init-Segment als `init_object`; beim Anlegen heißt das Feld `init_object_id`
+            init_object_id: s.init_object_id.clone().or_else(|| s.init_object.as_ref().and_then(|o| o["object_id"].as_str()).map(str::to_string)),
         });
     }
     for chunk in posts.chunks(BATCH) {

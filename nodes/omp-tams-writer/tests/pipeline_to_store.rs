@@ -261,6 +261,7 @@ fn registration_with_unknown_outcome_is_confirmed_not_rejected() {
         key_frame_count: 1,
         size: data.len() as u64,
         slot: Some(omp_tams_writer::spool::SlotMeta { object_id: seg.object_id.clone(), put_url, reserved_at: now_s }),
+        init_file: None,
     };
     spool.add(&meta).unwrap();
     // der Testserver lässt PUT nur für reservierte Objects zu: dieses ist es schon
@@ -283,6 +284,7 @@ fn registration_with_unknown_outcome_is_confirmed_not_rejected() {
             key_frame_count: 1,
             size: data.len() as u64,
             slot: Some(omp_tams_writer::spool::SlotMeta { object_id: slot.object_id, put_url: slot.put_url, reserved_at: now_s }),
+            init_file: None,
         })
         .unwrap();
     match up.step() {

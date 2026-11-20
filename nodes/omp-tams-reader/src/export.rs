@@ -43,7 +43,10 @@ pub struct Report {
 }
 
 struct Track {
+    /// Concat-Liste (MPEG-TS) oder fertige MP4-Datei (fragmentiertes MP4: ein durchgehender Strom)
     list: PathBuf,
+    /// `true`: `list` ist ein Strom (`-i datei`), sonst eine Concat-Liste
+    stream: bool,
     first_start: i128,
     last_end: i128,
     segments: usize,
@@ -86,48 +89,92 @@ fn fetch_track(client: &Client, flow: &str, req: &Request, dir: PathBuf, stop: &
         return Err(format!("im Zeitbereich liegt keine Aufnahme (Flow {flow})"));
     }
     let mut list = String::new();
+    let (mut mp4_init, mut mp4_init_id, mut mp4_origin, mut mp4_media): (Vec<u8>, Option<String>, Option<i128>, Vec<u8>) = (Vec::new(), None, None, Vec::new());
     let (mut gaps, mut prev_end) = (0usize, None::<i128>);
     for (i, (a, b, s)) in segs.iter().enumerate() {
         if stop.load(Ordering::Relaxed) {
             return Err("abgebrochen".into());
         }
         let url = s.get_urls.first().map(|g| g.url.clone()).ok_or_else(|| format!("Segment {} ohne Adresse", s.timerange))?;
-        let data = client.download_object(&url, MAX_OBJECT_BYTES).map_err(|e| format!("Object laden ({}): {e}", s.timerange))?;
-        if first_pts(&data).is_none() {
-            return Err(format!("Object {} ohne lesbaren PTS (kein MPEG-TS?)", s.timerange));
+        let mut data = client.download_object(&url, MAX_OBJECT_BYTES).map_err(|e| format!("Object laden ({}): {e}", s.timerange))?;
+        if omp_tams::mp4::looks_like_mp4(&data) {
+            // Fragmentiertes MP4: Init-Segment (je Object-ID einmal geladen); alle Segmente werden zu EINEM Strom mit durchgehender
+            // Zeit zusammengesetzt (tfdt neu gesetzt: Flow-Zeit des Segments − Flow-Zeit des ersten), Lücken bleiben als Zeitsprung
+            let init_id = s.init_object_id.clone().or_else(|| s.init_object.as_ref().and_then(|o| o["object_id"].as_str()).map(str::to_string)).ok_or_else(|| format!("Segment {} nennt kein Init-Segment", s.timerange))?;
+            if let Some(prev) = &mp4_init_id
+                && *prev != init_id
+            {
+                return Err("das Init-Segment wechselt im Bereich — als eine Datei nicht exportierbar (Bereich teilen)".into());
+            }
+            if mp4_init.is_empty() {
+                let iurl = s.init_object.as_ref().and_then(|o| o["get_urls"][0]["url"].as_str()).ok_or_else(|| format!("Init-Segment {init_id} ohne Adresse"))?;
+                mp4_init = client.download_object(iurl, 16 << 20).map_err(|e| format!("Init-Segment laden: {e}"))?;
+                mp4_init_id = Some(init_id);
+            }
+            let ts = omp_tams::mp4::timescale(&mp4_init).ok_or("Init-Segment ohne Zeitskala")? as i128;
+            let info = omp_tams::mp4::fragment_info(&data).ok_or_else(|| format!("Segment {} ohne lesbare Zeitangaben", s.timerange))?;
+            let first_ns = omp_tams::mp4::first_pts_ns(&mp4_init, &data).ok_or("keine Objektzeit")?;
+            let off = s.ts_offset.as_deref().map(|t| omp_tams::time::Timestamp::parse(t).map(|x| x.ns())).transpose().map_err(|e| format!("ts_offset: {e}"))?.unwrap_or(0);
+            let flow_first = off + first_ns;
+            let origin = *mp4_origin.get_or_insert(flow_first);
+            let wanted_ticks = (flow_first - origin) * ts / 1_000_000_000 - info.min_cts_offset as i128;
+            let delta = i64::try_from(wanted_ticks - info.base_decode_time as i128).map_err(|_| "Zeitverschiebung zu groß")?;
+            if !omp_tams::mp4::shift_base_decode_time(&mut data, delta) {
+                return Err(format!("Zeit des Segments {} nicht umsetzbar (tfdt)", s.timerange));
+            }
+            mp4_media.extend_from_slice(&data);
+        } else {
+            if first_pts(&data).is_none() {
+                return Err(format!("Object {} ohne lesbaren PTS (kein MPEG-TS?)", s.timerange));
+            }
+            let p = dir.join(format!("{i:06}.ts"));
+            std::fs::write(&p, &data).map_err(|e| format!("Segment ablegen: {e}"))?;
+            list.push_str(&concat_line(&p));
         }
-        let p = dir.join(format!("{i:06}.ts"));
-        std::fs::write(&p, &data).map_err(|e| format!("Segment ablegen: {e}"))?;
-        list.push_str(&concat_line(&p));
         // Lücke: Anfang liegt mehr als ein halbes Bild (20 ms) hinter dem Ende des vorigen
         if prev_end.is_some_and(|pe| *a - pe > 20_000_000) {
             gaps += 1;
         }
         prev_end = Some(*b);
     }
-    let list_path = dir.join("list.txt");
-    std::fs::write(&list_path, list).map_err(|e| format!("Liste: {e}"))?;
-    Ok(Track { list: list_path, first_start: segs[0].0, last_end: segs[segs.len() - 1].1, segments: segs.len(), gaps })
+    let (list_path, stream) = if mp4_init.is_empty() {
+        let p = dir.join("list.txt");
+        std::fs::write(&p, list).map_err(|e| format!("Liste: {e}"))?;
+        (p, false)
+    } else {
+        let p = dir.join("stream.mp4");
+        mp4_init.extend_from_slice(&mp4_media);
+        std::fs::write(&p, &mp4_init).map_err(|e| format!("MP4-Strom ablegen: {e}"))?;
+        (p, true)
+    };
+    Ok(Track { stream, list: list_path, first_start: segs[0].0, last_end: segs[segs.len() - 1].1, segments: segs.len(), gaps })
 }
 
 /// ffmpeg-Argumente (rein, testbar). `out` ist die Zieldatei (bereits mit Endung).
 /// `window` = (Anfang, Dauer) in Sekunden relativ zum ersten Videosegment (alle Spuren werden darauf zugeschnitten); `reencode`
 /// kodiert neu (nötig für ein bildgenaues Fenster), sonst Stream-Copy.
-pub fn ffmpeg_args(video: Option<&Path>, audio: Option<&Path>, audio_offset_s: f64, window: Option<(f64, f64)>, reencode: bool, out: &Path) -> Vec<String> {
+pub fn ffmpeg_args(video: Option<(&Path, bool)>, audio: Option<(&Path, bool)>, audio_offset_s: f64, window: Option<(f64, f64)>, reencode: bool, out: &Path) -> Vec<String> {
     let mut a: Vec<String> = ["-nostdin", "-v", "error", "-y"].map(String::from).to_vec();
     let mut idx = 0;
     let mut maps = Vec::new();
-    if let Some(v) = video {
-        a.extend(["-f", "concat", "-safe", "0", "-i"].map(String::from));
+    // je Eingang: (Pfad, `true` = durchgehender MP4-Strom, `false` = Concat-Liste)
+    if let Some((v, stream)) = video {
+        if !stream {
+            a.extend(["-f", "concat", "-safe", "0"].map(String::from));
+        }
+        a.push("-i".into());
         a.push(v.display().to_string());
         maps.push(format!("{idx}:v:0"));
         idx += 1;
     }
-    if let Some(au) = audio {
+    if let Some((au, stream)) = audio {
         if audio_offset_s.abs() > 0.0005 && video.is_some() {
             a.extend(["-itsoffset".to_string(), format!("{audio_offset_s:.6}")]);
         }
-        a.extend(["-f", "concat", "-safe", "0", "-i"].map(String::from));
+        if !stream {
+            a.extend(["-f", "concat", "-safe", "0"].map(String::from));
+        }
+        a.push("-i".into());
         a.push(au.display().to_string());
         maps.push(format!("{idx}:a:0"));
     }
@@ -188,7 +235,7 @@ pub fn export(client: &Client, ffmpeg: &str, req: &Request, dir: &Path, name: &s
             None
         };
         let part = dir.join(format!("{name}.part.{}", name.rsplit('.').next().unwrap_or("mp4")));
-        let args = ffmpeg_args(v.as_ref().map(|t| t.list.as_path()), a.as_ref().map(|t| t.list.as_path()), audio_off, window, req.exact, &part);
+        let args = ffmpeg_args(v.as_ref().map(|t| (t.list.as_path(), t.stream)), a.as_ref().map(|t| (t.list.as_path(), t.stream)), audio_off, window, req.exact, &part);
         let out = Command::new(ffmpeg).args(&args).output().map_err(|e| format!("ffmpeg nicht startbar: {e}"))?;
         if !out.status.success() {
             let _ = std::fs::remove_file(&part);
@@ -229,15 +276,18 @@ mod tests {
     #[test]
     fn ffmpeg_arguments_copy_and_exact() {
         let out = Path::new("/o/clip.mp4");
-        let a = ffmpeg_args(Some(Path::new("/w/v.txt")), Some(Path::new("/w/a.txt")), 0.034, Some((0.0, 4.0)), false, out);
+        let a = ffmpeg_args(Some((Path::new("/w/v.txt"), false)), Some((Path::new("/w/a.txt"), false)), 0.034, Some((0.0, 4.0)), false, out);
         let s = a.join(" ");
         assert!(s.contains("-f concat -safe 0 -i /w/v.txt -itsoffset 0.034000 -f concat -safe 0 -i /w/a.txt"), "{s}");
         assert!(s.contains("-map 0:v:0 -map 1:a:0") && s.contains("-c copy") && s.contains("-movflags +faststart"), "{s}");
         assert!(s.contains("-ss 0.000000 -t 4.000000"), "{s}");
-        let e = ffmpeg_args(Some(Path::new("/w/v.txt")), None, 0.0, Some((2.0, 4.0)), true, Path::new("/o/clip.mkv")).join(" ");
+        let e = ffmpeg_args(Some((Path::new("/w/v.txt"), false)), None, 0.0, Some((2.0, 4.0)), true, Path::new("/o/clip.mkv")).join(" ");
         assert!(e.contains("-ss 2.000000 -t 4.000000") && e.contains("libx264") && !e.contains("+faststart") && !e.contains("itsoffset"), "{e}");
         // nur Ton: kein Offset
-        let t = ffmpeg_args(None, Some(Path::new("/w/a.txt")), 5.0, None, false, out).join(" ");
+        let t = ffmpeg_args(None, Some((Path::new("/w/a.txt"), false)), 5.0, None, false, out).join(" ");
+        // MP4-Strom: direkter Eingang ohne Concat
+        let m = ffmpeg_args(Some((Path::new("/w/stream.mp4"), true)), None, 0.0, None, false, out).join(" ");
+        assert!(m.contains("-i /w/stream.mp4") && !m.contains("concat"), "{m}");
         assert!(!t.contains("itsoffset") && t.contains("-map 0:a:0"), "{t}");
     }
 

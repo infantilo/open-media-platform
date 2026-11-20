@@ -10,6 +10,7 @@
 //! * [`copy`]   — Metadaten-Kopie eines Zeitbereichs in einen neuen Flow (gleiche Objects, kein Kopieren von Medien).
 //! * [`time`]   — `Timestamp` und `TimeRange` (Format, Vergleich, Überlappung, Verschiebung).
 //! * [`index`]  — MXL-Index ↔ Timestamp, bitgleich zur MXL-Bibliothek (`IndexConversion.hpp`).
+//! * [`mp4`]    — fragmentiertes MP4: Init-/Medien-Segment trennen, Zeitskala, `tfdt`/`trun` lesen (CMAF-artig, AppNote 0024).
 //! * [`mpegts`] — MPEG-TS-Zeit: `ts_offset` und PTS-Überlauf (AppNote 0002).
 //! * [`types`]  — Nutzlasten (Flow, Segment, Storage, Dienst) für die JSON-API.
 
@@ -17,6 +18,7 @@ pub mod auth;
 pub mod client;
 pub mod copy;
 pub mod index;
+pub mod mp4;
 pub mod mpegts;
 pub mod retention;
 pub mod time;

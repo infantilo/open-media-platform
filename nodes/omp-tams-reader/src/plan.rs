@@ -26,6 +26,15 @@ pub fn segment_base_ns(ts_offset: Option<&str>, first_pts_ticks: u64) -> Option<
     Some(off + ticks_to_ns(first_pts_ticks))
 }
 
+/// Wie [`segment_base_ns`], mit der Objektzeit des ersten Samples in ns (fragmentiertes MP4: `tfdt`/Zeitskala).
+pub fn segment_base_ns_from(ts_offset: Option<&str>, first_ns: i128) -> Option<i128> {
+    let off = match ts_offset {
+        Some(s) => Timestamp::parse(s).ok()?.ns(),
+        None => 0,
+    };
+    Some(off + first_ns)
+}
+
 /// Flow-Zeit eines Bildes: Basis des Segments plus Abstand zum ersten dekodierten Bild.
 pub fn frame_time_ns(base_ns: i128, rel_ns: u64) -> i128 {
     base_ns + rel_ns as i128

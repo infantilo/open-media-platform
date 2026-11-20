@@ -32,6 +32,25 @@ pub struct Config {
     pub retention_s: u64,
     /// Aufbewahrung ganzer Flows in Sekunden (0 = aus): Tag `flow_retention_offset` (AppNote 0019).
     pub flow_retention_s: u64,
+    /// Container der Segmente: MPEG-TS (Standard) oder fragmentiertes MP4 mit Init-Segment (Kapitel 105.3b).
+    pub container: Container,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Container {
+    #[default]
+    MpegTs,
+    Mp4,
+}
+
+impl Container {
+    pub fn from_name(s: &str) -> Option<Container> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" | "mpegts" | "ts" | "mp2t" => Some(Container::MpegTs),
+            "mp4" | "cmaf" | "fmp4" => Some(Container::Mp4),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,13 +162,17 @@ fn build(ctx: &Arc<MxlContext>, cfg: &Config, vflow: Option<&str>, aflow: Option
             let (num, den) = (input.framerate_numerator as i64, input.framerate_denominator as i64);
             let c = ctx.clone();
             let origin: OriginFn = Arc::new(move |b| buffer_origin_index(&c, b, num, den));
-            let b = segmenter::add_video_branch(&pipeline, &input.tail, id, fps, segment_ns, cfg.video_kbps, cfg.spool.clone(), origin)?;
+            let b = match cfg.container {
+                Container::MpegTs => segmenter::add_video_branch(&pipeline, &input.tail, id, fps, segment_ns, cfg.video_kbps, cfg.spool.clone(), origin)?,
+                Container::Mp4 => segmenter::add_video_branch_mp4(&pipeline, &input.tail, id, fps, segment_ns, cfg.video_kbps, cfg.spool.clone(), origin)?,
+            };
             branches.push(b);
-            defs.push(FlowDef {
-                flow_id: id.to_string(),
-                body: video_flow_body(id, &omp_node_sdk::idgen::deterministic_v4(&format!("omp-tams-source:{id}")), &label, input.width, input.height, fps.num, fps.den, interlace.as_deref(), cfg.segment_s, cfg.video_kbps),
-                container: omp_tams::types::CONTAINER_MPEGTS.into(),
-            });
+            let body = video_flow_body(id, &omp_node_sdk::idgen::deterministic_v4(&format!("omp-tams-source:{id}")), &label, input.width, input.height, fps.num, fps.den, interlace.as_deref(), cfg.segment_s, cfg.video_kbps);
+            let (body, container) = match cfg.container {
+                Container::MpegTs => (body, omp_tams::types::CONTAINER_MPEGTS.to_string()),
+                Container::Mp4 => crate::uploader::to_mp4_body(body, false),
+            };
+            defs.push(FlowDef { flow_id: id.to_string(), body, container });
             Some(input)
         }
         None => None,
@@ -162,13 +185,17 @@ fn build(ctx: &Arc<MxlContext>, cfg: &Config, vflow: Option<&str>, aflow: Option
             let label = def.get("label").and_then(|l| l.as_str()).unwrap_or("Audio").to_string();
             let c = ctx.clone();
             let origin: OriginFn = Arc::new(move |b| buffer_origin_index(&c, b, sample_rate as i64, 1));
-            let b = segmenter::add_audio_branch(&pipeline, &input.tail, id, sample_rate, segment_ns, cfg.audio_bps, cfg.spool.clone(), origin)?;
+            let b = match cfg.container {
+                Container::MpegTs => segmenter::add_audio_branch(&pipeline, &input.tail, id, sample_rate, segment_ns, cfg.audio_bps, cfg.spool.clone(), origin)?,
+                Container::Mp4 => segmenter::add_audio_branch_mp4(&pipeline, &input.tail, id, sample_rate, segment_ns, cfg.audio_bps, cfg.spool.clone(), origin)?,
+            };
             branches.push(b);
-            defs.push(FlowDef {
-                flow_id: id.to_string(),
-                body: audio_flow_body(id, &omp_node_sdk::idgen::deterministic_v4(&format!("omp-tams-source:{id}")), &label, sample_rate, input.channels, cfg.segment_s, cfg.audio_bps as u32 / 1000),
-                container: omp_tams::types::CONTAINER_MPEGTS.into(),
-            });
+            let body = audio_flow_body(id, &omp_node_sdk::idgen::deterministic_v4(&format!("omp-tams-source:{id}")), &label, sample_rate, input.channels, cfg.segment_s, cfg.audio_bps as u32 / 1000);
+            let (body, container) = match cfg.container {
+                Container::MpegTs => (body, omp_tams::types::CONTAINER_MPEGTS.to_string()),
+                Container::Mp4 => crate::uploader::to_mp4_body(body, true),
+            };
+            defs.push(FlowDef { flow_id: id.to_string(), body, container });
             Some(input)
         }
         None => None,
@@ -229,6 +256,20 @@ fn pump(active: &Active, timeout: Duration, tx: &TokioUnboundedSender<Event>, co
                         let _ = tx.send(Event::Warning(format!("Segment verworfen ({flow_id}): {reason}")));
                     }
                     None => {}
+                }
+            }
+        }
+        // Ereignisse des fragmentierten MP4-Zweigs (kommen aus dem appsink-Thread, nicht über den Bus)
+        for br in &active.branches {
+            for ev in br.drain_events() {
+                match ev {
+                    SegEvent::Segment { .. } => {
+                        counters.segments_written.fetch_add(1, Ordering::Relaxed);
+                    }
+                    SegEvent::Dropped { reason, flow_id } => {
+                        counters.segments_dropped.fetch_add(1, Ordering::Relaxed);
+                        let _ = tx.send(Event::Warning(format!("Segment verworfen ({flow_id}): {reason}")));
+                    }
                 }
             }
         }

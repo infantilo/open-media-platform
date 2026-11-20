@@ -790,7 +790,18 @@ func TestTamsProfileRetentionBecomesWriterEnvAndIsTamsOnly(t *testing.T) {
 	if env["OMP_TAMS_RETENTION_HOURS"] != "168" || env["OMP_TAMS_FLOW_RETENTION_HOURS"] != "720.5" || len(env) != 2 {
 		t.Fatalf("env: %v", env)
 	}
+	if e := (Profile{Target: TargetTAMS, Container: "mp4"}).tamsEnv(); e["OMP_TAMS_CONTAINER"] != "mp4" {
+		t.Fatalf("mp4 muss als Umgebung ankommen: %v", e)
+	}
+	if e := (Profile{Target: TargetTAMS, Container: "mpegts"}).tamsEnv(); len(e) != 0 {
+		t.Fatalf("mpegts ist der Standard und braucht keine Umgebung: %v", e)
+	}
 	c := DefaultConfig()
+	c.Profiles["x"] = Profile{ID: "x", Target: TargetTAMS, Container: "avi"}
+	if err := c.Normalize(); err == nil {
+		t.Fatal("unbekannter Container muss abgelehnt werden")
+	}
+	c = DefaultConfig()
 	c.Profiles["f"] = Profile{ID: "f", Ext: ".mxf", RetentionHours: 1}
 	if err := c.Normalize(); err == nil {
 		t.Fatal("Aufbewahrung bei Dateiziel muss abgelehnt werden")

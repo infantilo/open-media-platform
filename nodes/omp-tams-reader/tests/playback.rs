@@ -17,9 +17,9 @@ use omp_tams::testserver::Fake;
 use omp_tams::time::{Bound, TimeRange, Timestamp};
 use omp_tams_reader::lane::{self, Control, Course, GapMode, Sink, Stats};
 use omp_tams_reader::plan;
-use omp_tams_writer::segmenter::{self, Event, add_audio_branch, add_video_branch};
+use omp_tams_writer::segmenter::{self, Event, add_audio_branch, add_audio_branch_mp4, add_video_branch, add_video_branch_mp4};
 use omp_tams_writer::spool::Spool;
-use omp_tams_writer::uploader::{FlowDef, FlowRegistry, Step, Uploader, audio_flow_body, video_flow_body};
+use omp_tams_writer::uploader::{FlowDef, FlowRegistry, Step, Uploader, audio_flow_body, to_mp4_body, video_flow_body};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
@@ -297,5 +297,85 @@ fn follow_a_recording_that_is_still_running() {
         let late = r.arrived as i128 - r.tai as i128;
         assert!((-60_000_000..600_000_000).contains(&late), "Bild kam {late} ns nach seiner Ausgabezeit");
     }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Wie `record`, aber mit fragmentiertem MP4 (Kapitel 105.3b).
+fn record_mp4(spool: Arc<Spool>, seconds: u64) -> u64 {
+    gst::init().unwrap();
+    let pipeline = gst::Pipeline::new();
+    let vsrc = gst::parse::bin_from_description("videotestsrc is-live=true pattern=ball ! video/x-raw,width=320,height=180,framerate=25/1 ! identity", true).unwrap();
+    let asrc = gst::parse::bin_from_description("audiotestsrc is-live=true wave=sine ! audio/x-raw,rate=48000,channels=2 ! identity", true).unwrap();
+    pipeline.add_many([&vsrc, &asrc]).unwrap();
+    let t0 = tai_now_ns();
+    let (vbase, abase) = (ns_to_index(t0, FPS), ns_to_index(t0, AUDIO_RATE));
+    let vorigin: segmenter::OriginFn = Arc::new(move |b| b.pts().map(|p| vbase + p.nseconds() * 25 / 1_000_000_000));
+    let aorigin: segmenter::OriginFn = Arc::new(move |b| b.pts().map(|p| abase + (p.nseconds() as u128 * 48000 / 1_000_000_000) as u64));
+    let v = add_video_branch_mp4(&pipeline, vsrc.upcast_ref(), VFLOW, FPS, 2_000_000_000, 500, spool.clone(), vorigin).unwrap();
+    let a = add_audio_branch_mp4(&pipeline, asrc.upcast_ref(), AFLOW, 48000, 2_000_000_000, 96_000, spool, aorigin).unwrap();
+    pipeline.set_state(gst::State::Playing).unwrap();
+    let bus = pipeline.bus().unwrap();
+    let mut written = 0;
+    let mut drain = |until: Instant, stop_on_eos: bool| {
+        while Instant::now() < until {
+            if let Some(m) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) {
+                match m.view() {
+                    gst::MessageView::Error(e) => panic!("Pipeline-Fehler: {} ({:?})", e.error(), e.debug()),
+                    gst::MessageView::Eos(_) if stop_on_eos => return,
+                    _ => {}
+                }
+            }
+            for ev in v.drain_events().into_iter().chain(a.drain_events()) {
+                match ev {
+                    Event::Segment { .. } => written += 1,
+                    Event::Dropped { reason, .. } => panic!("verworfen: {reason}"),
+                }
+            }
+        }
+    };
+    drain(Instant::now() + Duration::from_secs(seconds), false);
+    pipeline.send_event(gst::event::Eos::new());
+    drain(Instant::now() + segmenter::STOP_EOS_TIMEOUT, true);
+    drain(Instant::now() + Duration::from_millis(500), false);
+    pipeline.set_state(gst::State::Null).unwrap();
+    assert!(written >= 6, "zu wenige Segmente: {written}");
+    t0
+}
+
+#[test]
+fn replay_a_fragmented_mp4_recording_with_init_segments() {
+    let dir = std::env::temp_dir().join(format!("omp-tams-reader-mp4-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let spool = Arc::new(Spool::open(&dir, 64 << 20).unwrap());
+    let fake = Fake::start();
+    let t0 = record_mp4(spool.clone(), 8);
+    let (vb, vc) = to_mp4_body(video_flow_body(VFLOW, "cccccccc-3333-4333-8333-cccccccccccc", "V", 320, 180, 25, 1, Some("progressive"), 2, 500), false);
+    let (ab, ac) = to_mp4_body(audio_flow_body(AFLOW, "dddddddd-4444-4444-8444-dddddddddddd", "A", 48000, 2, 2, 96), true);
+    let flows = vec![FlowDef { flow_id: VFLOW.into(), body: vb, container: vc }, FlowDef { flow_id: AFLOW.into(), body: ab, container: ac }];
+    let mut up = Uploader::new(mk_client(&fake), spool.clone(), FlowRegistry::new(spool.clone(), flows), Box::new(tai_now_ns));
+    for _ in 0..200 {
+        if matches!(up.step(), Step::Idle) {
+            break;
+        }
+    }
+    let c = client(&fake);
+    let (vlo, vhi) = range_ns(&c, VFLOW);
+    assert!((vlo - t0 as i128).abs() < S, "Aufnahme beginnt bei {vlo}, Start war {t0}");
+    assert!(vhi - vlo >= 6 * S);
+    let start = vlo + 2 * S;
+    let end = start + 4 * S;
+    let course = Course { start_ns: start, end_ns: Some(end) };
+    let shift = plan::play_shift(start, tai_now_ns(), 2 * S);
+    let (cv, ca) = (c.clone(), c.clone());
+    let v = std::thread::spawn(move || play(cv, VFLOW, true, course, shift, GapMode::Hold, None));
+    let a = std::thread::spawn(move || play(ca, AFLOW, false, course, shift, GapMode::Hold, None));
+    let (v, a) = (v.join().unwrap(), a.join().unwrap());
+    assert_eq!(v.recs.len(), 100, "4 s · 25 Bilder/s; Fehler: {:?}", v.stats.last_error.lock().unwrap());
+    assert_cadence(&v.recs, FRAME, "Video (MP4)");
+    assert!((v.recs[0].tai as i128 - (start + shift)).abs() <= FRAME, "erstes Bild bei {} statt {}", v.recs[0].tai, start + shift);
+    assert!(a.recs.len() >= 180 && a.recs.len() <= 200, "Tonblöcke: {}; Fehler {:?}", a.recs.len(), a.stats.last_error.lock().unwrap());
+    let d0 = a.recs[0].tai as i128 - v.recs[0].tai as i128;
+    assert!(d0.abs() <= 60_000_000, "Video/Ton-Versatz am Anfang: {d0} ns");
+    assert_eq!(a.stats.errors.load(Ordering::Relaxed) + v.stats.errors.load(Ordering::Relaxed), 0);
     std::fs::remove_dir_all(&dir).ok();
 }
