@@ -10,6 +10,7 @@
 //! * `OMP_TAMS_TOKEN_FILE`     Datei mit dem Token/Passwort (Rechte höchstens 0600) — oder `OMP_TAMS_TOKEN`
 //! * `OMP_TAMS_SPOOL_DIR`      Warteschlange (Standard `/var/tmp/omp-tams-spool/<instanz>`)
 //! * `OMP_TAMS_SPOOL_MAX_MB`   Obergrenze der Warteschlange (Standard 2048); darüber werden die ältesten Segmente verworfen
+//! * `OMP_TAMS_RETENTION_HOURS` Aufbewahrung der eigenen Flows (Standard 0 = unbegrenzt); Tag `segment_retention_offset` + Löschlauf (AppNote 0019)
 //! * `OMP_TAMS_SEGMENT_SECONDS` Segmentlänge (Standard 2; wirksam an der nächsten GOP-Grenze)
 //! * `OMP_TAMS_VIDEO_KBPS`, `OMP_TAMS_AUDIO_BPS`  Bitraten (Standard 4000 kbit/s und 192000 bit/s)
 
@@ -63,6 +64,8 @@ struct WriterStore {
     /// Zweiter Client für Metadaten-Kopien (Zugang wie der Uploader, Entscheidung D-T3); `None` ohne Einrichtung.
     copier: Option<Arc<Client>>,
     copy_state: Arc<Mutex<CopyState>>,
+    retention_s: u64,
+    retention: Arc<omp_tams_writer::retention::RetentionStats>,
 }
 
 #[derive(Default, Clone)]
@@ -163,6 +166,8 @@ impl ParamStore for WriterStore {
             num("tams.errors", None),
             num("tams.lagMs", Some("ms")),
             text("tams.lastError"),
+            num("tams.retentionHours", Some("h")),
+            num("tams.retentionRuns", None),
             text("tams.copyStatus"),
             text("tams.lastCopy"),
         ];
@@ -192,9 +197,15 @@ impl ParamStore for WriterStore {
             "tams.segmentsWritten" => Some(serde_json::json!(self.handle.counters.segments_written.load(Ordering::Relaxed))),
             "tams.errors" => Some(serde_json::json!(u.errors.load(Ordering::Relaxed))),
             "tams.lagMs" => Some(serde_json::json!(u.lag_ms.load(Ordering::Relaxed))),
+            "tams.retentionHours" => Some(serde_json::json!(self.retention_s as f64 / 3600.0)),
+            "tams.retentionRuns" => Some(serde_json::json!(self.retention.runs.load(Ordering::Relaxed))),
             "tams.copyStatus" => Some(serde_json::json!(self.copy_state.lock().expect("lock poisoned").status.clone())),
             "tams.lastCopy" => Some(serde_json::json!(self.copy_state.lock().expect("lock poisoned").result.clone())),
-            "tams.lastError" => Some(serde_json::json!(self.config_problem.clone().unwrap_or_else(|| u.error_text()))),
+            "tams.lastError" => {
+                let ret = self.retention.last_error.lock().expect("lock poisoned").clone();
+                let base = self.config_problem.clone().unwrap_or_else(|| u.error_text());
+                Some(serde_json::json!(if base.is_empty() { ret } else { base }))
+            }
             _ => self.monitor.get("monitor", name, None, Vec::new),
         }
     }
@@ -308,6 +319,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let spool = Arc::new(Spool::open(&spool_dir, spool_max)?);
     let flow_registry = FlowRegistry::new(spool.clone(), vec![]);
 
+    let retention_s: u64 = env_or("OMP_TAMS_RETENTION_HOURS", "0").parse::<f64>().ok().filter(|h| *h > 0.0).map(|h| (h * 3600.0) as u64).unwrap_or(0);
     let (client_result, shutdown) = (client_from_env(), Arc::new(AtomicBool::new(false)));
     let mut upload_status = Arc::new(UploaderStatus::default());
     let mut config_problem = None;
@@ -332,11 +344,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cfg = runtime::Config {
         domain,
         spool,
-        registry: flow_registry,
+        registry: flow_registry.clone(),
         segment_s: env_or("OMP_TAMS_SEGMENT_SECONDS", "2").parse::<u32>().unwrap_or(2).clamp(1, 30),
         video_kbps: env_or("OMP_TAMS_VIDEO_KBPS", "4000").parse().unwrap_or(4000),
         audio_bps: env_or("OMP_TAMS_AUDIO_BPS", "192000").parse().unwrap_or(192_000),
         uploader_status: upload_status.clone(),
+        retention_s,
     };
     let pipeline_shutdown = shutdown.clone();
     let heartbeat = Arc::new(AtomicU64::new(0));
@@ -360,7 +373,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     monitor.deactivate();
     let media_handle = handle.clone();
     let copier = client_from_env().ok().map(|(c, _)| Arc::new(c));
-    let store: Arc<dyn ParamStore> = Arc::new(WriterStore { copier, copy_state: Arc::new(Mutex::new(CopyState { status: "idle".into(), result: String::new() })), handle, config_problem, uploader: upload_status, service_display, video_connection, audio_connection, monitor: monitor.clone() });
+    let retention = Arc::new(omp_tams_writer::retention::RetentionStats::default());
+    let mut retention_thread = None;
+    if retention_s > 0
+        && let Some(c) = copier.clone()
+    {
+        let (reg, sd, st) = (flow_registry.clone(), shutdown.clone(), retention.clone());
+        retention_thread = Some(std::thread::spawn(move || omp_tams_writer::retention::run(c, reg, retention_s, std::time::Duration::from_secs(60), omp_mediaio::timebase::tai_now_ns, sd, st)));
+    }
+    let store: Arc<dyn ParamStore> = Arc::new(WriterStore { retention_s, retention, copier, copy_state: Arc::new(Mutex::new(CopyState { status: "idle".into(), result: String::new() })), handle, config_problem, uploader: upload_status, service_display, video_connection, audio_connection, monitor: monitor.clone() });
 
     let node = omp_node_sdk::start(
         NodeConfig {
@@ -398,6 +419,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     shutdown.store(true, Ordering::Relaxed);
     let _ = pipeline_thread.join();
     if let Some(t) = uploader_thread {
+        let _ = t.join();
+    }
+    if let Some(t) = retention_thread {
         let _ = t.join();
     }
     Ok(())

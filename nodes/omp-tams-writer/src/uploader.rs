@@ -100,6 +100,11 @@ impl FlowRegistry {
         self.dirty.store(true, Ordering::Relaxed);
     }
 
+    /// IDs der Flows, die dieser Schreiber aufnimmt.
+    pub fn flow_ids(&self) -> Vec<String> {
+        self.flows.lock().expect("lock poisoned").iter().map(|f| f.flow_id.clone()).collect()
+    }
+
     fn snapshot(&self) -> Vec<FlowDef> {
         self.flows.lock().expect("lock poisoned").clone()
     }

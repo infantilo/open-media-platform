@@ -18,6 +18,7 @@ pub mod client;
 pub mod copy;
 pub mod index;
 pub mod mpegts;
+pub mod retention;
 pub mod time;
 pub mod types;
 

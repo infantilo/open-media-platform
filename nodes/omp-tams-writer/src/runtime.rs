@@ -28,6 +28,8 @@ pub struct Config {
     pub video_kbps: u32,
     pub audio_bps: i32,
     pub uploader_status: Arc<crate::uploader::UploaderStatus>,
+    /// Aufbewahrung in Sekunden (0 = aus): wird als Tag `segment_retention_offset` an die Flows geschrieben (AppNote 0019).
+    pub retention_s: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,7 +171,10 @@ fn build(ctx: &Arc<MxlContext>, cfg: &Config, vflow: Option<&str>, aflow: Option
         }
         None => None,
     };
-    for d in defs {
+    for mut d in defs {
+        if cfg.retention_s > 0 {
+            d.body["tags"] = serde_json::json!({ omp_tams::retention::TAG: omp_tams::retention::offset_tag(cfg.retention_s) });
+        }
         cfg.registry.register(d);
     }
     // „media-ready“: sobald ein Puffer den Encoder erreicht hat
