@@ -1628,6 +1628,57 @@ class AssetView extends HTMLElement {
         }, close);
       });
       modal.append(this.#field(tt("tams.reader"), sel), btn);
+
+      // Export als Datei (Stream-Copy auf Segmentgrenzen oder exakt neu kodiert); das Ergebnis liegt auf dem Rechner des Wiedergabe-Nodes
+      const hr = document.createElement("hr");
+      hr.style.cssText = "margin:var(--omp-space-3) 0;border:0;border-top:1px solid var(--omp-border, #444);";
+      const name = this.#input("name", { placeholder: tt("tams.exportName"), value: "clip.mp4" });
+      const exact = document.createElement("input");
+      exact.type = "checkbox";
+      const exactLabel = document.createElement("label");
+      exactLabel.style.cssText = "display:flex;gap:6px;align-items:center;margin:var(--omp-space-2) 0;";
+      exactLabel.append(exact, document.createTextNode(tt("tams.exportExact")));
+      const exp = document.createElement("button");
+      exp.textContent = tt("tams.export");
+      exp.setAttribute("data-role", "tams-export-go");
+      const result = document.createElement("div");
+      result.style.cssText = "margin-top:var(--omp-space-2);font-size:var(--omp-font-size-xs);word-break:break-all;";
+      exp.addEventListener("click", () => {
+        void this.#guard(exp, async () => {
+          const node = sel.value;
+          const res = await apiFetch(`/api/v1/nodes/${node}/methods/tams.export`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...tp, name: name.value.trim(), exact: exact.checked }),
+          });
+          if (!res.ok) {
+            showToast(tt("misc.failedWith", { p0: "tams.export", p1: (await res.text()).trim() || res.status }), { variant: "error" });
+            return false;
+          }
+          result.textContent = tt("tams.exportRunning");
+          for (let i = 0; i < 600; i++) {
+            await new Promise((r) => setTimeout(r, 1000));
+            const st = await (await apiFetch(`/api/v1/nodes/${node}/params/tams.exportStatus`)).json().catch(() => null);
+            if (st?.value === "done" || st?.value === "error") {
+              const last = await (await apiFetch(`/api/v1/nodes/${node}/params/tams.lastExport`)).json().catch(() => null);
+              const text = String(last?.value ?? "");
+              if (st.value === "error") {
+                result.textContent = tt("tams.exportFailed", { p0: text });
+                return false;
+              }
+              let info: { path?: string; gaps?: number } = {};
+              try {
+                info = JSON.parse(text);
+              } catch { /* Anzeige bleibt leer */ }
+              result.textContent = tt("tams.exportDone", { p0: info.path ?? "", p1: info.gaps ?? 0 });
+              return false; // Dialog offen lassen: der Pfad soll lesbar bleiben
+            }
+          }
+          result.textContent = tt("tams.exportTimeout");
+          return false;
+        }, close);
+      });
+      modal.append(hr, this.#field(tt("tams.exportName"), name), exactLabel, exp, result);
     }, "520px");
   }
 

@@ -9,6 +9,7 @@
 //! * `OMP_WIDTH`, `OMP_HEIGHT`, `OMP_FRAMERATE_NUM`, `OMP_FRAMERATE_DEN` — Format des Video-Ausgangs (Standard 1280×720, 25);
 //!   abweichende Aufnahmen werden skaliert bzw. in der Bildrate angepasst
 //! * `OMP_TAMS_GAP`            `hold` (Standard: letztes Bild wiederholen) | `black`; Ton: Stille
+//! * `OMP_TAMS_EXPORT_DIR`    Zielverzeichnis des Clip-Exports (Standard `data/tams-export`), `OMP_FFMPEG` (Standard `ffmpeg`)
 //! * `OMP_TAMS_LEAD_MS`        Vorlauf beim Abspielen eines Bereichs (Standard 2000)
 
 mod uibundle;
@@ -22,7 +23,7 @@ use omp_tams_reader::lane::GapMode;
 use omp_tams_reader::runtime::{self, Handle, PlayStatus, Request};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 struct ReaderStore {
@@ -31,6 +32,18 @@ struct ReaderStore {
     service_display: String,
     flow_id: String,
     audio_flow_id: String,
+    client: Arc<Client>,
+    export: Arc<Mutex<ExportState>>,
+    export_dir: std::path::PathBuf,
+    ffmpeg: String,
+}
+
+#[derive(Default, Clone)]
+struct ExportState {
+    /// `idle` | `running` | `done` | `error`
+    status: String,
+    /// Bei `done`: JSON `{path, from, to, segments, gaps}`; bei `error`: Meldung.
+    result: String,
 }
 
 fn num(name: &str) -> ParamSpec {
@@ -110,10 +123,13 @@ impl ParamStore for ReaderStore {
             num("tams.lateDropped"),
             num("tams.errors"),
             text("tams.lastError"),
+            text("tams.exportStatus"),
+            text("tams.lastExport"),
         ];
         let methods = vec![
             method("tams.play", &[("videoFlow", ParamType::String), ("audioFlow", ParamType::String), ("start", ParamType::String), ("end", ParamType::String), ("agoSeconds", ParamType::Number), ("durationSeconds", ParamType::Number)]),
             method("tams.follow", &[("videoFlow", ParamType::String), ("audioFlow", ParamType::String), ("delayMs", ParamType::Number)]),
+            method("tams.export", &[("videoFlow", ParamType::String), ("audioFlow", ParamType::String), ("start", ParamType::String), ("end", ParamType::String), ("name", ParamType::String), ("exact", ParamType::Boolean)]),
             method("tams.stop", &[]),
         ];
         Descriptor { latency: None, parameters, methods }
@@ -133,6 +149,8 @@ impl ParamStore for ReaderStore {
             "tams.gapsFilled" => n(&s.gaps_filled),
             "tams.lateDropped" => n(&s.late_dropped),
             "tams.errors" => n(&s.errors),
+            "tams.exportStatus" => Some(serde_json::json!(self.export.lock().expect("lock poisoned").status.clone())),
+            "tams.lastExport" => Some(serde_json::json!(self.export.lock().expect("lock poisoned").result.clone())),
             "tams.lastError" => Some(serde_json::json!(self.config_problem.clone().unwrap_or_else(|| s.last_error.lock().expect("lock poisoned").clone()))),
             _ => None,
         }
@@ -166,6 +184,34 @@ impl ParamStore for ReaderStore {
                     return Err(InvokeError::Message("delayMs muss zwischen 1000 und 86400000 liegen (mindestens eine Segmentlänge plus Aufnahmeverzug)".into()));
                 }
                 self.handle.start(Request::Follow { video, audio, delay_ns: (delay_ms * 1e6) as i128 }).map_err(InvokeError::Message)
+            }
+            "tams.export" => {
+                need_store()?;
+                let (video, audio) = (opt_flow(args, "videoFlow")?, opt_flow(args, "audioFlow")?);
+                let (Some(start), Some(end)) = (opt_time(args, "start")?, opt_time(args, "end")?) else {
+                    return Err(InvokeError::Message("start und end (Zeitstempel Sekunden:Nanosekunden) angeben".into()));
+                };
+                let name = omp_tams_reader::export::safe_name(args.get("name").and_then(Value::as_str).unwrap_or("")).map_err(InvokeError::Message)?;
+                let exact = args.get("exact").and_then(Value::as_bool).unwrap_or(false);
+                {
+                    let mut st = self.export.lock().expect("lock poisoned");
+                    if st.status == "running" {
+                        return Err(InvokeError::Message("ein Export läuft bereits".into()));
+                    }
+                    *st = ExportState { status: "running".into(), result: String::new() };
+                }
+                let (client, state, dir, ffmpeg) = (self.client.clone(), self.export.clone(), self.export_dir.clone(), self.ffmpeg.clone());
+                std::thread::spawn(move || {
+                    let req = omp_tams_reader::export::Request { video, audio, start_ns: start, end_ns: end, exact };
+                    let stop = std::sync::atomic::AtomicBool::new(false);
+                    let r = omp_tams_reader::export::export(&client, &ffmpeg, &req, &dir, &name, &stop);
+                    let ts = |n: i128| Timestamp::from_ns(n).to_string();
+                    *state.lock().expect("lock poisoned") = match r {
+                        Ok(rep) => ExportState { status: "done".into(), result: serde_json::json!({"path": rep.path.display().to_string(), "from": ts(rep.from_ns), "to": ts(rep.to_ns), "segments": rep.segments, "gaps": rep.gaps}).to_string() },
+                        Err(e) => ExportState { status: "error".into(), result: e },
+                    };
+                });
+                Ok(())
             }
             "tams.stop" => self.handle.stop().map_err(InvokeError::Message),
             _ => Err(InvokeError::Unknown),
@@ -223,9 +269,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shutdown = Arc::new(AtomicBool::new(false));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<runtime::Event>();
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let client = Arc::new(client);
     let cfg = runtime::Config {
         domain,
-        client: Arc::new(client),
+        client: client.clone(),
         label: label.clone(),
         video_flow_id: flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
@@ -251,7 +298,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Err(_) => return Err("Wiedergabe-Thread vor Bereitschaft beendet".into()),
     };
 
-    let store: Arc<dyn ParamStore> = Arc::new(ReaderStore { handle: handle.clone(), config_problem, service_display, flow_id: flow_id.clone(), audio_flow_id: audio_flow_id.clone() });
+    let store: Arc<dyn ParamStore> = Arc::new(ReaderStore { client, export: Arc::new(Mutex::new(ExportState { status: "idle".into(), result: String::new() })), export_dir: env_or("OMP_TAMS_EXPORT_DIR", "data/tams-export").into(), ffmpeg: env_or("OMP_FFMPEG", "ffmpeg"), handle: handle.clone(), config_problem, service_display, flow_id: flow_id.clone(), audio_flow_id: audio_flow_id.clone() });
     let group = omp_node_sdk::group::name_or(&flow_id);
     let media_handle = handle.clone();
     let node = omp_node_sdk::start(

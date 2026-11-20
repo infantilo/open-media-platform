@@ -44,7 +44,7 @@ fn record(spool: Arc<Spool>, seconds: u64) -> u64 {
     let a = add_audio_branch(&pipeline, asrc.upcast_ref(), AFLOW, 48000, 2_000_000_000, 96_000, spool, ao).unwrap();
     pipeline.set_state(gst::State::Playing).unwrap();
     let bus = pipeline.bus().unwrap();
-    let mut drain = |until: Instant, eos: bool| {
+    let drain = |until: Instant, eos: bool| {
         while Instant::now() < until {
             let Some(m) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) else { continue };
             if matches!(m.view(), gst::MessageView::Eos(_)) && eos {
