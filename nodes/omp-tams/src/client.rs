@@ -307,6 +307,17 @@ impl Client {
         if r.status == 200 { Ok(r.body) } else { Err(unexpected(r.status, &r)) }
     }
 
+    /// `DELETE /flows/{id}`: ganzen Flow löschen (204, oder 202 bei längerer Dauer).
+    pub fn delete_flow(&self, flow_id: &str) -> Result<Deleted, Error> {
+        check_id(flow_id)?;
+        let r = self.call("DELETE", &format!("{}/flows/{flow_id}", self.base), None, true, self.cfg.max_api_response)?;
+        match r.status {
+            204 => Ok(Deleted::Done),
+            202 => Ok(Deleted::Accepted { location: r.location }),
+            s => Err(unexpected(s, &r)),
+        }
+    }
+
     /// `DELETE /flows/{id}/segments?timerange=…` (nur vollständig abgedeckte Segmente).
     pub fn delete_segments(&self, flow_id: &str, range: &TimeRange) -> Result<Deleted, Error> {
         check_id(flow_id)?;

@@ -30,6 +30,8 @@ pub struct Config {
     pub uploader_status: Arc<crate::uploader::UploaderStatus>,
     /// Aufbewahrung in Sekunden (0 = aus): wird als Tag `segment_retention_offset` an die Flows geschrieben (AppNote 0019).
     pub retention_s: u64,
+    /// Aufbewahrung ganzer Flows in Sekunden (0 = aus): Tag `flow_retention_offset` (AppNote 0019).
+    pub flow_retention_s: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,8 +174,15 @@ fn build(ctx: &Arc<MxlContext>, cfg: &Config, vflow: Option<&str>, aflow: Option
         None => None,
     };
     for mut d in defs {
+        let mut tags = serde_json::Map::new();
         if cfg.retention_s > 0 {
-            d.body["tags"] = serde_json::json!({ omp_tams::retention::TAG: omp_tams::retention::offset_tag(cfg.retention_s) });
+            tags.insert(omp_tams::retention::TAG.into(), omp_tams::retention::offset_tag(cfg.retention_s).into());
+        }
+        if cfg.flow_retention_s > 0 {
+            tags.insert(omp_tams::retention::FLOW_TAG.into(), omp_tams::retention::offset_tag(cfg.flow_retention_s).into());
+        }
+        if !tags.is_empty() {
+            d.body["tags"] = serde_json::Value::Object(tags);
         }
         cfg.registry.register(d);
     }

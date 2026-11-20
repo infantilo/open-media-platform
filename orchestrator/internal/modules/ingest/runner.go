@@ -151,6 +151,7 @@ func (s *Service) prepareAndMaybeStart(ctx context.Context, j Job) {
 	now := s.now()
 	cfg := s.Cfg()
 	ctx = WithTarget(ctx, cfg.Profiles[j.ProfileID].Target)
+	ctx = WithTamsEnv(ctx, cfg.Profiles[j.ProfileID].tamsEnv())
 	if j.InstanceID == "" {
 		sess, err := s.Runtime.Prepare(ctx, j.ID, hostRuntimeID(j.HostID), s.label(j), cfg.MediaDir, 1+len(j.Audio.inputs()))
 		if err != nil {

@@ -3,6 +3,7 @@ package ingest
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -54,6 +55,22 @@ type Profile struct {
 	// statt omp-recorder läuft omp-tams-writer, es gibt keine Datei und keine Nachbearbeitung; am Ende entsteht eine Metadaten-Kopie
 	// des Aufnahmebereichs (neuer Flow, gleiche Objects) und ein Asset als Verweis.
 	Target string `json:"target,omitempty"`
+	// Aufbewahrung beim Ziel „tams“ (Stunden, 0 = unbegrenzt), als Umgebung an den Schreiber gegeben (AppNote 0019): Segmente, ganze Flows,
+	// leere Flows. Der Löschlauf läuft im Schreiber-Node, **solange dessen Instanz lebt** — ein Auftrag je Sendung beendet sie danach.
+	RetentionHours     float64 `json:"retentionHours,omitempty"`
+	FlowRetentionHours float64 `json:"flowRetentionHours,omitempty"`
+	EmptyFlowHours     float64 `json:"emptyFlowHours,omitempty"`
+}
+
+// tamsEnv: Umgebung für den Schreiber aus den Aufbewahrungsangaben des Profils.
+func (p Profile) tamsEnv() map[string]string {
+	env := map[string]string{}
+	for k, v := range map[string]float64{"OMP_TAMS_RETENTION_HOURS": p.RetentionHours, "OMP_TAMS_FLOW_RETENTION_HOURS": p.FlowRetentionHours, "OMP_TAMS_EMPTY_FLOW_HOURS": p.EmptyFlowHours} {
+		if v > 0 {
+			env[k] = strconv.FormatFloat(v, 'f', -1, 64)
+		}
+	}
+	return env
 }
 
 const TargetTAMS = "tams"
@@ -108,6 +125,12 @@ func (c *Config) Normalize() error {
 		}
 		if p.Target != "" && p.Target != TargetTAMS {
 			return fmt.Errorf("Profil %q: Ziel %q unbekannt (leer oder tams)", k, p.Target)
+		}
+		if p.RetentionHours < 0 || p.FlowRetentionHours < 0 || p.EmptyFlowHours < 0 {
+			return fmt.Errorf("Profil %q: Aufbewahrung darf nicht negativ sein", k)
+		}
+		if p.Target != TargetTAMS && (p.RetentionHours > 0 || p.FlowRetentionHours > 0 || p.EmptyFlowHours > 0) {
+			return fmt.Errorf("Profil %q: Aufbewahrung gilt nur beim Ziel tams", k)
 		}
 		if p.Target == TargetTAMS {
 			if p.Convert != nil {

@@ -188,6 +188,14 @@ fn handle(st: &Arc<Mutex<State>>, base: &str, method: &Method, url: &str, auth: 
                 }
             }
         }
+        ("DELETE", ["tams", "v8.2", "flows", id]) => match s.flows.get(*id) {
+            Some(f) if f.read_only => err(403, "Flow ist schreibgeschützt"),
+            Some(_) => {
+                s.flows.remove(*id);
+                empty(204)
+            }
+            None => err(404, "Flow unbekannt"),
+        },
         ("GET", ["tams", "v8.2", "flows", id]) => match s.flows.get(*id) {
             Some(f) => out(200, f.json.clone()),
             None => err(404, "Flow unbekannt"),

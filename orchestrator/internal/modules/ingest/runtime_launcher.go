@@ -105,7 +105,11 @@ func (r *LauncherRuntime) Prepare(ctx context.Context, jobID, hostID, label, med
 		var err error
 		env := map[string]string{"OMP_MEDIA_DIR": mediaDir}
 		if targetOf(ctx) == TargetTAMS {
-			env = map[string]string{} // Zugang zum Speicher (OMP_TAMS_*) steht in der Umgebung des Orchestrators/Katalogs, nie hier (Entscheidung D-T3)
+			env = map[string]string{}
+			for k, v := range tamsEnvOf(ctx) {
+				env[k] = v
+			}
+			// Zugang zum Speicher (OMP_TAMS_*) steht in der Umgebung des Orchestrators/Katalogs, nie hier (Entscheidung D-T3)
 		} else if audioInputs > 1 {
 			env["OMP_RECORDER_AUDIO_INPUTS"] = strconv.Itoa(audioInputs)
 		}

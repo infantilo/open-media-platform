@@ -52,6 +52,18 @@ func WithTarget(ctx context.Context, target string) context.Context {
 	return context.WithValue(ctx, targetKey{}, target)
 }
 
+type tamsEnvKey struct{}
+
+// WithTamsEnv gibt der Laufzeit zusätzliche Umgebung für den TAMS-Schreiber mit (Aufbewahrung des Profils).
+func WithTamsEnv(ctx context.Context, env map[string]string) context.Context {
+	return context.WithValue(ctx, tamsEnvKey{}, env)
+}
+
+func tamsEnvOf(ctx context.Context) map[string]string {
+	m, _ := ctx.Value(tamsEnvKey{}).(map[string]string)
+	return m
+}
+
 func targetOf(ctx context.Context) string {
 	t, _ := ctx.Value(targetKey{}).(string)
 	return t

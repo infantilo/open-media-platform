@@ -96,7 +96,7 @@ fn main() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<runtime::Event>();
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let shutdown = Arc::new(AtomicBool::new(false));
-    let cfg = runtime::Config { domain: domain.clone(), spool: spool.clone(), registry: registry.clone(), segment_s: 2, retention_s: 0, video_kbps: 500, audio_bps: 96_000, uploader_status: Default::default() };
+    let cfg = runtime::Config { domain: domain.clone(), spool: spool.clone(), registry: registry.clone(), segment_s: 2, retention_s: 0, flow_retention_s: 0, video_kbps: 500, audio_bps: 96_000, uploader_status: Default::default() };
     let sd = shutdown.clone();
     let th = std::thread::spawn(move || runtime::run(cfg, tx, sd, ready_tx, Arc::new(AtomicU64::new(0))));
     let h = ready_rx.blocking_recv().unwrap().unwrap();

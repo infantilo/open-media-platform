@@ -783,3 +783,21 @@ func TestTamsProfileConfigRules(t *testing.T) {
 		t.Fatalf("Standardprofil tams ohne Endung muss gültig sein: %v", err)
 	}
 }
+
+func TestTamsProfileRetentionBecomesWriterEnvAndIsTamsOnly(t *testing.T) {
+	p := Profile{Target: TargetTAMS, RetentionHours: 168, FlowRetentionHours: 720.5}
+	env := p.tamsEnv()
+	if env["OMP_TAMS_RETENTION_HOURS"] != "168" || env["OMP_TAMS_FLOW_RETENTION_HOURS"] != "720.5" || len(env) != 2 {
+		t.Fatalf("env: %v", env)
+	}
+	c := DefaultConfig()
+	c.Profiles["f"] = Profile{ID: "f", Ext: ".mxf", RetentionHours: 1}
+	if err := c.Normalize(); err == nil {
+		t.Fatal("Aufbewahrung bei Dateiziel muss abgelehnt werden")
+	}
+	c = DefaultConfig()
+	c.Profiles["n"] = Profile{ID: "n", Target: TargetTAMS, EmptyFlowHours: -1}
+	if err := c.Normalize(); err == nil {
+		t.Fatal("negative Aufbewahrung muss abgelehnt werden")
+	}
+}
