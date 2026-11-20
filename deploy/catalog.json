@@ -343,6 +343,16 @@
     "expectedResources": "moderat während einer Aufnahme (Encoding, Hochladen), Platz für die Warteschlange (Standard bis 2 GB)"
   },
   {
+    "type": "omp-tams-reader",
+    "label": "TAMS-Wiedergabe",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-tams-reader"],
+    "mediaKind": "any", "env": {},
+    "description": "Spielt einen Zeitbereich aus einem zeitadressierten Medienspeicher (TAMS, API 8.2) als Quelle ab (Video und Ton als MXL-Flows) oder gibt eine laufende Aufnahme zeitverschoben wieder (Verzögerung wählbar, z. B. für Instant Replay). Zeitbereich per Zeitstempel oder „vor N Sekunden“; Lücken in der Aufnahme werden gefüllt (letztes Bild oder Schwarz, Ton Stille). Einrichtung über Umgebungsvariablen (OMP_TAMS_URL, OMP_TAMS_AUTH, Token nur aus Datei OMP_TAMS_TOKEN_FILE oder OMP_TAMS_TOKEN, OMP_WIDTH/OMP_HEIGHT/OMP_FRAMERATE_NUM/OMP_FRAMERATE_DEN, OMP_TAMS_GAP). Methoden tams.play, tams.follow, tams.stop, Kennzahlen tams.*. Folge-Modus fragt den Speicher ab (kein Webhook). Noch ohne Bedienoberfläche und nur gegen Test-Server und eigene MXL-Domain geprüft.",
+    "i18n": { "en": {"label": "TAMS playback", "description": "Plays a time range from a time-addressable media store (TAMS, API 8.2) as a source (video and audio as MXL flows), or plays a running recording time-shifted (selectable delay, e.g. for instant replay). Time range by timestamp or \"N seconds ago\"; gaps in the recording are filled (last frame or black, silence for audio). Configured by environment variables (OMP_TAMS_URL, OMP_TAMS_AUTH, token only from file OMP_TAMS_TOKEN_FILE or OMP_TAMS_TOKEN, OMP_WIDTH/OMP_HEIGHT/OMP_FRAMERATE_NUM/OMP_FRAMERATE_DEN, OMP_TAMS_GAP). Methods tams.play, tams.follow, tams.stop, metrics tams.*. Follow mode polls the store (no webhook). No user interface yet and only tested against a test server and a private MXL domain."}},
+    "expectedResources": "moderat während der Wiedergabe (Dekodieren), je Spur ein Hol- und ein Wiedergabe-Thread"
+  },
+  {
     "type": "omp-vfa",
     "label": "Video folgt Audio",
     "runner": "process",

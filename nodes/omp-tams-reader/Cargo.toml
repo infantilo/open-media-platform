@@ -1,0 +1,28 @@
+[package]
+name = "omp-tams-reader"
+version = "0.1.0"
+edition = "2024"
+# Kapitel 105.4 (Wiedergabe und Zeitverschiebung aus einem TAMS-Speicher). publish=false wie bei den übrigen Node-Crates.
+publish = false
+
+[lib]
+name = "omp_tams_reader"
+path = "src/lib.rs"
+
+[[bin]]
+name = "omp-tams-reader"
+path = "src/main.rs"
+
+[dependencies]
+gstreamer = "0.25.3"
+gstreamer-app = "0.25"
+gstreamer-video = { version = "0.25.3", features = ["v1_16"] }
+omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
+omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+omp-tams = { version = "0.1.0", path = "../omp-tams" }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync"] }
+
+[dev-dependencies]
+omp-tams = { version = "0.1.0", path = "../omp-tams", features = ["testserver"] }
+omp-tams-writer = { version = "0.1.0", path = "../omp-tams-writer" }

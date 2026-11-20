@@ -1900,6 +1900,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-tams-reader"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "gstreamer-app",
+ "gstreamer-video",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "omp-tams",
+ "omp-tams-writer",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-tams-writer"
 version = "0.1.0"
 dependencies = [
