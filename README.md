@@ -30,6 +30,7 @@
 | AMWA BCP-007-03 | MXL as a standardized NMOS transport, not a proprietary one | Own schema-conformance tool against the real published JSON schemas (spec too new for an official AMWA suite yet) |
 | AMWA BCP-008-01/02 | Receiver/sender health status | Real signals (GStreamer jitterbuffer stats, PTP lock, DeckLink cable lock, SRT stats), live-verified |
 | MXL v1.1.0 (Media eXchange Layer) | Zero-copy local media exchange | Read/write path run against MXL's own independent reference tools, both directions, down to actual pixels |
+| TAMS API 8.2 (Time-addressable Media Store) + AppNotes 0002, 0005, 0008, 0010, 0019, 0024 | Record live MXL flows into a time-addressed store (MPEG-TS or fragmented MP4 with init segments), replay and time-shift, clip export, retention; client only, no store of its own | Tested against a test server that enforces the spec rules and against the specification's own mock server (requests and responses checked against its JSON schemas); end to end with real sources and `ffprobe`; playback into a real MXL domain. **Not yet run against a production store**; strict CMAF brands not checked |
 | SMPTE ST 2110-20/30 | Video/audio over IP | SDP written to the spec, live-verified against real RTP traffic; no third-party conformance test has been run |
 | AES67 | Audio interop over IP, incl. devices that offer an AES67 mode | SAP discovery, live-verified |
 | PTP (IEEE 1588) | Network timebase for the 2110 paths | Opt-in domain, verified live-synchronized across two network namespaces |
@@ -42,7 +43,7 @@
 
 > **Reading this table:** "verified" means the check named in the right-hand column was run. Except where the official
 > AMWA test tool is named, no row is a certification or a third-party conformance statement, and OpenMediaPlatform is
-> not affiliated with or endorsed by AMWA, SMPTE, EBU, the MXL project or any vendor. Names are trademarks of their
+> not affiliated with or endorsed by AMWA, SMPTE, EBU, the MXL and TAMS projects or any vendor. Names are trademarks of their
 > owners and are used only to describe interoperability. See [`NOTICE`](NOTICE) and
 > [`docs/LIZENZ-INVENTAR.md`](docs/LIZENZ-INVENTAR.md).
 
