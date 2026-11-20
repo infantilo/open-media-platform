@@ -13,6 +13,7 @@
 //! * `OMP_TAMS_SEGMENT_SECONDS` Segmentlänge (Standard 2; wirksam an der nächsten GOP-Grenze)
 //! * `OMP_TAMS_VIDEO_KBPS`, `OMP_TAMS_AUDIO_BPS`  Bitraten (Standard 4000 kbit/s und 192000 bit/s)
 
+mod uibundle;
 use omp_node_sdk::connection::{
     ReceiverConnection, ReceiverControl, ReceiverResource, bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery,
 };
@@ -161,6 +162,9 @@ impl ParamStore for WriterStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if let Some(r) = uibundle::route(method, path) {
+            return Some(r);
+        }
         let to_raw = |(status, content_type, body)| RawResponse { status, content_type, body };
         root_discovery(method, path)
             .or_else(|| list_ids(method, path, "receivers", &[self.video_connection.id(), self.audio_connection.id()]))

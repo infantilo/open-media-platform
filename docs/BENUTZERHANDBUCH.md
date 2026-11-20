@@ -2935,7 +2935,7 @@ Der **Studio-Mischer** (`omp-lowlat-mixer`) ist für Wege gedacht, bei denen jed
 
 ## 10j. Aufnahme und Wiedergabe mit einem Medienspeicher (TAMS)
 
-Ein **TAMS-Speicher** (Time-addressable Media Store, API 8.2) legt Aufnahmen nach der **Uhrzeit** ab, nicht nach Dateinamen. Daraus lässt sich jeder Zeitbereich abspielen oder die laufende Aufnahme zeitverschoben wiedergeben. OMP ist dabei nur Nutzer eines Speichers, den Sie bereitstellen. **Noch ohne Bedienoberfläche** und noch an keinem echten Speicher geprüft; gesteuert wird über die Methoden der Nodes.
+Ein **TAMS-Speicher** (Time-addressable Media Store, API 8.2) legt Aufnahmen nach der **Uhrzeit** ab, nicht nach Dateinamen. Daraus lässt sich jeder Zeitbereich abspielen oder die laufende Aufnahme zeitverschoben wiedergeben. OMP ist dabei nur Nutzer eines Speichers, den Sie bereitstellen. Beide Nodes haben ein **Bedienfeld** (Start/Stopp, Zähler; bei der Wiedergabe Eingabe von Flow-IDs, „Vor N Sekunden“, Zeitbereich oder Mitlaufen mit Verzögerung; Eingaben bleiben im Browser erhalten). Noch an keinem echten Speicher geprüft.
 
 **Einrichten (beide Nodes):** Adresse des Speichers `OMP_TAMS_URL` (mit Versionspfad, https; http nur lokal), Anmeldung `OMP_TAMS_AUTH` (`none`, `bearer`, `basic`, `url_token`). Das Passwort bzw. Token steht **nur** in einer Datei (`OMP_TAMS_TOKEN_FILE`, Rechte höchstens 0600) oder in `OMP_TAMS_TOKEN`, nie in den Einstellungen im Browser. Fehlt die Einrichtung, startet der Node trotzdem und zeigt den Grund bei **tams.lastError**.
 

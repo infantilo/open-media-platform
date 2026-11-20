@@ -11,9 +11,10 @@
 //! * `OMP_TAMS_GAP`            `hold` (Standard: letztes Bild wiederholen) | `black`; Ton: Stille
 //! * `OMP_TAMS_LEAD_MS`        Vorlauf beim Abspielen eines Bereichs (Standard 2000)
 
+mod uibundle;
 use omp_node_sdk::is04::TRANSPORT_MXL;
 use omp_node_sdk::node::FlowSpec;
-use omp_node_sdk::{Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, Range, SenderSpec, SetError};
+use omp_node_sdk::{Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, Range, RawResponse, SenderSpec, SetError};
 use omp_tams::auth::{Auth, redact_url, secret_from_env};
 use omp_tams::client::{Client, ClientConfig};
 use omp_tams::time::Timestamp;
@@ -139,6 +140,10 @@ impl ParamStore for ReaderStore {
 
     fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
         Err(SetError::ReadOnly)
+    }
+
+    fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<RawResponse> {
+        uibundle::route(method, path)
     }
 
     fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {

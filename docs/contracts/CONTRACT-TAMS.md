@@ -43,5 +43,8 @@ AppNote addiert (2^33−1)/90000 s, das wäre um 11 µs falsch).
 `OMP_TAMS_TOKEN`, nie aus Parametern, Datenbank oder Log. TLS ist Pflicht außer Loopback. Keine Weiterleitungen; Zugangsdaten gehen nur an den Ursprung der API-Adresse, nie an
 fremde Objekt-Adressen; ein `Link` auf fremden Ursprung ist ein Fehler. Ohne gültige Einrichtung läuft der Node trotzdem und nennt den Grund in `tams.lastError`.
 
-## 5. Grenzen
-CMAF/fragmentiertes MP4 (braucht `cmafmux`), Webhook, Rechte nach AppNote 0016 im OMP, Aufbewahrung/Löschen, Metadaten-Kopie je Sendung, Bedienoberfläche, Mehrkanal-Sammel-Flow: **offen** (Kapitel 105.3b, 105.6).
+## 5. Bedienfelder
+Beide Nodes liefern `/ui/manifest.json` und `/ui/bundle.js` (Web-Komponenten `omp-tams-writer-panel`, `omp-tams-reader-panel`, Muster wie `omp-ptz`, eigene de/en-Texte im Bundle). Die Felder nutzen nur die Parameter und Methoden dieses Vertrags.
+
+## 6. Grenzen
+CMAF/fragmentiertes MP4 (braucht `cmafmux`), Webhook, Rechte nach AppNote 0016 im OMP, Aufbewahrung/Löschen, Metadaten-Kopie je Sendung, Mehrkanal-Sammel-Flow: **offen** (Kapitel 105.3b, 105.6).
