@@ -1659,6 +1659,12 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/mcr/alarms/history",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/mcr/events",
     "auth": "auth",
     "domain": "core"
@@ -1672,7 +1678,7 @@
   {
     "method": "DELETE",
     "path": "/api/v1/mcr/events/{id}",
-    "auth": "feature:FeatManage",
+    "auth": "auth",
     "domain": "core"
   },
   {
@@ -1684,25 +1690,55 @@
   {
     "method": "PUT",
     "path": "/api/v1/mcr/events/{id}",
-    "auth": "feature:FeatManage",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/mcr/events/{id}/alarm-pip",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/mcr/events/{id}/alarms",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/mcr/events/{id}/alarms/{alarmId}/ack",
+    "auth": "auth",
     "domain": "core"
   },
   {
     "method": "PUT",
     "path": "/api/v1/mcr/events/{id}/lines/{lineId}/avsync",
-    "auth": "feature:FeatLive|FeatManage",
+    "auth": "auth",
     "domain": "core"
   },
   {
     "method": "POST",
     "path": "/api/v1/mcr/events/{id}/lines/{lineId}/measure",
-    "auth": "feature:FeatLive|FeatManage",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/mcr/events/{id}/lines/{lineId}/monitor",
+    "auth": "auth",
     "domain": "core"
   },
   {
     "method": "PUT",
     "path": "/api/v1/mcr/events/{id}/members",
     "auth": "feature:FeatManage",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/mcr/events/{id}/precheck",
+    "auth": "auth",
     "domain": "core"
   },
   {
@@ -1714,7 +1750,13 @@
   {
     "method": "POST",
     "path": "/api/v1/mcr/events/{id}/transition",
-    "auth": "feature:FeatLive",
+    "auth": "auth",
+    "domain": "core"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/mcr/monitor",
+    "auth": "auth",
     "domain": "core"
   },
   {
