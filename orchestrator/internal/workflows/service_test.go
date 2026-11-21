@@ -2728,3 +2728,106 @@ func TestImportReplaceKeepsIdAndName(t *testing.T) {
 		t.Fatalf("Bindungen = %+v, want 3", az.snapshot())
 	}
 }
+
+// Reshape (106.13): Rollen eines laufenden Workflows kommen und gehen, die übrigen laufen ununterbrochen weiter.
+func TestReshapeAddsAndRemovesRolesWithoutStoppingOthers(t *testing.T) {
+	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
+	registrationTimeout.Store(2 * time.Second)
+	registrationPollInterval.Store(10 * time.Millisecond)
+	defer func() { registrationTimeout.Store(original); registrationPollInterval.Store(originalPoll) }()
+
+	nodes, g, l := &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{}
+	svc := newTestService(newFakeStore(), nodes, g, l)
+	def := Definition{
+		Roles:       []Role{{Name: "src", NodeType: "omp-source"}, {Name: "scaler", NodeType: "omp-scaler"}},
+		Connections: []Connection{{FromRole: "src", ToRole: "scaler"}},
+	}
+	wf, err := svc.Create("regie", def, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		n := len(l.started)
+		l.mu.Unlock()
+		if n == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	src, scaler := l.instanceIDFor("omp-source"), l.instanceIDFor("omp-scaler")
+	nodes.add(registry.NodeView{ID: "node-src", InstanceID: src, Senders: []registry.SenderView{{ID: "send-1", Format: formatVideo}}})
+	nodes.add(registry.NodeView{ID: "node-scaler", InstanceID: scaler, Receivers: []registry.ReceiverView{{ID: "recv-1", Format: formatVideo}}})
+	waitForStatus(t, svc, wf.ID, StatusStarted)
+
+	// neue Rolle „viewer“ (mit Verbindung vom Scaler), Rolle „src“ bleibt
+	def2 := Definition{
+		Roles:       []Role{{Name: "src", NodeType: "omp-source"}, {Name: "scaler", NodeType: "omp-scaler"}, {Name: "viewer", NodeType: "omp-viewer"}},
+		Connections: []Connection{{FromRole: "src", ToRole: "scaler"}, {FromRole: "src", ToRole: "viewer"}},
+	}
+	if err := svc.Reshape(context.Background(), wf.ID, "regie", def2); err != nil {
+		t.Fatalf("Reshape: %v", err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	viewer := ""
+	for time.Now().Before(deadline) && viewer == "" {
+		viewer = l.instanceIDFor("omp-viewer")
+		time.Sleep(5 * time.Millisecond)
+	}
+	if viewer == "" {
+		t.Fatal("neue Rolle wurde nicht gestartet")
+	}
+	nodes.add(registry.NodeView{ID: "node-viewer", InstanceID: viewer, Receivers: []registry.ReceiverView{{ID: "recv-v", Format: formatVideo}}})
+	waitForConnectCalls(g, 2)
+	g.mu.Lock()
+	last := g.calls[len(g.calls)-1]
+	g.mu.Unlock()
+	if last.fromSender != "send-1" || last.toReceiver != "recv-v" {
+		t.Fatalf("neue Rolle muss verdrahtet werden: %+v", last)
+	}
+	l.mu.Lock()
+	for _, s := range l.stopped {
+		if s == src || s == scaler {
+			l.mu.Unlock()
+			t.Fatalf("bestehende Rolle %q darf nicht gestoppt werden", s)
+		}
+	}
+	l.mu.Unlock()
+
+	// Rolle „scaler“ entfällt: nur ihre Instanz wird gestoppt
+	def3 := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}, {Name: "viewer", NodeType: "omp-viewer"}}, Connections: []Connection{{FromRole: "src", ToRole: "viewer"}}}
+	if err := svc.Reshape(context.Background(), wf.ID, "regie", def3); err != nil {
+		t.Fatalf("Reshape 2: %v", err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	stopped := false
+	for time.Now().Before(deadline) && !stopped {
+		l.mu.Lock()
+		for _, s := range l.stopped {
+			if s == scaler {
+				stopped = true
+			}
+			if s == src || s == viewer {
+				l.mu.Unlock()
+				t.Fatalf("Rolle %q darf bleiben", s)
+			}
+		}
+		l.mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !stopped {
+		t.Fatal("entfernte Rolle wurde nicht gestoppt")
+	}
+	got, _ := svc.Get(wf.ID)
+	if _, ok := got.Runtime["scaler"]; ok || got.Runtime["src"].InstanceID != src {
+		t.Fatalf("Runtime nach Reshape: %+v", got.Runtime)
+	}
+	// nicht laufend: Fehler
+	if err := svc.Reshape(context.Background(), "gibt-es-nicht", "x", def3); err == nil {
+		t.Fatal("unbekannter Workflow")
+	}
+}
