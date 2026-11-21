@@ -95,3 +95,27 @@ Stehen vollständig unter „Entschiedene Punkte“ in `UMSETZUNG.md` Kapitel 10
 **Relay:** Zusätzlich kann `omp-contribution` den ankommenden Transportstrom **unverändert** weiterleiten (`contrib.relayUri`, SRT oder RIST). Das ersetzt den Mitschnitt nicht, erlaubt aber, den Original-Strom an ein externes Ziel (z. B. ein Aufnahmegerät) zu geben.
 
 **RIST:** Umgesetzt ist das Simple Profile (VSF TR-06-1) über GStreamer 1.22 `ristsrc`/`ristsink`. Das Main Profile (TR-06-2: Tunnel, Verschlüsselung) ist **nicht** abgedeckt. Der TR-06-1-Originaltext wurde in diesem Schritt **nicht** gelesen, deshalb nennt der Code keine Abschnittsnummern. Bündelung: `ristsrc` hat in 1.22 keine Eigenschaft `enable-bonding`; Bündelung läuft über `bonding-addresses` (Liste `adresse:port`), live belegt (siehe Status 106.7). Der RTP-Port muss gerade sein (RTCP = Port + 1). Die Statistik kommt aus `rist/x-receiver-stats` (Pakete statt Bytes; die Bitrate ist daraus als Näherung mit 1316 Byte je Paket berechnet).
+
+## 8. Konfigurierbare Verarbeitungskette (Schritt 106.13g, Nutzerwunsch 2026-11-21)
+
+**Ziel:** Welche Nodes eine Leitung verarbeiten, ist Daten und kein Code. Neue Microservices (Skalierer, später Filter) lassen sich einhängen, ohne `Materialize` zu ändern.
+
+**Modell.** Eine *Stufe* ist `{id, nodeType, where: "pre"|"post", enabled, label?, params: {name: wert}}`.
+- `pre` = vor dem Normalizer (sieht das Eingangsformat der Leitung), `post` = nach dem Normalizer (sieht das Hausformat).
+- Der **Normalizer bleibt gesetzt** (Hausformat nur bei Abweichung, Etiketten, A/V-Ausgleich, Messung) und ist nicht Teil der Liste.
+- Die Reihenfolge innerhalb von `pre` bzw. `post` ist die Reihenfolge der Liste.
+
+**Ebenen (von allgemein zu besonders):** global (Einstellung `mcr.chain`) → Event (`chain` am Event) → Leitung (`chain` an der Leitung). Gilt die **nächstbesondere vorhandene Liste ganz** (keine Mischung); `null` = erbt, `[]` = ausdrücklich keine Stufen. Begründung: leicht erklärbar und prüfbar; Mischregeln wären in einer Sendeumgebung eine Fehlerquelle.
+
+**Zulässige Typen:** Einstellung `mcr.stageTypes` (Liste von Node-Typen, Standard `["omp-scaler"]`), vom Administrator änderbar. Ein Typ außerhalb der Liste wird beim Speichern abgelehnt. Der Katalog bleibt unverändert (eigene Einträge kommen dort wie bisher dazu).
+
+**Vertrag einer Stufe** (damit `Materialize` sie ohne Sonderfall verdrahten kann):
+1. Erster Bild-Empfänger und erster Ton-Empfänger nehmen die Quelle der Stufe davor; Sender 1 (Bild) und Sender 2 (Ton) sind der Ausgang — dieselbe Namenskonvention wie beim Normalizer. Fehlt eine Art (reiner Bildfilter), wird sie am Ort durchgeschleift: die Verbindung zur nächsten Stufe geht dann vom **letzten Glied, das diese Art hat**, weiter.
+2. Parameter kommen nach dem Start per `PATCH /params/<name>` aus den Daten (Quelle der Wahrheit = Datenbank, wie beim Normalizer), nicht über Umgebungsvariablen (kein Eingriff in die Allowlist der Host-Agenten).
+3. Eine Stufe darf Format ändern; der Normalizer danach gleicht auf das Hausformat an. Stufen `post` sollen das Hausformat erhalten (Verantwortung des Betreibers, in der Oberfläche vermerkt).
+
+**Was am Ende der Kette hängt:** `LineRoles.Output` = letzte Rolle der Kette (bei leerer `post`-Liste der Normalizer). Quellname „MCR/<Event>/<Leitung>“, Überwachung (Kachelquelle), Rückweg-Quelle und Workflow-Schnittstelle nutzen `Output`. Normalizer-Parameter, A/V-Messung und Abgleich bleiben am Normalizer.
+
+**Auswirkungen:** Kapazitäts-Vorprüfung zählt die Stufen automatisch (Rollen des Workflows). Änderungen der Kette wirken beim nächsten Start (planned → testing); ein laufender Workflow ändert seine Rollen nicht (siehe 106.13).
+
+**Nicht Teil dieses Schritts:** Filter-Nodes selbst; Bild-/Tonstufen mit mehreren Ausgängen; Umordnen laufender Ketten.
