@@ -5,6 +5,13 @@ import { hasFeature } from "../../kit/features.ts";
 import { promptDialog } from "../../kit/omp-prompt.ts";
 import { dateTime, ensureStyle, field, h, input, modal, nextFullHour, note, quickTimes, segmented, toLocalValue } from "./mcr-dom.ts";
 import { houseFields, openLineForm } from "./line-form.ts";
+import { openMatrix } from "./matrix-view.ts";
+import { chainEditor } from "./chain-editor.ts";
+import { type Stage, type StageType } from "./chain-logic.ts";
+import { Wall } from "./wall-view.ts";
+import { AlarmHistory } from "./alarm-view.ts";
+import { type MonCfg, monitorEditor } from "./monitor-editor.ts";
+import { type Member, membersEditor } from "./members-editor.ts";
 import {
   avLight, fmtConfidence, fmtMs, fmtVideo, type Graph, type HouseDraft, inputLamp, type LineDraft, lineMode, MODE_COLOR, needsConfirm, nextStep, otherSteps, parseStages, relTime,
   scalePct, STATE_INFO, STATES, stateColor, validateHouse,
@@ -48,7 +55,9 @@ interface CardRefs {
 }
 
 class McrView extends HTMLElement {
-  #tab: "events" | "templates" | "house" = "events";
+  #tab: "wall" | "events" | "alarms" | "templates" | "house" = "wall";
+  #alarms: AlarmHistory | null = null;
+  #wall: Wall | null = null;
   #events: Obj[] = [];
   #graph: Graph = {};
   #filter = "";
@@ -57,9 +66,23 @@ class McrView extends HTMLElement {
   #status: Obj | null = null;
   #templates: Obj[] = [];
   #global: Obj | null = null;
+  #globalChain: Stage[] = [];
+  #stageTypes: StageType[] = [];
   #isAdmin = false;
   #canManage = true;
   #canLive = true;
+
+  /** Darf die Person am Event handeln? Der Server meldet es je Event (`access`); ohne Angabe gelten die globalen Rechte. */
+  #can(ev: Obj | null | undefined, what: "test" | "live" | "edit"): boolean {
+    const a = ev?.access as Obj | undefined;
+    if (a) return !!a[what];
+    return what === "edit" ? this.#canManage : this.#canLive;
+  }
+
+  /** Zustandswechsel: Geplant ↔ Test bedient die Technik, alles andere die Leitung. */
+  #canStep(ev: Obj, to: string): boolean {
+    return this.#can(ev, to === "testing" || to === "planned" ? "test" : "live");
+  }
   #t1 = 0;
   #t2 = 0;
   #t3 = 0;
@@ -84,6 +107,7 @@ class McrView extends HTMLElement {
     clearInterval(this.#t1);
     clearInterval(this.#t2);
     clearInterval(this.#t3);
+    this.#wall?.stop();
   }
 
   async #init() {
@@ -112,6 +136,7 @@ class McrView extends HTMLElement {
     this.#t2 = setInterval(() => void this.#pollStatus(), 2000) as unknown as number;
     this.#t3 = setInterval(() => this.#tickClock(), 1000) as unknown as number;
     this.#tickClock();
+    if (this.#tab === "wall") this.#wall?.start();
   }
 
   #tickClock() {
@@ -132,8 +157,12 @@ class McrView extends HTMLElement {
     if (r.ok) this.#templates = r.data.templates ?? [];
   }
   async #loadGlobal() {
-    const r = await api<{ houseFormat: Obj | null }>("GET", "/settings");
-    if (r.ok) this.#global = r.data.houseFormat ?? null;
+    const r = await api<{ houseFormat: Obj | null; chain?: Stage[]; stageTypes?: StageType[] }>("GET", "/settings");
+    if (r.ok) {
+      this.#global = r.data.houseFormat ?? null;
+      this.#globalChain = r.data.chain ?? [];
+      this.#stageTypes = r.data.stageTypes ?? [];
+    }
   }
   async #loadEvent() {
     if (!this.#sel) {
@@ -164,7 +193,7 @@ class McrView extends HTMLElement {
 
   #tabsBar(): HTMLElement {
     const tabs = h("div", { class: "mcr-tabs", role: "tablist" });
-    const mk = (id: "events" | "templates" | "house", label: string) => {
+    const mk = (id: "wall" | "events" | "alarms" | "templates" | "house", label: string) => {
       const b = h("button", { class: "mcr-tab", role: "tab", type: "button", "aria-selected": String(this.#tab === id) }, label);
       b.addEventListener("click", () => {
         this.#tab = id;
@@ -174,14 +203,40 @@ class McrView extends HTMLElement {
       });
       return b;
     };
-    tabs.append(mk("events", t("mcr.tab.events")), ...(this.#canManage ? [mk("templates", t("mcr.tab.templates")), mk("house", t("mcr.tab.house"))] : []), h("span", { class: "mcr-tab-spacer" }), this.#clock);
+    tabs.append(mk("wall", t("mcr.tab.wall")), mk("events", t("mcr.tab.events")), mk("alarms", t("mcr.tab.alarms")), ...(this.#canManage ? [mk("templates", t("mcr.tab.templates")), mk("house", t("mcr.tab.house"))] : []), h("span", { class: "mcr-tab-spacer" }), this.#clock);
     return tabs;
   }
 
   #paint() {
-    if (this.#tab === "events") void this.#loadEvent().then(() => this.#paintEvents(true));
+    if (this.#tab !== "wall") this.#wall?.stop();
+    if (this.#tab === "wall") this.#paintWall();
+    else if (this.#tab === "events") void this.#loadEvent().then(() => this.#paintEvents(true));
+    else if (this.#tab === "alarms") this.#paintAlarms();
     else if (this.#tab === "templates") this.#paintTemplates();
     else this.#paintHouse();
+  }
+
+  #paintAlarms() {
+    const names: Record<string, string> = {};
+    for (const e of this.#events) names[e.id] = e.name;
+    this.#alarms = new AlarmHistory(names);
+    this.#body.replaceChildren(this.#alarms.el);
+    void this.#alarms.load();
+  }
+
+  #paintWall() {
+    if (!this.#wall) {
+      this.#wall = new Wall(this.#canLive || this.#canManage, (id) => {
+        this.#sel = id;
+        this.#tab = "events";
+        const tabs = this.querySelectorAll(".mcr-tab");
+        tabs.forEach((x) => x.setAttribute("aria-selected", "false"));
+        tabs[1]?.setAttribute("aria-selected", "true");
+        this.#paint();
+      });
+    }
+    this.#body.replaceChildren(this.#wall.el);
+    this.#wall.start();
   }
 
   // ---- Events ---------------------------------------------------------------------------------------------------------
@@ -274,21 +329,21 @@ class McrView extends HTMLElement {
       steps.append(h("div", { class: "mcr-step", "data-s": d, style: `--st:${stateColor(s)}` }, t(`mcr.state.${s}`)));
     }
     const actions = h("div", { class: "mcr-actions" });
-    if (next && this.#canLive) {
+    if (next && this.#canStep(ev, next)) {
       const labels: Record<string, string> = { testing: t("mcr.act.test"), live: t("mcr.act.live"), teardown: t("mcr.act.teardown"), done: t("mcr.act.done") };
       const b = h("button", { class: `mcr-btn ${next === "live" ? "mcr-btn-live" : "mcr-btn-primary"}`, type: "button" }, labels[next] ?? next);
       b.addEventListener("click", () => void this.#transition(ev, next));
       actions.append(b);
     }
-    for (const to of this.#canLive ? otherSteps(ev.state, this.#graph) : []) {
+    for (const to of otherSteps(ev.state, this.#graph).filter((x) => this.#canStep(ev, x))) {
       const b = h("button", { class: "mcr-btn mcr-btn-quiet", type: "button" }, to === "planned" ? t("mcr.act.back") : to === "cancelled" ? t("mcr.act.cancel") : to);
       b.addEventListener("click", () => void this.#transition(ev, to));
       actions.append(b);
     }
     const edit = h("button", { class: "mcr-btn", type: "button", disabled: !["planned", "testing", "live"].includes(ev.state) }, t("mcr.event.edit"));
     edit.addEventListener("click", () => void this.#editEvent(ev));
-    if (this.#canManage) actions.append(edit);
-    if (this.#canManage && ["planned", "done", "cancelled"].includes(ev.state)) {
+    if (this.#can(ev, "edit")) actions.append(edit);
+    if (this.#can(ev, "edit") && ["planned", "done", "cancelled"].includes(ev.state)) {
       const del = h("button", { class: "mcr-btn mcr-btn-quiet", type: "button" }, t("mcr.event.delete"));
       del.addEventListener("click", () => void this.#deleteEvent(ev));
       actions.append(del);
@@ -319,10 +374,15 @@ class McrView extends HTMLElement {
   #grid(ev: Obj): HTMLElement {
     const grid = h("div", { class: "mcr-grid" });
     for (const l of ev.lines ?? []) grid.append(this.#card(ev, l));
-    if (this.#canManage && ["planned", "testing"].includes(ev.state)) {
+    if (this.#can(ev, "edit") && ["planned", "testing"].includes(ev.state)) {
       const add = h("button", { class: "mcr-add", type: "button" }, h("b", {}, "+"), h("span", {}, t("mcr.line.add")));
       add.addEventListener("click", () => void this.#editLine(ev, null));
       grid.append(add);
+      if ((ev.lines ?? []).length) {
+        const mx = h("button", { class: "mcr-add", type: "button" }, h("b", {}, "▦"), h("span", {}, t("mcr.mx.open")));
+        mx.addEventListener("click", () => void this.#matrix(ev));
+        grid.append(mx);
+      }
     }
     if (!(ev.lines ?? []).length && !["planned", "testing"].includes(ev.state)) grid.append(note(t("mcr.lines.none")));
     return grid;
@@ -333,7 +393,7 @@ class McrView extends HTMLElement {
     const lamp = h("span", { class: "mcr-lamp" });
     const kebab = h("button", { class: "mcr-kebab", type: "button", title: t("mcr.line.menu"), "aria-label": t("mcr.line.menu") }, "⋯");
     kebab.disabled = !["planned", "testing", "live"].includes(ev.state);
-    if (!this.#canManage) kebab.style.display = "none";
+    if (!this.#can(ev, "edit")) kebab.style.display = "none";
     kebab.addEventListener("click", () => void this.#lineMenu(ev, l, kebab));
     const head = h("div", { class: "mcr-card-head" }, lamp, h("div", { class: "mcr-card-name", title: l.name }, l.name), h("span", { class: "mcr-kind" }, t(`mcr.kind.${l.kind}`)), kebab);
 
@@ -354,7 +414,7 @@ class McrView extends HTMLElement {
     adopt.addEventListener("click", () => void this.#adopt(ev, l));
     const mode = String((l.avsync as Obj | undefined)?.mode ?? "once");
     const modeSeg = segmented([{ value: "off", label: t("mcr.av.off") }, { value: "once", label: t("mcr.av.once"), title: t("mcr.av.onceHint") }, { value: "manual", label: t("mcr.av.manual") }], mode, (v) => void this.#setMode(ev, l, v));
-    if (!this.#canLive) modeSeg.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    if (!this.#can(ev, "test")) modeSeg.querySelectorAll("button").forEach((b) => (b.disabled = true));
     const av = h("div", { class: "mcr-av" }, h("div", { class: "mcr-av-top" }, val, lbl), gauge, h("div", { class: "mcr-av-bot" }, measure, adopt, conf, modeSeg));
 
     const stats = h("div", { class: "mcr-stats" });
@@ -412,8 +472,8 @@ class McrView extends HTMLElement {
       c.needle.dataset.on = shown === null ? "0" : "1";
       if (shown !== null) c.needle.style.left = `${scalePct(shown)}%`;
       c.conf.textContent = measured !== null ? `${t("mcr.av.confidence")} ${fmtConfidence(norm?.["avsync.confidence"] as number)}` : appliedMs !== 0 ? t("mcr.av.applied", { ms: fmtMs(appliedMs) }) : "";
-      c.measure.disabled = !this.#canLive || !running || running2 || mode === "waiting";
-      c.adopt.disabled = !this.#canLive || !running || measured === null;
+      c.measure.disabled = !this.#can(this.#ev, "test") || !running || running2 || mode === "waiting";
+      c.adopt.disabled = !this.#can(this.#ev, "test") || !running || measured === null;
       // Statistik des Eingangs
       c.stats.replaceChildren(...this.#statNodes(l, inp));
       // Rückweg
@@ -449,6 +509,15 @@ class McrView extends HTMLElement {
   // ---- Aktionen -------------------------------------------------------------------------------------------------------
 
   async #transition(ev: Obj, to: string) {
+    if (ev.state === "planned" && to === "testing") {
+      // Vorprüfung: tragen die Hosts alle Rollen des Events? Nur Warnung, der Bediener entscheidet.
+      const c = await api<Obj>("GET", `/events/${ev.id}/precheck`);
+      if (c.ok && c.data.ok === false) {
+        const lines = (c.data.warnings as string[]).filter((x) => !x.startsWith("Hinweis"));
+        const text = `${t("mcr.cap.warn", { need: Number(c.data.needCores).toFixed(1), free: Number(c.data.freeCores).toFixed(1) })}\n\n${lines.join("\n")}`;
+        if (!(await confirmDialog(text, { confirmLabel: t("mcr.cap.startAnyway") }))) return;
+      }
+    }
     if (needsConfirm(ev.state, to)) {
       const ok = await confirmDialog(t(`mcr.confirm.${to}`, { name: ev.name }), { confirmLabel: t("mcr.confirmBtn") });
       if (!ok) return;
@@ -516,12 +585,19 @@ class McrView extends HTMLElement {
     const hbox = h("div", {}, hf.el);
     hbox.style.display = own.checked ? "" : "none";
     own.addEventListener("change", () => (hbox.style.display = own.checked ? "" : "none"));
+    const chain = chainEditor(ev.chain as Stage[] | null | undefined, this.#stageTypes, { canInherit: true, inheritHint: t("mcr.chain.eventHint") });
+    const mayMembers = ev.access ? !!(ev.access as Obj).members : this.#canManage;
+    const members = membersEditor((ev.members ?? []) as Member[]);
+    const mon = monitorEditor(ev.monitoring as MonCfg | null | undefined, { withReactions: true, lines: (ev.lines ?? []).map((l: Obj) => ({ id: l.id, name: l.name })) });
     const body = h("div", { class: "mcr-form" }, field(t("mcr.f.name"), name), h("div", { class: "mcr-form-grid" }, field(t("mcr.event.start"), start), field(t("mcr.event.end"), end)),
+      h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.chain.title")), chain.el),
+      h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.mon.title")), mon.el),
+      ...(mayMembers ? [h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.members.title")), members.el)] : []),
       h("div", { class: "mcr-fieldset" }, h("label", { class: "mcr-sw" }, own, t("mcr.event.ownHouse")), note(t("mcr.event.houseHint")), hbox));
     const out = await modal<Obj>(t("mcr.event.edit"), body, {
       wide: true,
       onSave: async () => {
-        const upd: Obj = { name: name.value.trim(), plannedStart: start.value ? new Date(start.value).toISOString() : undefined, plannedEnd: end.value ? new Date(end.value).toISOString() : undefined, owner: ev.owner, ownerGroup: ev.ownerGroup, houseFormat: null };
+        const upd: Obj = { name: name.value.trim(), plannedStart: start.value ? new Date(start.value).toISOString() : undefined, plannedEnd: end.value ? new Date(end.value).toISOString() : undefined, owner: ev.owner, ownerGroup: ev.ownerGroup, houseFormat: null, chain: chain.read(), monitoring: mon.read() };
         if (own.checked) {
           const hd = hf.read();
           const bad = validateHouse(hd);
@@ -530,6 +606,10 @@ class McrView extends HTMLElement {
         }
         const r = await api("PUT", `/events/${ev.id}`, upd);
         if (!r.ok) throw new Error(errText(r.data));
+        if (mayMembers) {
+          const mr = await api("PUT", `/events/${ev.id}/members`, { members: members.read() });
+          if (!mr.ok) throw new Error(errText(mr.data));
+        }
         return r.data;
       },
     });
@@ -544,11 +624,19 @@ class McrView extends HTMLElement {
 
   async #editLine(ev: Obj, l: Obj | null) {
     const others = (ev.lines ?? []).filter((x: Obj) => !l || x.id !== l.id).map((x: Obj) => ({ id: x.id, name: x.name }));
-    const out = await openLineForm(l as LineDraft | null, others, { structureLocked: ev.state === "live" });
+    const out = await openLineForm(l as LineDraft | null, others, { structureLocked: ev.state === "live", stageTypes: this.#stageTypes });
     if (!out) return;
     const lines: Obj[] = (ev.lines ?? []).map((x: Obj) => (l && x.id === l.id ? { ...x, ...out } : x));
     if (!l) lines.push(out as Obj);
-    const r = await api("PUT", `/events/${ev.id}`, { name: ev.name, plannedStart: ev.plannedStart, plannedEnd: ev.plannedEnd, owner: ev.owner, ownerGroup: ev.ownerGroup, houseFormat: ev.houseFormat ?? null, lines });
+    const r = await api("PUT", `/events/${ev.id}`, { name: ev.name, plannedStart: ev.plannedStart, plannedEnd: ev.plannedEnd, owner: ev.owner, ownerGroup: ev.ownerGroup, houseFormat: ev.houseFormat ?? null, chain: ev.chain ?? null, monitoring: ev.monitoring ?? null, lines });
+    if (!r.ok) return showToast(errText(r.data));
+    await this.#reload();
+  }
+
+  async #matrix(ev: Obj) {
+    const out = await openMatrix((ev.lines ?? []) as Obj[] as any[]);
+    if (!out) return;
+    const r = await api("PUT", `/events/${ev.id}`, { name: ev.name, plannedStart: ev.plannedStart, plannedEnd: ev.plannedEnd, owner: ev.owner, ownerGroup: ev.ownerGroup, houseFormat: ev.houseFormat ?? null, chain: ev.chain ?? null, monitoring: ev.monitoring ?? null, lines: out });
     if (!r.ok) return showToast(errText(r.data));
     await this.#reload();
   }
@@ -582,7 +670,7 @@ class McrView extends HTMLElement {
   async #removeLine(ev: Obj, l: Obj) {
     if (!(await confirmDialog(t("mcr.confirm.removeLine", { name: l.name }), { confirmLabel: t("mcr.line.remove") }))) return;
     const lines = (ev.lines ?? []).filter((x: Obj) => x.id !== l.id);
-    const r = await api("PUT", `/events/${ev.id}`, { name: ev.name, plannedStart: ev.plannedStart, plannedEnd: ev.plannedEnd, owner: ev.owner, ownerGroup: ev.ownerGroup, houseFormat: ev.houseFormat ?? null, lines });
+    const r = await api("PUT", `/events/${ev.id}`, { name: ev.name, plannedStart: ev.plannedStart, plannedEnd: ev.plannedEnd, owner: ev.owner, ownerGroup: ev.ownerGroup, houseFormat: ev.houseFormat ?? null, chain: ev.chain ?? null, monitoring: ev.monitoring ?? null, lines });
     if (!r.ok) return showToast(errText(r.data));
     await this.#reload();
   }
@@ -656,7 +744,7 @@ class McrView extends HTMLElement {
 
   async #eventFromTemplate(tp: Obj) {
     this.#tab = "events";
-    (this.querySelectorAll(".mcr-tab")[0] as HTMLElement | undefined)?.click();
+    (this.querySelectorAll(".mcr-tab")[1] as HTMLElement | undefined)?.click();
     await this.#newEvent(tp.id);
   }
 
@@ -678,7 +766,7 @@ class McrView extends HTMLElement {
         const chip = h("span", { class: "mcr-lchip", style: "display:inline-flex;align-items:center;gap:8px;padding:4px 8px" }, l.name, h("em", {}, t(`mcr.kind.${l.kind}`)));
         const ed = h("button", { class: "mcr-btn mcr-btn-sm mcr-btn-quiet", type: "button" }, t("mcr.tpl.edit"));
         ed.addEventListener("click", async () => {
-          const o = await openLineForm(l as LineDraft, lines.filter((_, j) => j !== i).map((x) => ({ id: x.id ?? x.name, name: x.name })));
+          const o = await openLineForm(l as LineDraft, lines.filter((_, j) => j !== i).map((x) => ({ id: x.id ?? x.name, name: x.name })), { stageTypes: this.#stageTypes });
           if (o) {
             lines[i] = o as Obj;
             redraw();
@@ -697,7 +785,7 @@ class McrView extends HTMLElement {
     redraw();
     const addBtn = h("button", { class: "mcr-btn mcr-btn-sm", type: "button" }, t("mcr.line.add"));
     addBtn.addEventListener("click", async () => {
-      const o = await openLineForm(null, lines.map((x) => ({ id: x.id ?? x.name, name: x.name })));
+      const o = await openLineForm(null, lines.map((x) => ({ id: x.id ?? x.name, name: x.name })), { stageTypes: this.#stageTypes });
       if (o) {
         lines.push(o as Obj);
         redraw();
@@ -720,6 +808,48 @@ class McrView extends HTMLElement {
     }
   }
 
+  /** Zugelassene Node-Typen der Kette (nur Administratoren): neue Microservices werden hier eingetragen. */
+  #typesEditor(): HTMLElement {
+    let rows: StageType[] = this.#stageTypes.map((x) => ({ ...x }));
+    const list = h("div", { class: "mcr-chain-params" });
+    const out = h("div", { class: "mcr-hint", "aria-live": "polite", style: "min-height:18px" });
+    const draw = () => {
+      list.replaceChildren(...rows.map((r, i) => {
+        const nt = input(r.nodeType, { placeholder: t("mcr.chain.typeNode") });
+        nt.addEventListener("input", () => (r.nodeType = nt.value.trim()));
+        const lb = input(r.label ?? "", { placeholder: t("mcr.chain.label") });
+        lb.addEventListener("input", () => (r.label = lb.value || undefined));
+        const cb = (k: "video" | "audio", label: string) => {
+          const c = h("input", { type: "checkbox" }) as HTMLInputElement;
+          c.checked = r[k];
+          c.addEventListener("change", () => (r[k] = c.checked));
+          return h("label", { class: "mcr-sw" }, c, label);
+        };
+        const del = h("button", { type: "button", class: "mcr-btn mcr-btn-sm mcr-btn-quiet", "aria-label": t("mcr.chain.remove") }, "✕");
+        del.addEventListener("click", () => {
+          rows.splice(i, 1);
+          draw();
+        });
+        return h("div", { class: "mcr-chain-head" }, nt, lb, cb("video", t("mcr.chain.typeVideo")), cb("audio", t("mcr.chain.typeAudio")), del);
+      }));
+    };
+    draw();
+    const add = h("button", { type: "button", class: "mcr-btn mcr-btn-sm", disabled: !this.#isAdmin }, `+ ${t("mcr.chain.addType")}`);
+    add.addEventListener("click", () => {
+      rows.push({ nodeType: "", video: true, audio: false });
+      draw();
+    });
+    const save = h("button", { type: "button", class: "mcr-btn mcr-btn-primary", disabled: !this.#isAdmin }, t("mcr.save"));
+    save.addEventListener("click", async () => {
+      rows = rows.filter((r) => r.nodeType);
+      const r = await api("PUT", "/settings", { stageTypes: rows });
+      out.style.color = r.ok ? "var(--omp-preset)" : "var(--omp-error)";
+      out.textContent = r.ok ? t("mcr.chain.saved") : errText(r.data);
+      if (r.ok) await this.#loadGlobal();
+    });
+    return h("div", { class: "mcr-form" }, h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.chain.types")), note(t("mcr.chain.typesHint")), list, h("div", { class: "mcr-quick" }, add), h("div", { style: "display:flex;gap:12px;align-items:center" }, save, out)));
+  }
+
   // ---- Hausformat -----------------------------------------------------------------------------------------------------
 
   #paintHouse() {
@@ -740,7 +870,23 @@ class McrView extends HTMLElement {
       out.textContent = r.ok ? t("mcr.house.saved") : errText(r.data);
       if (r.ok) await this.#loadGlobal();
     });
-    page.append(h("h2", {}, t("mcr.tab.house")), h("p", { class: "mcr-sub" }, t("mcr.house.sub")), h("div", { class: "mcr-form" }, h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.house.global")), hf.el), h("div", { style: "display:flex;gap:12px;align-items:center" }, save, out), this.#isAdmin ? null : note(t("mcr.house.adminOnly"))));
+    const chain = chainEditor(this.#globalChain, this.#stageTypes, { canInherit: false });
+    const cout = h("div", { class: "mcr-hint", "aria-live": "polite", style: "min-height:18px" });
+    const csave = h("button", { class: "mcr-btn mcr-btn-primary", type: "button", disabled: !this.#isAdmin }, t("mcr.save"));
+    csave.addEventListener("click", async () => {
+      try {
+        const r = await api("PUT", "/settings", { chain: chain.read() ?? [] });
+        cout.style.color = r.ok ? "var(--omp-preset)" : "var(--omp-error)";
+        cout.textContent = r.ok ? t("mcr.chain.saved") : errText(r.data);
+        if (r.ok) await this.#loadGlobal();
+      } catch (e) {
+        cout.style.color = "var(--omp-error)";
+        cout.textContent = String((e as Error).message);
+      }
+    });
+    const types = this.#typesEditor();
+    page.append(h("h2", {}, t("mcr.tab.house")), h("p", { class: "mcr-sub" }, t("mcr.house.sub")), h("div", { class: "mcr-form" }, h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.house.global")), hf.el), h("div", { style: "display:flex;gap:12px;align-items:center" }, save, out), this.#isAdmin ? null : note(t("mcr.house.adminOnly"))),
+      h("div", { class: "mcr-form", style: "margin-top:18px" }, h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.chain.global")), note(t("mcr.chain.globalHint")), chain.el, h("div", { style: "display:flex;gap:12px;align-items:center" }, csave, cout)), types));
     this.#body.replaceChildren(page);
   }
 }

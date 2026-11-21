@@ -2,6 +2,9 @@
 // gibt die geprüfte Leitung zurück, nichts wird vorher gespeichert.
 import { apiFetch, t } from "../host.ts";
 import { field, h, input, modal, note, segmented, select } from "./mcr-dom.ts";
+import { chainEditor } from "./chain-editor.ts";
+import { type MonCfg, monitorEditor } from "./monitor-editor.ts";
+import { type Stage, type StageType } from "./chain-logic.ts";
 import { FORMAT_PRESETS, type HouseDraft, KINDS, type Kind, type LineDraft, validateHouse, validateLine } from "./mcr-logic.ts";
 
 const num = (v: string): number => Number(v.trim());
@@ -109,7 +112,7 @@ interface Track { label: string; channels: number[] }
 interface SrcNode { id: string; label: string; online: boolean; senders: SrcSender[] }
 
 /** Laufende Nodes mit Sendern (Quellen für eine Leitung): dedizierte SRT-/2110-Nodes, Kameras, Player … */
-async function loadSourceNodes(): Promise<SrcNode[]> {
+export async function loadSourceNodes(): Promise<SrcNode[]> {
   try {
     const r = await apiFetch("/api/v1/nodes");
     if (!r.ok) return [];
@@ -122,6 +125,14 @@ async function loadSourceNodes(): Promise<SrcNode[]> {
 
 /** Auswahl eines vorhandenen Nodes samt Bild- und Tonsender. `read()` liefert `transport.existing` oder null. */
 function existingFields(initial: Record<string, unknown> | undefined): { el: HTMLElement; read: () => Record<string, unknown> | null } {
+  // Bild, Ton und Daten aus verschiedenen Nodes (Matrix-Ansicht): hier nur anzeigen, unverändert lassen
+  if (initial && !initial.nodeId && (initial.videoNodeId || initial.audioNodeId || initial.dataNodeId)) {
+    const lbl = (k: string) => String(initial[`${k}NodeLabel`] || initial[`${k}NodeId`] || "–");
+    return {
+      el: h("div", { class: "mcr-form" }, note(t("mcr.src.split", { video: lbl("video"), audio: lbl("audio"), data: lbl("data") }))),
+      read: () => ({ ...initial }),
+    };
+  }
   let nodes: SrcNode[] = [];
   const node = select([], "");
   const vid = select([], "");
@@ -223,7 +234,7 @@ function existingFields(initial: Record<string, unknown> | undefined): { el: HTM
   };
 }
 
-export function openLineForm(initial: LineDraft | null, others: { id: string; name: string }[], opts: { structureLocked?: boolean } = {}): Promise<LineDraft | null> {
+export function openLineForm(initial: LineDraft | null, others: { id: string; name: string }[], opts: { structureLocked?: boolean; stageTypes?: StageType[] } = {}): Promise<LineDraft | null> {
   const d: LineDraft = initial ?? { name: "", kind: "srt", transport: {} };
   let kind: Kind = d.kind;
   const body = h("div", { class: "mcr-form" });
@@ -265,6 +276,21 @@ export function openLineForm(initial: LineDraft | null, others: { id: string; na
   hfBox.style.display = ownHouse.checked ? "" : "none";
   ownHouse.addEventListener("change", () => (hfBox.style.display = ownHouse.checked ? "" : "none"));
 
+  // Verarbeitungskette (erbt vom Event oder global, oder eigene)
+  const chain = chainEditor(d.chain as Stage[] | null | undefined, opts.stageTypes ?? [], { canInherit: true, inheritHint: t("mcr.chain.lineHint") });
+
+  // Überwachung (Profil/Abweichungen der Leitung) und Aufzeichnung
+  const mon = monitorEditor(d.monitoring as MonCfg | null | undefined, { withReactions: false });
+  const recCfg = (d.record ?? {}) as { house?: boolean; profileId?: string; dir?: string };
+  const recOn = h("input", { type: "checkbox" }) as HTMLInputElement;
+  recOn.checked = !!recCfg.house;
+  const recProfile = input(recCfg.profileId ?? "", { placeholder: "tams" });
+  const recDir = input(recCfg.dir ?? "", { placeholder: "mcr/event" });
+  const recBox = h("div", { class: "mcr-form-grid" }, field(t("mcr.rec.profile"), recProfile), field(t("mcr.rec.dir"), recDir));
+  const syncRec = () => (recBox.style.display = recOn.checked ? "" : "none");
+  recOn.addEventListener("change", syncRec);
+  syncRec();
+
   // Rückweg
   const rc = (d.intercom as any)?.return as Record<string, any> | undefined;
   const wantRet = h("input", { type: "checkbox" }) as HTMLInputElement;
@@ -295,6 +321,9 @@ export function openLineForm(initial: LineDraft | null, others: { id: string; na
     field(t("mcr.f.kind"), kindSeg),
     h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.f.transport")), srcSeg, tpBox, ex.el),
     h("div", { class: "mcr-fieldset" }, sw(ownHouse, t("mcr.f.ownHouse")), hfBox),
+    h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.chain.title")), chain.el),
+    h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.mon.title")), mon.el),
+    h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.rec.title")), h("label", { class: "mcr-sw" }, recOn, t("mcr.rec.house")), recBox, note(t("mcr.rec.hint"))),
     h("div", { class: "mcr-fieldset" }, sw(wantRet, t("mcr.f.wantReturn")), retBox),
   );
 
@@ -310,6 +339,14 @@ export function openLineForm(initial: LineDraft | null, others: { id: string; na
         transport = { existing: picked };
       }
       const out: LineDraft = { ...d, name: name.value.trim(), kind, transport };
+      const monitoring = mon.read();
+      if (monitoring) out.monitoring = monitoring as Record<string, unknown>;
+      else delete out.monitoring;
+      if (recOn.checked) out.record = { house: true, profileId: recProfile.value.trim(), ...(recDir.value.trim() ? { dir: recDir.value.trim() } : {}) };
+      else delete out.record;
+      const chosen = chain.read();
+      if (chosen === null) delete out.chain;
+      else out.chain = chosen as unknown[];
       out.houseFormat = null;
       if (ownHouse.checked) {
         const hd = hf.read();

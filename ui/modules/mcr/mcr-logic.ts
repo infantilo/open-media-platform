@@ -146,6 +146,10 @@ export interface LineDraft {
   avsync?: Record<string, unknown>;
   intercom?: Record<string, unknown>;
   normalize?: Record<string, unknown>;
+  /** Verarbeitungsstufen dieser Leitung; fehlt = erbt vom Event/global. */
+  chain?: unknown[] | null;
+  monitoring?: Record<string, unknown> | null;
+  record?: Record<string, unknown> | null;
 }
 
 /** Prüft eine Leitung vor dem Speichern; Rückgabe = Liste der Probleme (leer = in Ordnung). */
@@ -155,7 +159,7 @@ export function validateLine(l: LineDraft): string[] {
   const tr = l.transport ?? {};
   const s = (k: string) => String(tr[k] ?? "").trim();
   const ex = tr.existing as Record<string, unknown> | undefined;
-  const useExisting = !!ex && !!(ex.nodeId || ex.nodeLabel || ex.videoSenderId || ex.audioSenderId);
+  const useExisting = !!ex && !!(ex.nodeId || ex.nodeLabel || ex.videoSenderId || ex.audioSenderId || ex.videoNodeId || ex.audioNodeId || ex.dataNodeId || ex.dataSenderId);
   if (useExisting) {
     // vorhandener Node als Quelle: Adresse/Port der Leitungsart entfällt
   } else if (l.kind === "srt") {
