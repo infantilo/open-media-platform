@@ -179,7 +179,7 @@ fn copy_plane(frame: &mut gst_video::VideoFrame<gst_video::video_frame::Writable
 /// berechnet daraus das Ausgabebild — `None`, falls Caps/Puffer (noch)
 /// nicht vorliegen (z. B. der allererste Sample vor abgeschlossener
 /// Verhandlung).
-fn render_from_sample(sample: &gst::Sample) -> Option<(scope_image::Image, Vec<u8>, Vec<u8>, Vec<u8>)> {
+fn render_from_sample(sample: &gst::Sample, render_image: bool) -> Option<(Option<scope_image::Image>, Vec<u8>, Vec<u8>, Vec<u8>)> {
     let caps = sample.caps()?;
     let info = gst_video::VideoInfo::from_caps(caps).ok()?;
     let buffer = sample.buffer()?;
@@ -206,7 +206,8 @@ fn render_from_sample(sample: &gst::Sample) -> Option<(scope_image::Image, Vec<u
     // Das Luma-Plane wird zusätzlich zurückgegeben: die QC-Messung
     // (Schwarz-/Standbild) rechnet auf demselben bereits skalierten
     // Analysebild weiter, statt eine zweite Skalierkette zu betreiben.
-    let image = scope_image::render(&y, &u, &v);
+    // Überwachungsmodus (`OMP_SCOPE_MODE=monitor`): kein Waveform-/Vektorskop-Bild, nur die Messwerte (spart CPU).
+    let image = render_image.then(|| scope_image::render(&y, &u, &v));
     Some((image, y, u, v))
 }
 
@@ -382,6 +383,7 @@ fn build(
 
     let app_sink: gst_app::AppSink = analysis_sink.dynamic_cast().map_err(|_| "appsink: cast to AppSink failed".to_string())?;
     let app_src: gst_app::AppSrc = scope_src.dynamic_cast().map_err(|_| "appsrc: cast to AppSrc failed".to_string())?;
+    let render_image = !crate::monitor::rt().monitor_mode;
     let qc = measurements.qc.clone();
     let qc_context = context.clone();
     let flow_meta = measurements.flow.clone();
@@ -389,7 +391,7 @@ fn build(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |sink| {
                 let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                if let Some((image, luma, cb, cr)) = render_from_sample(&sample) {
+                if let Some((image, luma, cb, cr)) = render_from_sample(&sample, render_image) {
                     {
                         let mut qc = qc.lock().expect("lock poisoned");
                         let now = qc_context.now_ns();
@@ -404,7 +406,9 @@ fn build(
                         mon.feed("black", snap.mean_luma_percent.is_some_and(|p| p * 2.55 <= mon.cfg("black").threshold), now, None);
                         mon.feed("freeze", snap.frame_diff.is_some_and(|d| d <= mon.cfg("freeze").threshold), now, None);
                     }
-                    if let Ok(out_buffer) = build_output_buffer(&output_info, &image) {
+                    if let Some(image) = &image
+                        && let Ok(out_buffer) = build_output_buffer(&output_info, image)
+                    {
                         let _ = app_src.push_buffer(out_buffer);
                     }
                 }

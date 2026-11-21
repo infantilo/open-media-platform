@@ -63,6 +63,31 @@ const TALLY_BORDER_PX: i32 = 6;
 const TALLY_COLOR_OFF: u32 = 0xFF3A3A3A;
 /// Broadcast-übliches Tally-Rot.
 const TALLY_COLOR_ON: u32 = 0xFFE53935;
+/// Alarm-Rahmenfarben (Vorrang vor Tally): Ampel Grün/Gelb/Rot.
+const ALARM_COLOR_OK: u32 = 0xFF2E9E5B;
+const ALARM_COLOR_WARN: u32 = 0xFFE0A100;
+const ALARM_COLOR_BAD: u32 = 0xFFD7263D;
+
+/// Nach einem Neuaufbau: gespeicherte Alarmfarben auf die neuen Rahmen setzen.
+fn reapply_alarms(alarms: &Arc<Mutex<HashMap<String, u32>>>, borders: &Arc<Mutex<HashMap<String, gst::Element>>>) {
+    let a = alarms.lock().expect("lock poisoned");
+    let b = borders.lock().expect("lock poisoned");
+    for (id, c) in a.iter() {
+        if let Some(el) = b.get(id) {
+            el.set_property("foreground-color", *c);
+        }
+    }
+}
+
+/// Rahmenfarbe zu einer Alarmstufe ("ok" | "warn" | "bad"); `None` bei unbekannter oder leerer Stufe.
+pub fn alarm_color(level: &str) -> Option<u32> {
+    match level {
+        "ok" => Some(ALARM_COLOR_OK),
+        "warn" => Some(ALARM_COLOR_WARN),
+        "bad" => Some(ALARM_COLOR_BAD),
+        _ => None,
+    }
+}
 const PLACEHOLDER_COLOR: u32 = 0xFF1A1A1A;
 /// CPU-Optimierung 2026-10-09: Live-Kacheln werden nur mit dieser Rate aus
 /// MXL gelesen (`MxlVideoInput::max_fps`, Grains werden vor der Kopie
@@ -152,9 +177,32 @@ pub struct PipelineHandle {
     /// Property-Set-Pfad (s. Moduldoku) — bei jedem strukturellen Rebuild
     /// neu befüllt.
     tally_borders: Arc<Mutex<HashMap<String, gst::Element>>>,
+    /// Kachel-ID → Alarmstufe; hat Vorrang vor Tally und überlebt einen Neuaufbau (`reapply_alarms`).
+    alarms: Arc<Mutex<HashMap<String, u32>>>,
 }
 
 impl PipelineHandle {
+    /// Setzt die Alarmstufe einer Kachel (`None` = kein Alarm, Tally gilt wieder). Reines Property-Set, kein Neuaufbau.
+    pub fn set_alarm(&self, pip_id: &str, level: Option<&str>) {
+        let color = level.and_then(alarm_color);
+        {
+            let mut a = self.alarms.lock().expect("lock poisoned");
+            match color {
+                Some(c) => {
+                    a.insert(pip_id.to_string(), c);
+                }
+                None => {
+                    a.remove(pip_id);
+                }
+            }
+        }
+        if let Some(c) = color
+            && let Some(el) = self.tally_borders.lock().expect("lock poisoned").get(pip_id)
+        {
+            el.set_property("foreground-color", c);
+        }
+    }
+
     /// Schaltet das Einbrennen des Untertitels in den PGM-Ausgang (nicht in die Browser-Vorschau).
     pub fn set_burn(&self, on: bool) {
         let _ = self.commands.send(Command::SetBurn(on));
@@ -168,6 +216,9 @@ impl PipelineHandle {
     /// gerade nicht existiert (z. B. ein spätes Tally-Event für eine seit
     /// dem letzten Rebuild entfernte Kachel).
     pub fn set_tally(&self, pip_id: &str, on: bool) {
+        if self.alarms.lock().expect("lock poisoned").contains_key(pip_id) {
+            return; // Alarmfarbe hat Vorrang vor Tally
+        }
         let borders = self.tally_borders.lock().expect("lock poisoned");
         if let Some(el) = borders.get(pip_id) {
             el.set_property("foreground-color", if on { TALLY_COLOR_ON } else { TALLY_COLOR_OFF });
@@ -656,6 +707,7 @@ pub fn run(
 
     let flowed_slot: Arc<Mutex<Vec<Arc<AtomicBool>>>> = Arc::new(Mutex::new(Vec::new()));
     let tally_borders_slot: Arc<Mutex<HashMap<String, gst::Element>>> = Arc::new(Mutex::new(HashMap::new()));
+    let alarms_slot: Arc<Mutex<HashMap<String, u32>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let mut current_layout = Layout { canvas_width: DEFAULT_CANVAS_WIDTH, canvas_height: DEFAULT_CANVAS_HEIGHT, pips: Vec::new() };
     let mut burn = initial_burn;
@@ -663,6 +715,7 @@ pub fn run(
         Ok(p) => {
             *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
             *tally_borders_slot.lock().expect("lock poisoned") = p.tally_borders.clone();
+            reapply_alarms(&alarms_slot, &tally_borders_slot);
             Some(p)
         }
         Err(e) => {
@@ -677,6 +730,7 @@ pub fn run(
         commands: commands_tx,
         flowed: flowed_slot.clone(),
         tally_borders: tally_borders_slot.clone(),
+        alarms: alarms_slot.clone(),
     }));
 
     loop {
@@ -695,6 +749,7 @@ pub fn run(
                         Ok(p) => {
                             *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
                             *tally_borders_slot.lock().expect("lock poisoned") = p.tally_borders.clone();
+                            reapply_alarms(&alarms_slot, &tally_borders_slot);
                             active = Some(p);
                         }
                         Err(e) => {
@@ -712,6 +767,7 @@ pub fn run(
                         Ok(p) => {
                             *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
                             *tally_borders_slot.lock().expect("lock poisoned") = p.tally_borders.clone();
+                            reapply_alarms(&alarms_slot, &tally_borders_slot);
                             active = Some(p);
                         }
                         Err(e) => {
@@ -743,6 +799,7 @@ pub fn run(
                 {
                     *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
                     *tally_borders_slot.lock().expect("lock poisoned") = p.tally_borders.clone();
+                    reapply_alarms(&alarms_slot, &tally_borders_slot);
                     active = Some(p);
                 }
             }

@@ -62,6 +62,9 @@ struct PipConfig {
     height: u32,
     #[serde(default)]
     umd: String,
+    /// Alarmstufe der Kachel ("ok" | "warn" | "bad"; leer = keine): färbt den Rahmen, Vorrang vor Tally, ohne Neuaufbau.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    alarm: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -125,6 +128,12 @@ fn validate_layout(layout: &Layout) -> Result<(), String> {
         }
         if pip.width < MIN_PIP_SIZE || pip.height < MIN_PIP_SIZE {
             return Err(format!("pip {:?}: width/height below minimum {MIN_PIP_SIZE}", pip.id));
+        }
+        if let Some(a) = pip.alarm.as_deref()
+            && !a.is_empty()
+            && pipeline::alarm_color(a).is_none()
+        {
+            return Err(format!("pip {:?}: unknown alarm level {a:?} (ok|warn|bad)", pip.id));
         }
     }
     Ok(())
@@ -315,6 +324,9 @@ impl MultiviewerCustomStore {
             resolve_pips(&layout, &sources)
         };
         self.pipeline.set_layout(layout.canvas_width, layout.canvas_height, resolved);
+        for pip in &layout.pips {
+            self.pipeline.set_alarm(&pip.id, pip.alarm.as_deref());
+        }
         *self.layout.lock().expect("lock poisoned") = layout;
         Ok(())
     }
@@ -821,7 +833,7 @@ mod tests {
     use super::*;
 
     fn pip(id: &str, sender_id: Option<&str>) -> PipConfig {
-        PipConfig { id: id.to_string(), sender_id: sender_id.map(str::to_string), x: 0, y: 0, width: 480, height: 270, umd: String::new() }
+        PipConfig { id: id.to_string(), sender_id: sender_id.map(str::to_string), x: 0, y: 0, width: 480, height: 270, umd: String::new(), alarm: None }
     }
 
     #[test]
@@ -941,5 +953,16 @@ mod tests {
         assert_eq!(urlencoding_decode("%2"), "%2");
         assert_eq!(urlencoding_decode("%zz"), "%zz");
         assert_eq!(urlencoding_decode("100%€"), "100%€");
+    }
+
+    #[test]
+    fn alarm_level_is_validated_and_optional() {
+        let mut layout = Layout::default();
+        layout.pips.push(PipConfig { alarm: Some("bad".into()), ..pip("p1", None) });
+        layout.pips.push(PipConfig { alarm: Some(String::new()), ..pip("p2", None) });
+        layout.pips.push(pip("p3", None));
+        assert!(validate_layout(&layout).is_ok());
+        layout.pips.push(PipConfig { alarm: Some("rot".into()), ..pip("p4", None) });
+        assert!(validate_layout(&layout).unwrap_err().contains("alarm"));
     }
 }
