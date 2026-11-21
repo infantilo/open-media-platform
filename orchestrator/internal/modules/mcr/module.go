@@ -44,6 +44,8 @@ func (*Module) Features() []module.FeatureDef {
 	return []module.FeatureDef{
 		{ID: FeatManage, Label: map[string]string{"de": "Events und Leitungen verwalten", "en": "Manage events and lines"}, Group: g,
 			Description: map[string]string{"de": "Events, Vorlagen und Leitungen anlegen, ändern und löschen.", "en": "Create, change and delete events, templates and lines."}},
+		{ID: FeatView, Label: map[string]string{"de": "Alle Events ansehen", "en": "See all events"}, Group: g,
+			Description: map[string]string{"de": "Alle Events, Überwachung und Alarme ansehen (nur lesen). Ohne dieses Recht sieht die Person nur Events, in denen sie Mitglied oder verantwortlich ist.", "en": "See all events, monitoring and alarms (read only). Without it the person only sees events they are a member of or responsible for."}},
 		{ID: FeatLive, Label: map[string]string{"de": "Event bedienen", "en": "Operate event"}, Group: g,
 			Description: map[string]string{"de": "Ein Event in Test, auf Sendung und in den Abbau schalten sowie den A/V-Versatz der Leitungen messen und übernehmen (Bedienansicht).", "en": "Move an event to test, live and teardown and measure and apply the A/V offset of its lines (operator view)."}},
 	}
@@ -51,7 +53,7 @@ func (*Module) Features() []module.FeatureDef {
 
 func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	m.svc = &Service{St: NewStore(d.DB), Settings: d.Settings, Audit: d.Audit, Run: m.rt}
-	a := &api{svc: m.svc}
+	a := &api{svc: m.svc, access: d.Access}
 	r.Handle("GET /api/v1/mcr/templates", module.Authenticated(), a.listTemplates())
 	r.Handle("POST /api/v1/mcr/templates", module.Feature(FeatManage), a.createTemplate())
 	r.Handle("PUT /api/v1/mcr/templates/{id}", module.Feature(FeatManage), a.updateTemplate())
@@ -59,13 +61,20 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	r.Handle("GET /api/v1/mcr/events", module.Authenticated(), a.listEvents())
 	r.Handle("POST /api/v1/mcr/events", module.Feature(FeatManage), a.createEvent())
 	r.Handle("GET /api/v1/mcr/events/{id}", module.Authenticated(), a.getEvent())
-	r.Handle("PUT /api/v1/mcr/events/{id}", module.Feature(FeatManage), a.updateEvent())
-	r.Handle("DELETE /api/v1/mcr/events/{id}", module.Feature(FeatManage), a.deleteEvent())
-	r.Handle("POST /api/v1/mcr/events/{id}/transition", module.Feature(FeatLive), a.transition())
+	r.Handle("PUT /api/v1/mcr/events/{id}", module.Authenticated(), a.updateEvent())
+	r.Handle("DELETE /api/v1/mcr/events/{id}", module.Authenticated(), a.deleteEvent())
+	r.Handle("POST /api/v1/mcr/events/{id}/transition", module.Authenticated(), a.transition())
 	r.Handle("PUT /api/v1/mcr/events/{id}/members", module.Feature(FeatManage), a.putMembers())
+	r.Handle("GET /api/v1/mcr/events/{id}/alarms", module.Authenticated(), a.eventAlarms())
+	r.Handle("POST /api/v1/mcr/events/{id}/alarms/{alarmId}/ack", module.Authenticated(), a.ackAlarm())
+	r.Handle("POST /api/v1/mcr/events/{id}/alarm-pip", module.Authenticated(), a.pipLock())
+	r.Handle("GET /api/v1/mcr/alarms/history", module.Authenticated(), a.alarmHistory())
+	r.Handle("GET /api/v1/mcr/monitor", module.Authenticated(), a.wall())
+	r.Handle("POST /api/v1/mcr/events/{id}/lines/{lineId}/monitor", module.Authenticated(), a.station())
+	r.Handle("GET /api/v1/mcr/events/{id}/precheck", module.Authenticated(), a.precheck())
 	r.Handle("GET /api/v1/mcr/events/{id}/status", module.Authenticated(), a.status())
-	r.Handle("POST /api/v1/mcr/events/{id}/lines/{lineId}/measure", module.Feature(FeatLive, FeatManage), a.measure())
-	r.Handle("PUT /api/v1/mcr/events/{id}/lines/{lineId}/avsync", module.Feature(FeatLive, FeatManage), a.putAvsync())
+	r.Handle("POST /api/v1/mcr/events/{id}/lines/{lineId}/measure", module.Authenticated(), a.measure())
+	r.Handle("PUT /api/v1/mcr/events/{id}/lines/{lineId}/avsync", module.Authenticated(), a.putAvsync())
 	// Beobachter: Übernimmt der Bediener einen Messwert am Node (`avsync.apply`), geht er auch in die Datenbank
 	// (Quelle der Wahrheit), sonst wäre er nach Stop/Start weg.
 	if d.Hooks != nil && m.rt != nil {
@@ -74,6 +83,14 @@ func (m *Module) Mount(r module.Routes, d module.Deps) error {
 	r.Handle("GET /api/v1/mcr/settings", module.Authenticated(), a.getSettings())
 	r.Handle("PUT /api/v1/mcr/settings", module.Verb(authz.VerbAdmin), a.putSettings())
 	return nil
+}
+
+// WatchAlarms hört den Alarmbus ab und führt die Alarmhistorie (nur auf dem Leader aufrufen).
+func (m *Module) WatchAlarms(ctx context.Context, hub Subscriber) {
+	if m.rt == nil || m.svc == nil {
+		return
+	}
+	m.rt.WatchAlarms(ctx, m.svc, hub)
 }
 
 // Start: regelmäßiger Abgleich der laufenden Events (nur auf dem Raft-Leader).
@@ -129,6 +146,9 @@ func (m *Module) onAvsyncMethod(c module.MethodCall) {
 // RoleEnvHook ergänzt beim Start jeder Rolle eines MCR-Workflows die Umgebung aus der **Datenbank** (Hausformat, Eingangseinstellungen,
 // Dateipfad der Passphrase). Er läuft im Workflow-Dienst (`RegisterRoleEnvHook`); für fremde Workflows liefert er nichts.
 func (m *Module) RoleEnvHook(def workflows.Definition, role workflows.Role) map[string]string {
+	if env := MonitorEnv(def, role); env != nil {
+		return env
+	}
 	if m.svc == nil || m.rt == nil || !strings.HasPrefix(def.Description, DescriptionPrefix) {
 		return nil
 	}
@@ -140,7 +160,7 @@ func (m *Module) RoleEnvHook(def workflows.Definition, role workflows.Role) map[
 		return nil
 	}
 	g, _ := m.svc.GlobalHouse()
-	_, _, envs, err := Materialize(e, g, m.rt.secrets())
+	_, _, envs, err := Materialize(e, g, m.rt.secrets(), m.svc.ChainConfig())
 	if err != nil {
 		slog.Warn("mcr: Startumgebung", "event", e.ID, "error", err)
 		return nil
@@ -191,7 +211,7 @@ func (m *Module) SourceName(workflowID, role string) (string, bool) {
 				if err != nil {
 					continue
 				}
-				for r, n := range SourceNames(full) {
+				for r, n := range SourceNames(full, m.svc.ChainConfig()) {
 					names[full.WorkflowID+"|"+r] = n
 				}
 			}

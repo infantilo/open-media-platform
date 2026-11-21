@@ -151,40 +151,49 @@ func (f mcrFabric) Connect(ctx context.Context, fromSender, toReceiver string) e
 
 const mcrFormatVideo = "urn:x-nmos:format:video"
 
-// Link verbindet Bild- und Tonsender eines vorhandenen Nodes mit dem Normalizer (106.x „vorhandene Quelle“).
-func (f mcrFabric) Link(ctx context.Context, src mcrmod.Existing, normalizerInstance string) error {
-	var from registry.NodeView
-	found := false
-	for _, n := range f.nodes.List() {
-		if !n.Online {
-			continue
-		}
-		hasID := func(id string) bool {
-			for _, s := range n.Senders {
-				if s.ID == id {
-					return true
+const mcrFormatData = "urn:x-nmos:format:data"
+
+// Link verbindet Bild-, Ton- und Datensender vorhandener Nodes mit dem Normalizer (106.x „vorhandene Quelle“). Bild, Ton und
+// Daten dürfen aus verschiedenen Nodes kommen (Existing.VideoNodeID/AudioNodeID/DataNodeID, sonst NodeID).
+func (f mcrFabric) Link(ctx context.Context, src mcrmod.Existing, videoInstance, audioInstance string) error {
+	normV, ok := f.node(videoInstance)
+	if !ok {
+		return fmt.Errorf("Instanz %s ist nicht online", videoInstance)
+	}
+	normA, ok := f.node(audioInstance)
+	if !ok {
+		return fmt.Errorf("Instanz %s ist nicht online", audioInstance)
+	}
+	online := f.nodes.List()
+	// findNode sucht den Node einer Art: nach ID, nach Sender-ID, sonst nach Bezeichnung.
+	findNode := func(id, label, sender string) (registry.NodeView, bool) {
+		for _, n := range online {
+			if !n.Online {
+				continue
+			}
+			if id != "" && n.ID == id {
+				return n, true
+			}
+			if sender != "" {
+				for _, s := range n.Senders {
+					if s.ID == sender {
+						return n, true
+					}
 				}
 			}
-			return false
 		}
-		if (src.NodeID != "" && n.ID == src.NodeID) || (src.VideoSenderID != "" && hasID(src.VideoSenderID)) || (src.AudioSenderID != "" && hasID(src.AudioSenderID)) {
-			from, found = n, true
-			break
+		if id == "" && sender == "" && label != "" {
+			for _, n := range online {
+				if n.Online && n.Label == label {
+					return n, true
+				}
+			}
 		}
-		if !found && src.NodeID == "" && src.NodeLabel != "" && n.Label == src.NodeLabel {
-			from, found = n, true
-		}
+		return registry.NodeView{}, false
 	}
-	if !found {
-		return fmt.Errorf("Quelle „%s“ ist nicht online", src.NodeLabel)
-	}
-	norm, ok := f.node(normalizerInstance)
-	if !ok {
-		return fmt.Errorf("Normalizer-Instanz %s ist nicht online", normalizerInstance)
-	}
-	pick := func(wanted, format string) string {
+	pick := func(n registry.NodeView, wanted, format string) string {
 		first := ""
-		for _, s := range from.Senders {
+		for _, s := range n.Senders {
 			if wanted != "" && s.ID == wanted {
 				return s.ID
 			}
@@ -198,6 +207,10 @@ func (f mcrFabric) Link(ctx context.Context, src mcrmod.Existing, normalizerInst
 		return first
 	}
 	recv := func(format string) string {
+		norm := normV // Bild und Daten: erstes Glied der Kette, das Bild annimmt
+		if format == mcrFormatAudio {
+			norm = normA
+		}
 		for _, r := range norm.Receivers {
 			if r.Format == format {
 				return r.ID
@@ -205,18 +218,114 @@ func (f mcrFabric) Link(ctx context.Context, src mcrmod.Existing, normalizerInst
 		}
 		return ""
 	}
+	type part struct {
+		name, nodeID, nodeLabel, sender, format string
+		wanted                                  bool
+	}
+	first := func(a, b string) string {
+		if a != "" {
+			return a
+		}
+		return b
+	}
+	// Eine Art ist gewählt, wenn ein eigener Node/Sender genannt ist oder (ältere Form) die gemeinsame Quelle gilt.
+	shared := src.NodeID != "" || src.NodeLabel != ""
+	parts := []part{
+		{"Bild", first(src.VideoNodeID, src.NodeID), first(src.VideoNodeLabel, src.NodeLabel), src.VideoSenderID, mcrFormatVideo, src.VideoNodeID != "" || src.VideoSenderID != "" || shared},
+		{"Ton", first(src.AudioNodeID, src.NodeID), first(src.AudioNodeLabel, src.NodeLabel), src.AudioSenderID, mcrFormatAudio, src.AudioNodeID != "" || src.AudioSenderID != "" || shared},
+		{"Daten", src.DataNodeID, src.DataNodeLabel, src.DataSenderID, mcrFormatData, src.DataNodeID != "" || src.DataSenderID != ""},
+	}
 	linked := 0
-	for _, pair := range [][2]string{{pick(src.VideoSenderID, mcrFormatVideo), recv(mcrFormatVideo)}, {pick(src.AudioSenderID, mcrFormatAudio), recv(mcrFormatAudio)}} {
-		if pair[0] == "" || pair[1] == "" {
+	var missing []string
+	for _, p := range parts {
+		if !p.wanted {
 			continue
 		}
-		if err := f.graph.Connect(ctx, pair[0], pair[1]); err != nil {
+		n, found := findNode(p.nodeID, p.nodeLabel, p.sender)
+		if !found {
+			missing = append(missing, fmt.Sprintf("%s: Quelle „%s“ ist nicht online", p.name, first(p.nodeLabel, p.nodeID)))
+			continue
+		}
+		from, to := pick(n, p.sender, p.format), recv(p.format)
+		if from == "" || to == "" {
+			continue
+		}
+		if err := f.graph.Connect(ctx, from, to); err != nil {
+			return err
+		}
+		linked++
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%s", strings.Join(missing, "; "))
+	}
+	if linked == 0 {
+		return fmt.Errorf("die Quellen haben keinen zum Normalizer passenden Bild-, Ton- oder Datensender")
+	}
+	return nil
+}
+
+// VideoSender: Bild-Sender einer Instanz (Normalizer-Ausgang für die Kachel im Multiviewer).
+func (f mcrFabric) VideoSender(instanceID string) (string, bool) {
+	n, ok := f.node(instanceID)
+	if !ok {
+		return "", false
+	}
+	for _, s := range n.Senders {
+		if s.Format == mcrFormatVideo {
+			return s.ID, true
+		}
+	}
+	return "", false
+}
+
+// LinkInstances verbindet Bild- und Tonsender der ersten mit den passenden Empfängern der zweiten Instanz (Überwachung).
+func (f mcrFabric) LinkInstances(ctx context.Context, fromVideo, fromAudio, toInstance string) error {
+	to, ok := f.node(toInstance)
+	if !ok {
+		return fmt.Errorf("Instanz %s ist nicht online", toInstance)
+	}
+	linked := 0
+	for _, format := range []string{mcrFormatVideo, mcrFormatAudio} {
+		fromInstance := fromVideo // Bild und Ton können aus verschiedenen Gliedern der Kette kommen
+		if format == mcrFormatAudio {
+			fromInstance = fromAudio
+		}
+		from, ok := f.node(fromInstance)
+		if !ok {
+			continue
+		}
+		s, r := "", ""
+		for _, x := range from.Senders {
+			if x.Format == format {
+				s = x.ID
+				break
+			}
+		}
+		for _, x := range to.Receivers {
+			if x.Format == format {
+				r = x.ID
+				break
+			}
+		}
+		if s == "" || r == "" {
+			continue
+		}
+		if err := f.graph.Connect(ctx, s, r); err != nil {
 			return err
 		}
 		linked++
 	}
 	if linked == 0 {
-		return fmt.Errorf("Quelle „%s“ hat keinen passenden Bild- oder Tonsender", from.Label)
+		return fmt.Errorf("kein passendes Sender-/Empfängerpaar zu Instanz %s", toInstance)
 	}
 	return nil
+}
+
+// NodeID: IS-04-Node-ID der Instanz (Vorschau-Stream und Bedienoberfläche liegen unter /api/v1/nodes/<id>).
+func (f mcrFabric) NodeID(instanceID string) (string, bool) {
+	n, ok := f.node(instanceID)
+	if !ok {
+		return "", false
+	}
+	return n.ID, true
 }

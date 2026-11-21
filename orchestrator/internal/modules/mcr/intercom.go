@@ -169,7 +169,7 @@ func (ic *Intercom) Ensure(ctx context.Context, rt *Runtime, s *Service, e Event
 		switch p.Action {
 		case "direct":
 			src := roles[p.SourceLine]
-			inst := instances(src.Normalizer)
+			inst := instances(src.AudioOut())
 			if inst == "" {
 				warns = append(warns, fmt.Sprintf("Rückweg „%s“: Quellleitung läuft noch nicht", l.Name))
 				continue

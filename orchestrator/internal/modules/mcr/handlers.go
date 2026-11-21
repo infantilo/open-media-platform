@@ -10,7 +10,10 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/module"
 )
 
-type api struct{ svc *Service }
+type api struct {
+	svc    *Service
+	access module.Access
+}
 
 func actorOf(r *http.Request) string {
 	if u := module.Actor(r); u != "" {
@@ -33,6 +36,8 @@ func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		code = http.StatusNotFound
+	case errors.Is(err, ErrForbidden):
+		code, body["code"] = http.StatusForbidden, "forbidden"
 	case errors.Is(err, ErrConfirm):
 		code, body["code"] = http.StatusConflict, "confirmation_required"
 	case errors.Is(err, ErrState):
@@ -129,7 +134,7 @@ func (a *api) listEvents() http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"events": out, "lifecycle": Graph()})
+		writeJSON(w, 200, map[string]any{"events": a.visibleEvents(r.Context(), r, out), "lifecycle": Graph()})
 	}
 }
 
@@ -151,7 +156,73 @@ func (a *api) createEvent() http.HandlerFunc {
 
 func (a *api) getEvent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		out, err := a.svc.GetEvent(r.Context(), r.PathValue("id"))
+		out, ok := a.authorize(w, r, r.PathValue("id"), ActView)
+		if !ok {
+			return
+		}
+		acc := AccessOf(a.actor(r), out)
+		out.Access = &acc
+		writeJSON(w, 200, out)
+	}
+}
+
+// wall liefert die Multiview-Wand; `?watch=id1,id2` nennt Events, deren Bild gerade angezeigt wird.
+func (a *api) wall() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if a.svc.Run == nil {
+			writeJSON(w, 200, map[string]any{"events": []any{}})
+			return
+		}
+		var watch []string
+		if v := r.URL.Query().Get("watch"); v != "" {
+			watch = strings.Split(v, ",")
+		}
+		who := a.actor(r)
+		out, err := a.svc.Run.WallFor(r.Context(), a.svc, watch, a.visibleTo(r), func(e Event) *EventAccess {
+			acc := AccessOf(who, e)
+			return &acc
+		})
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"events": out})
+	}
+}
+
+// station routet eine Leitung zum Abhören oder auf das Messgerät.
+func (a *api) station() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Action string `json:"action"`
+		}
+		if err := readBody(r, &in); err != nil {
+			writeErr(w, err)
+			return
+		}
+		e, ok := a.authorize(w, r, r.PathValue("id"), ActTest)
+		if !ok {
+			return
+		}
+		if a.svc.Run == nil || (e.State != StateTesting && e.State != StateLive) {
+			writeErr(w, ErrState)
+			return
+		}
+		out, err := a.svc.Run.StationRoute(r.Context(), a.svc, e, r.PathValue("lineId"), in.Action)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, 200, out)
+	}
+}
+
+func (a *api) precheck() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := a.authorize(w, r, r.PathValue("id"), ActView); !ok {
+			return
+		}
+		out, err := a.svc.Precheck(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -174,6 +245,9 @@ func (a *api) updateEvent() http.HandlerFunc {
 			writeErr(w, bad("ungültige Felder: %v", err))
 			return
 		}
+		if _, ok := a.authorize(w, r, r.PathValue("id"), ActEdit); !ok {
+			return
+		}
 		_, replace := raw["lines"]
 		out, err := a.svc.UpdateEvent(r.Context(), r.PathValue("id"), in, replace, actorOf(r))
 		if err != nil {
@@ -186,6 +260,9 @@ func (a *api) updateEvent() http.HandlerFunc {
 
 func (a *api) deleteEvent() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := a.authorize(w, r, r.PathValue("id"), ActEdit); !ok {
+			return
+		}
 		if err := a.svc.DeleteEvent(r.Context(), r.PathValue("id"), actorOf(r)); err != nil {
 			writeErr(w, err)
 			return
@@ -202,6 +279,14 @@ func (a *api) transition() http.HandlerFunc {
 		}
 		if err := readBody(r, &in); err != nil {
 			writeErr(w, err)
+			return
+		}
+		cur, ok := a.authorize(w, r, r.PathValue("id"), ActView)
+		if !ok {
+			return
+		}
+		if !Allowed(a.actor(r), cur, TransitionAction(cur.State, in.To)) {
+			writeErr(w, ErrForbidden)
 			return
 		}
 		out, err := a.svc.Transition(r.Context(), r.PathValue("id"), in.To, actorOf(r), in.Confirm)
@@ -222,6 +307,9 @@ func (a *api) putMembers() http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
+		if _, ok := a.authorize(w, r, r.PathValue("id"), ActMembers); !ok {
+			return
+		}
 		out, err := a.svc.SetMembers(r.Context(), r.PathValue("id"), in.Members, actorOf(r))
 		if err != nil {
 			writeErr(w, err)
@@ -238,26 +326,58 @@ func (a *api) getSettings() http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"houseFormat": h})
+		writeJSON(w, 200, map[string]any{"houseFormat": h, "chain": a.svc.chainOrEmpty(), "stageTypes": a.svc.StageTypes(), "alarmRetentionDays": a.svc.AlarmRetentionDays()})
 	}
 }
 
 func (a *api) putSettings() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var in struct {
-			HouseFormat json.RawMessage `json:"houseFormat"`
-		}
+		// Nur gesendete Teile ändern: ein fehlendes Feld lässt den Wert unberührt.
+		var in map[string]json.RawMessage
 		if err := readBody(r, &in); err != nil {
 			writeErr(w, err)
 			return
 		}
-		if err := a.svc.SetGlobalHouse(in.HouseFormat); err != nil {
-			writeErr(w, err)
-			return
+		if raw, ok := in["houseFormat"]; ok {
+			if err := a.svc.SetGlobalHouse(raw); err != nil {
+				writeErr(w, err)
+				return
+			}
+			a.svc.audit(actorOf(r), "settings", "settings.houseFormat", nil)
 		}
-		a.svc.audit(actorOf(r), "settings", "settings.houseFormat", nil)
+		if raw, ok := in["alarmRetentionDays"]; ok {
+			var n int
+			if err := json.Unmarshal(raw, &n); err != nil {
+				writeErr(w, bad("alarmRetentionDays: %v", err))
+				return
+			}
+			if err := a.svc.SetAlarmRetentionDays(n); err != nil {
+				writeErr(w, err)
+				return
+			}
+		}
+		chain, hasChain := in["chain"]
+		var types *[]StageType
+		if raw, ok := in["stageTypes"]; ok {
+			var ts []StageType
+			if err := json.Unmarshal(raw, &ts); err != nil {
+				writeErr(w, bad("stageTypes: %v", err))
+				return
+			}
+			types = &ts
+		}
+		if hasChain || types != nil {
+			if !hasChain {
+				chain = nil
+			}
+			if err := a.svc.SetChainSettings(chain, types); err != nil {
+				writeErr(w, err)
+				return
+			}
+			a.svc.audit(actorOf(r), "settings", "settings.chain", nil)
+		}
 		h, _ := a.svc.GlobalHouse()
-		writeJSON(w, 200, map[string]any{"houseFormat": h})
+		writeJSON(w, 200, map[string]any{"houseFormat": h, "chain": a.svc.chainOrEmpty(), "stageTypes": a.svc.StageTypes(), "alarmRetentionDays": a.svc.AlarmRetentionDays()})
 	}
 }
 
@@ -274,15 +394,15 @@ func (a *api) noRuntime(w http.ResponseWriter) bool {
 // status: Zustand je Leitung aus den Node-Parametern, ein Aufruf statt vieler Einzelabfragen.
 func (a *api) status() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		e, err := a.svc.GetEvent(r.Context(), r.PathValue("id"))
-		if err != nil {
-			writeErr(w, err)
+		e, ok := a.authorize(w, r, r.PathValue("id"), ActView)
+		if !ok {
 			return
 		}
 		if a.svc.Run == nil {
 			writeJSON(w, 200, map[string]any{"eventId": e.ID, "state": e.State, "lines": []any{}})
 			return
 		}
+		a.svc.Run.Watch(e.ID) // jemand sieht zu: Multiviewer der Überwachung bereithalten
 		out, err := a.svc.Run.Status(r.Context(), a.svc, e)
 		if err != nil {
 			writeErr(w, err)
@@ -305,9 +425,8 @@ func (a *api) measure() http.HandlerFunc {
 		if in.Seconds <= 0 {
 			in.Seconds = 10
 		}
-		e, err := a.svc.GetEvent(r.Context(), r.PathValue("id"))
-		if err != nil {
-			writeErr(w, err)
+		e, ok := a.authorize(w, r, r.PathValue("id"), ActTest)
+		if !ok {
 			return
 		}
 		inst, err := a.svc.Run.NormalizerInstance(a.svc, e, r.PathValue("lineId"))
@@ -332,11 +451,49 @@ func (a *api) putAvsync() http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
+		if _, ok := a.authorize(w, r, r.PathValue("id"), ActTest); !ok {
+			return
+		}
 		out, err := a.svc.SetLineAvsync(r.Context(), r.PathValue("id"), r.PathValue("lineId"), raw, actorOf(r))
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
 		writeJSON(w, 200, out)
+	}
+}
+
+func (a *api) pipLock() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Lock string `json:"lock"`
+		}
+		if err := readBody(r, &in); err != nil {
+			writeErr(w, err)
+			return
+		}
+		e, ok := a.authorize(w, r, r.PathValue("id"), ActTest)
+		if !ok {
+			return
+		}
+		if a.svc.Run == nil || (e.State != StateTesting && e.State != StateLive) {
+			writeErr(w, ErrState)
+			return
+		}
+		if in.Lock != "" {
+			found := false
+			for _, l := range e.Lines {
+				if l.ID == in.Lock {
+					found = true
+				}
+			}
+			if !found {
+				writeErr(w, ErrNotFound)
+				return
+			}
+		}
+		a.svc.Run.PipLock(e.ID, in.Lock)
+		a.svc.audit(actorOf(r), e.ID, "alarmpip.lock", map[string]any{"line": in.Lock})
+		writeJSON(w, 200, map[string]any{"lock": in.Lock})
 	}
 }

@@ -34,6 +34,20 @@ type LineRoles struct {
 	Normalizer string `json:"normalizer"`
 	// Return: Rolle der SRT-/RIST-Rückleitung dieser Leitung (nur bei Rückweg mit Art „mix“ und Ziel).
 	Return string `json:"return,omitempty"`
+	// Verarbeitungskette (106.13g): Stufen vor und nach dem Normalizer in Reihenfolge.
+	Pre  []StageRole `json:"pre,omitempty"`
+	Post []StageRole `json:"post,omitempty"`
+	// EntryVideo/EntryAudio: erste Rolle der Kette, die Bild bzw. Ton annimmt (hierhin geht eine vorhandene Quelle).
+	// OutVideo/OutAudio: letzte Rolle, die Bild bzw. Ton liefert (Quellname, Überwachung, Rückweg, Schnittstelle).
+	EntryVideo string `json:"entryVideo,omitempty"`
+	EntryAudio string `json:"entryAudio,omitempty"`
+	OutVideo   string `json:"outVideo,omitempty"`
+	OutAudio   string `json:"outAudio,omitempty"`
+}
+
+// ChainRoles: alle Stufen-Rollen der Leitung in Kettenreihenfolge.
+func (lr LineRoles) ChainRoles() []StageRole {
+	return append(append([]StageRole{}, lr.Pre...), lr.Post...)
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -60,13 +74,54 @@ func lineBase(l Line, i int, used map[string]bool) string {
 }
 
 // SourceNames: Rollenname des Normalizers → Anzeigename „MCR/<Event>/<Leitung>“ für alle Leitungen des Events.
-func SourceNames(e Event) map[string]string {
+func SourceNames(e Event, chain ...ChainConfig) map[string]string {
 	used := map[string]bool{}
 	out := map[string]string{}
 	for i, l := range e.Lines {
 		out[lineBase(l, i, used)+"-norm"] = "MCR/" + e.Name + "/" + l.Name
 	}
+	// Mit Verarbeitungskette trägt der **letzte** Baustein der Kette den Quellnamen (Bild und Ton einzeln).
+	if _, roles, _, err := Materialize(e, nil, "", chain...); err == nil {
+		out = map[string]string{}
+		for _, l := range e.Lines {
+			lr := roles[l.ID]
+			name := "MCR/" + e.Name + "/" + l.Name
+			for _, r := range []string{lr.Normalizer, lr.OutVideo, lr.OutAudio} {
+				if r != "" {
+					out[r] = name
+				}
+			}
+		}
+	}
 	return out
+}
+
+// VideoOut/AudioOut: Rolle, deren Ausgang die Leitung nach außen zeigt (Ende der Kette; ohne Angabe der Normalizer).
+func (lr LineRoles) VideoOut() string {
+	if lr.OutVideo != "" {
+		return lr.OutVideo
+	}
+	return lr.Normalizer
+}
+func (lr LineRoles) AudioOut() string {
+	if lr.OutAudio != "" {
+		return lr.OutAudio
+	}
+	return lr.Normalizer
+}
+
+// VideoIn/AudioIn: Rolle, die eine vorhandene Quelle als Erstes annimmt.
+func (lr LineRoles) VideoIn() string {
+	if lr.EntryVideo != "" {
+		return lr.EntryVideo
+	}
+	return lr.Normalizer
+}
+func (lr LineRoles) AudioIn() string {
+	if lr.EntryAudio != "" {
+		return lr.EntryAudio
+	}
+	return lr.Normalizer
 }
 
 // WorkflowName: stabiler Name je Event.
@@ -192,7 +247,11 @@ func normalizerEnv(l Line, eff HouseFormat) (map[string]string, error) {
 
 // Materialize baut die Workflow-Definition eines Events. `global` ist das Hausformat der Vorgabe; `secretsDir` das Verzeichnis der
 // Passphrase-Dateien (leer = keine). Rückgabe: Definition und Rollen je Leitungs-ID.
-func Materialize(e Event, global *HouseFormat, secretsDir string) (workflows.Definition, map[string]LineRoles, map[string]map[string]string, error) {
+func Materialize(e Event, global *HouseFormat, secretsDir string, chain ...ChainConfig) (workflows.Definition, map[string]LineRoles, map[string]map[string]string, error) {
+	var cc ChainConfig
+	if len(chain) > 0 {
+		cc = chain[0]
+	}
 	def := workflows.Definition{Title: e.Name, Category: "mcr", Tags: []string{"mcr"}, Description: DescriptionPrefix + e.ID}
 	envs := map[string]map[string]string{}
 	def.Interface = &workflows.Interface{}
@@ -220,12 +279,32 @@ func Materialize(e Event, global *HouseFormat, secretsDir string) (workflows.Def
 		if err != nil {
 			return def, nil, nil, err
 		}
+		stages := ResolveChain(cc.Global, e.Chain, l.Chain)
+		for _, st := range stages {
+			if _, ok := cc.typeOf(st.NodeType); !ok {
+				return def, nil, nil, bad("Leitung „%s“: Stufe „%s“: Node-Typ „%s“ ist nicht zugelassen", l.Name, st.ID, st.NodeType)
+			}
+			sr := StageRole{Stage: st}
+			if st.Where == WherePost {
+				sr.Role = fmt.Sprintf("%s-post-%s", base, st.ID)
+				lr.Post = append(lr.Post, sr)
+			} else {
+				sr.Role = fmt.Sprintf("%s-pre-%s", base, st.ID)
+				lr.Pre = append(lr.Pre, sr)
+			}
+		}
+		for _, sr := range lr.Pre {
+			def.Roles = append(def.Roles, workflows.Role{Name: sr.Role, NodeType: sr.Stage.NodeType})
+		}
 		def.Roles = append(def.Roles, workflows.Role{Name: lr.Normalizer, NodeType: NodeNormalizer})
 		envs[lr.Normalizer] = nenv
-		if lr.Input != "" {
-			def.Connections = append(def.Connections,
-				workflows.Connection{FromRole: lr.Input, FromSender: "Sender 1", ToRole: lr.Normalizer, ToReceiver: "Receiver 1"},
-				workflows.Connection{FromRole: lr.Input, FromSender: "Sender 2", ToRole: lr.Normalizer, ToReceiver: "Receiver 2"})
+		for _, sr := range lr.Post {
+			def.Roles = append(def.Roles, workflows.Role{Name: sr.Role, NodeType: sr.Stage.NodeType})
+		}
+		w := wire(lr.Input, lr.Pre, lr.Normalizer, lr.Post, cc)
+		lr.EntryVideo, lr.EntryAudio, lr.OutVideo, lr.OutAudio = w.entryVideo, w.entryAudio, w.outVideo, w.outAudio
+		for _, c := range w.conns {
+			def.Connections = append(def.Connections, workflows.Connection{FromRole: c[0], FromSender: c[1], ToRole: c[2], ToReceiver: c[3]})
 		}
 		// Rückleitung zum Veranstaltungsort (106.11/106.12): eigene Rolle, wenn die Leitung einen Rückweg „mix“ mit Ziel hat.
 		if p := PlanReturn(l, e.Lines); p.Wanted && p.Mode == "mix" && len(p.Transport) > 0 && p.Action != "warn" {
@@ -238,7 +317,7 @@ func Materialize(e Event, global *HouseFormat, secretsDir string) (workflows.Def
 			envs[lr.Return] = renv
 		}
 		def.Interface.Outputs = append(def.Interface.Outputs, workflows.InterfacePort{Name: l.Name, Label: l.Name, Members: []workflows.InterfaceMember{
-			{Role: lr.Normalizer, Port: "Sender 1"}, {Role: lr.Normalizer, Port: "Sender 2"}}})
+			{Role: lr.OutVideo, Port: "Sender 1"}, {Role: lr.OutAudio, Port: "Sender 2"}}})
 		roles[l.ID] = lr
 	}
 	// Bestätigung beim Stoppen ab `live` (Fehlbedienung auf Sendung vermeiden).
@@ -348,6 +427,15 @@ type Existing struct {
 	NodeLabel     string `json:"nodeLabel,omitempty"`
 	VideoSenderID string `json:"videoSenderId,omitempty"`
 	AudioSenderID string `json:"audioSenderId,omitempty"`
+	// Bild, Ton und Daten dürfen aus verschiedenen Nodes kommen: ist der Node einer Art gesetzt, gilt er für diese Art; sonst
+	// gilt NodeID/NodeLabel (ältere Leitungen mit einer gemeinsamen Quelle bleiben gültig).
+	VideoNodeID    string `json:"videoNodeId,omitempty"`
+	VideoNodeLabel string `json:"videoNodeLabel,omitempty"`
+	AudioNodeID    string `json:"audioNodeId,omitempty"`
+	AudioNodeLabel string `json:"audioNodeLabel,omitempty"`
+	DataNodeID     string `json:"dataNodeId,omitempty"`
+	DataNodeLabel  string `json:"dataNodeLabel,omitempty"`
+	DataSenderID   string `json:"dataSenderId,omitempty"`
 	// AudioTracks: die Tonspuren, die diese Leitung aus dem Ton-Flow der Quelle nimmt (leer = alle Kanäle unverändert).
 	// Mehrere Leitungen dürfen dieselbe Quelle (und dasselbe Bild) mit verschiedenen Tonspuren nutzen.
 	AudioTracks []AudioTrack `json:"audioTracks,omitempty"`
@@ -404,6 +492,11 @@ func validateTracks(l Line) error {
 	return nil
 }
 
+// Signature kennzeichnet die Verdrahtung einer Quelle (zum Erkennen von Änderungen).
+func (x Existing) Signature() string {
+	return strings.Join([]string{x.NodeID, x.NodeLabel, x.VideoSenderID, x.AudioSenderID, x.VideoNodeID, x.VideoNodeLabel, x.AudioNodeID, x.AudioNodeLabel, x.DataNodeID, x.DataNodeLabel, x.DataSenderID}, "|")
+}
+
 // ExistingSourceOf liest `transport.existing`; nil, wenn die Leitung keinen vorhandenen Node nennt.
 func ExistingSourceOf(l Line) *Existing {
 	if len(l.Transport) == 0 {
@@ -415,7 +508,8 @@ func ExistingSourceOf(l Line) *Existing {
 	if json.Unmarshal(l.Transport, &t) != nil || t.Existing == nil {
 		return nil
 	}
-	if t.Existing.NodeID == "" && t.Existing.NodeLabel == "" && t.Existing.VideoSenderID == "" && t.Existing.AudioSenderID == "" {
+	x := t.Existing
+	if x.NodeID == "" && x.NodeLabel == "" && x.VideoSenderID == "" && x.AudioSenderID == "" && x.VideoNodeID == "" && x.AudioNodeID == "" && x.DataNodeID == "" && x.DataSenderID == "" {
 		return nil
 	}
 	return t.Existing

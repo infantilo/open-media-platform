@@ -83,6 +83,13 @@ func (s *Service) validateEvent(e *Event) error {
 	if err := checkNoSecrets("houseFormat", e.HouseFormat); err != nil {
 		return err
 	}
+	cc := s.ChainConfig()
+	if err := ValidateChain("Event", e.Chain, cc); err != nil {
+		return err
+	}
+	if err := ValidateMon("Event", e.Monitoring, true); err != nil {
+		return err
+	}
 	ids := map[string]bool{}
 	names := map[string]bool{}
 	for i := range e.Lines {
@@ -95,6 +102,15 @@ func (s *Service) validateEvent(e *Event) error {
 		}
 		ids[l.ID] = true
 		if err := validateLine(l); err != nil {
+			return err
+		}
+		if err := ValidateChain("Leitung „"+l.Name+"“", l.Chain, cc); err != nil {
+			return err
+		}
+		if err := ValidateMon("Leitung „"+l.Name+"“", l.Monitoring, false); err != nil {
+			return err
+		}
+		if err := ValidateRecord("Leitung „"+l.Name+"“", l.Record); err != nil {
 			return err
 		}
 		if names[l.Name] {
@@ -139,13 +155,15 @@ type NewEventInput struct {
 	Owner        string          `json:"owner"`
 	OwnerGroup   string          `json:"ownerGroup"`
 	HouseFormat  json.RawMessage `json:"houseFormat"`
+	Chain        json.RawMessage `json:"chain"`
+	Monitoring   json.RawMessage `json:"monitoring"`
 	Lines        []Line          `json:"lines"`
 	Members      []Member        `json:"members"`
 }
 
 func (s *Service) CreateEvent(ctx context.Context, in NewEventInput, actor string) (Event, error) {
 	e := Event{Name: in.Name, TemplateID: in.TemplateID, PlannedStart: in.PlannedStart, PlannedEnd: in.PlannedEnd, Owner: in.Owner, OwnerGroup: in.OwnerGroup,
-		HouseFormat: in.HouseFormat, Lines: in.Lines, Members: in.Members}
+		HouseFormat: in.HouseFormat, Chain: in.Chain, Monitoring: in.Monitoring, Lines: in.Lines, Members: in.Members}
 	if e.Owner == "" && e.OwnerGroup == "" {
 		e.Owner = actor
 	}
@@ -195,15 +213,32 @@ func (s *Service) UpdateEvent(ctx context.Context, id string, in NewEventInput, 
 	}
 	e := cur
 	e.Name, e.PlannedStart, e.PlannedEnd, e.Owner, e.OwnerGroup, e.HouseFormat = in.Name, in.PlannedStart, in.PlannedEnd, in.Owner, in.OwnerGroup, in.HouseFormat
+	e.Chain = in.Chain
+	e.Monitoring = in.Monitoring
 	if replaceLines {
 		e.Lines = in.Lines
 	}
 	if err := s.validateEvent(&e); err != nil {
 		return e, err
 	}
-	if replaceLines && cur.State == StateLive {
-		if !sameStructure(cur.Lines, e.Lines) {
+	if cur.State == StateLive {
+		if replaceLines && !sameStructure(cur.Lines, e.Lines) {
 			return e, ErrState
+		}
+		// Eine Kettenänderung formt den Workflow um: auf Sendung nicht erlaubt.
+		if !sameJSON(cur.Chain, e.Chain) {
+			return e, ErrState
+		}
+		if replaceLines {
+			old := map[string]json.RawMessage{}
+			for _, l := range cur.Lines {
+				old[l.ID] = l.Chain
+			}
+			for _, l := range e.Lines {
+				if !sameJSON(old[l.ID], l.Chain) {
+					return e, ErrState
+				}
+			}
 		}
 	}
 	out, err := s.St.UpdateEvent(ctx, e, replaceLines)
@@ -272,6 +307,19 @@ func (s *Service) Transition(ctx context.Context, id, to, actor string, confirm 
 func (s *Service) effect(ctx context.Context, rt *Runtime, cur Event, to string, confirm bool) error {
 	next := cur
 	next.State = to
+	if to != StateTesting && to != StateLive {
+		rt.StopMonitoring(ctx, cur.ID) // Abbau, Rücknahme, Abbruch: keine Überwachung ohne Event
+		_, _ = s.St.CloseEventAlarms(ctx, cur.ID)
+		rt.mu.Lock()
+		delete(rt.pip, cur.ID)
+		rt.mu.Unlock()
+	}
+	if to != StateTesting && to != StateLive {
+		rt.DropBindings(ctx, s, cur.ID) // Bindungen der Mitglieder enden mit dem Event
+	}
+	if to != StateLive {
+		rt.StopRecordings(ctx, s, cur.ID) // Aufzeichnungen genau einmal beenden (Teilaufnahme wird gesichert)
+	}
 	switch {
 	case cur.State == StatePlanned && to == StateTesting:
 		wid, err := rt.Prepare(ctx, s, next)
@@ -411,4 +459,136 @@ func (s *Service) StoreAppliedAvsync(ctx context.Context, eventID, lineID string
 		return s.St.SetLineAvsync(ctx, eventID, lineID, b)
 	}
 	return ErrNotFound
+}
+
+// Precheck prüft, ob die Hosts die Rollen des Events tragen können (Vorschau vor dem Teststart, nur Warnung).
+func (s *Service) Precheck(ctx context.Context, id string) (CapacityReport, error) {
+	e, err := s.GetEvent(ctx, id)
+	if err != nil {
+		return CapacityReport{}, err
+	}
+	if s.Run == nil || s.Run.Capacity == nil {
+		return CapacityReport{OK: true, Items: []CapacityItem{}, Hosts: []HostCap{}, Warnings: []string{"Vorprüfung nicht verfügbar."}}, nil
+	}
+	g, _ := s.GlobalHouse()
+	return Precheck(ctx, e, g, s.Run.Capacity, s.ChainConfig())
+}
+
+// ---- Einstellungen der Kette ----
+
+// GlobalChain: die globale Kette (null = keine Stufen).
+func (s *Service) GlobalChain() json.RawMessage {
+	if s.Settings == nil {
+		return nil
+	}
+	b, err := s.Settings.Get(SettingChain)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// StageTypes: zugelassene Stufen-Typen (Standard: nur der Skalierer).
+func (s *Service) StageTypes() []StageType {
+	if s.Settings != nil {
+		if b, err := s.Settings.Get(SettingStageTypes); err == nil {
+			var out []StageType
+			if json.Unmarshal(b, &out) == nil && len(out) > 0 {
+				return out
+			}
+		}
+	}
+	return DefaultStageTypes()
+}
+
+// ChainConfig bündelt die globalen Vorgaben für Materialize und Prüfung.
+func (s *Service) ChainConfig() ChainConfig {
+	return ChainConfig{Global: s.GlobalChain(), Types: s.StageTypes()}
+}
+
+// SetChainSettings speichert die globale Kette und/oder die zugelassenen Typen (nil = unverändert).
+func (s *Service) SetChainSettings(chain json.RawMessage, types *[]StageType) error {
+	if s.Settings == nil {
+		return bad("keine Einstellungen verfügbar")
+	}
+	cc := s.ChainConfig()
+	if types != nil {
+		seen := map[string]bool{}
+		for _, t := range *types {
+			if strings.TrimSpace(t.NodeType) == "" || seen[t.NodeType] || (!t.Video && !t.Audio) {
+				return bad("Stufen-Typ „%s“: Node-Typ fehlt, doppelt oder weder Bild noch Ton", t.NodeType)
+			}
+			seen[t.NodeType] = true
+		}
+		cc.Types = *types
+		b, _ := json.Marshal(*types)
+		if err := s.Settings.Put(SettingStageTypes, b); err != nil {
+			return err
+		}
+	}
+	if chain != nil {
+		if err := ValidateChain("Globale Kette", chain, cc); err != nil {
+			return err
+		}
+		t := strings.TrimSpace(string(chain))
+		if t == "null" || t == "" {
+			t = "[]"
+		}
+		if err := s.Settings.Put(SettingChain, []byte(t)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) chainOrEmpty() json.RawMessage {
+	if c := s.GlobalChain(); len(c) > 0 {
+		return c
+	}
+	return json.RawMessage("[]")
+}
+
+// sameJSON vergleicht zwei JSON-Angaben unabhängig von Leerraum; leer und `null` gelten als gleich.
+func sameJSON(a, b json.RawMessage) bool {
+	norm := func(r json.RawMessage) string {
+		t := strings.TrimSpace(string(r))
+		if t == "" || t == "null" {
+			return ""
+		}
+		var v any
+		if json.Unmarshal(r, &v) != nil {
+			return t
+		}
+		out, _ := json.Marshal(v)
+		return string(out)
+	}
+	return norm(a) == norm(b)
+}
+
+// SettingAlarmRetention: Aufbewahrung beendeter Alarme in Tagen (Standard 30).
+const SettingAlarmRetention = "mcr.alarmRetentionDays"
+
+// AlarmRetentionDays liest die Aufbewahrung; ungültig oder fehlend = 30.
+func (s *Service) AlarmRetentionDays() int {
+	if s.Settings != nil {
+		if b, err := s.Settings.Get(SettingAlarmRetention); err == nil {
+			var n int
+			if json.Unmarshal(b, &n) == nil && n >= 1 && n <= 3650 {
+				return n
+			}
+		}
+	}
+	return 30
+}
+
+// SetAlarmRetentionDays speichert die Aufbewahrung (1…3650 Tage).
+func (s *Service) SetAlarmRetentionDays(n int) error {
+	if n < 1 || n > 3650 {
+		return bad("Aufbewahrung: 1 bis 3650 Tage")
+	}
+	if s.Settings == nil {
+		return bad("keine Einstellungen verfügbar")
+	}
+	b, _ := json.Marshal(n)
+	return s.Settings.Put(SettingAlarmRetention, b)
 }

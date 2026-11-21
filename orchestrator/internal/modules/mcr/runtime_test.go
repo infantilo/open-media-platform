@@ -101,10 +101,11 @@ func TestNodeParamsOrder(t *testing.T) {
 // ---- gefälschte Dienste ----
 
 type fakeWf struct {
-	mu   sync.Mutex
-	wfs  map[string]*workflows.Workflow
-	n    int
-	runs int
+	mu       sync.Mutex
+	wfs      map[string]*workflows.Workflow
+	n        int
+	runs     int
+	reshapes int
 }
 
 func newFakeWf() *fakeWf { return &fakeWf{wfs: map[string]*workflows.Workflow{}} }
@@ -128,6 +129,33 @@ func (f *fakeWf) Update(id, name string, def workflows.Definition) (workflows.Wo
 	w.Name, w.Definition = name, def
 	return *w, nil
 }
+func (f *fakeWf) Reshape(_ context.Context, id string, name string, def workflows.Definition) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.wfs[id]
+	if !ok {
+		return workflows.ErrNotFound
+	}
+	if w.Status != workflows.StatusStarted {
+		return workflows.ErrNotRunning
+	}
+	keep := map[string]bool{}
+	for _, r := range def.Roles {
+		keep[r.Name] = true
+		if _, ok := w.Runtime[r.Name]; !ok {
+			f.runs++
+			w.Runtime[r.Name] = workflows.RoleRuntime{InstanceID: fmt.Sprintf("inst-%s-%d", r.Name, f.runs)}
+		}
+	}
+	for n := range w.Runtime {
+		if !keep[n] {
+			delete(w.Runtime, n)
+		}
+	}
+	w.Name, w.Definition = name, def
+	f.reshapes++
+	return nil
+}
 func (f *fakeWf) Get(id string) (workflows.Workflow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -136,6 +164,15 @@ func (f *fakeWf) Get(id string) (workflows.Workflow, error) {
 		return workflows.Workflow{}, workflows.ErrNotFound
 	}
 	return *w, nil
+}
+func (f *fakeWf) List() ([]workflows.Workflow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []workflows.Workflow
+	for _, w := range f.wfs {
+		out = append(out, *w)
+	}
+	return out, nil
 }
 func (f *fakeWf) Start(_ context.Context, id string) error {
 	f.mu.Lock()
@@ -172,6 +209,8 @@ func (f *fakeWf) Delete(id string) error {
 type fakeNodes struct {
 	mu      sync.Mutex
 	patches []string // "<instanz> <param>=<wert>"
+	states  []string // POST /state: "<url> <json>"
+	selects []string // POST /methods/select: "<instanz>/methods/select <json>"
 	online  map[string]bool
 }
 
@@ -187,6 +226,16 @@ func (n *fakeNodes) Do(_ context.Context, method, url string, body any) ([]byte,
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	inst := strings.TrimPrefix(strings.SplitN(url, "/params/", 2)[0], "http://node/")
+	if method == "POST" && strings.HasSuffix(url, "/methods/select") {
+		b, _ := json.Marshal(body)
+		n.selects = append(n.selects, strings.TrimPrefix(url, "http://node/")+" "+string(b))
+		return []byte(`{}`), 200, nil
+	}
+	if method == "POST" && strings.HasSuffix(url, "/state") {
+		b, _ := json.Marshal(body)
+		n.states = append(n.states, url+" "+string(b))
+		return []byte(`{}`), 200, nil
+	}
 	if method == "PATCH" {
 		name := strings.SplitN(url, "/params/", 2)[1]
 		v := body.(map[string]any)["value"]
@@ -346,7 +395,7 @@ func TestPlannedToTestingFailureKeepsState(t *testing.T) {
 
 type fakeLinker struct{ calls []string }
 
-func (f *fakeLinker) Link(_ context.Context, src Existing, inst string) error {
+func (f *fakeLinker) Link(_ context.Context, src Existing, inst, _ string) error {
 	f.calls = append(f.calls, src.NodeID+"->"+inst)
 	return nil
 }
@@ -438,5 +487,22 @@ func TestSourceNamesUseEventAndLineNames(t *testing.T) {
 		if _, ok := got[lr.Normalizer]; !ok {
 			t.Fatalf("Rolle %s nicht benannt: %v", lr.Normalizer, got)
 		}
+	}
+}
+
+func TestExistingSourceMixedNodes(t *testing.T) {
+	l := Line{Name: "Mix", Transport: json.RawMessage(`{"existing":{"videoNodeId":"v","audioNodeId":"a","audioTracks":[{"channels":[3,4]}],"dataNodeId":"d"}}`)}
+	ex := ExistingSourceOf(l)
+	if ex == nil || ex.VideoNodeID != "v" || ex.AudioNodeID != "a" || ex.DataNodeID != "d" {
+		t.Fatalf("getrennte Quellen nicht gelesen: %+v", ex)
+	}
+	if ex.Signature() == (Existing{NodeID: "v"}).Signature() {
+		t.Fatal("Signatur muss die getrennten Nodes enthalten")
+	}
+	if err := validateTracks(l); err != nil {
+		t.Fatal(err)
+	}
+	if TrackAudioMap(l) == nil {
+		t.Fatal("Tonspuren müssen auch bei getrennten Quellen gelten")
 	}
 }

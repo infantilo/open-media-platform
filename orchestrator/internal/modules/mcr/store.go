@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/tracing"
@@ -25,6 +26,15 @@ func obj(raw json.RawMessage) []byte {
 }
 
 // nullable: leeres JSON wird zu NULL (Hausformat nicht gesetzt).
+// nullableJSON: leer oder `null` → SQL NULL (erbt), sonst das JSON unverändert.
+func nullableJSON(raw json.RawMessage) any {
+	t := strings.TrimSpace(string(raw))
+	if t == "" || t == "null" {
+		return nil
+	}
+	return []byte(t)
+}
+
 func nullable(raw json.RawMessage) any {
 	h, _ := ParseHouse(raw)
 	if h == nil {
@@ -121,13 +131,13 @@ func (s *Store) DeleteTemplate(ctx context.Context, id string) error {
 
 // ---- Events ----
 
-const eventCols = `id, name, template_id, state, planned_start, planned_end, workflow_id, owner, owner_group, house_format, warnings, created_by, created_at, updated_at`
+const eventCols = `id, name, template_id, state, planned_start, planned_end, workflow_id, owner, owner_group, house_format, warnings, created_by, created_at, updated_at, chain, monitoring`
 
 func scanEvent(r scanner) (Event, error) {
 	var e Event
-	var house, warn []byte
+	var house, warn, chain, mon []byte
 	var ps, pe sql.NullTime
-	if err := r.Scan(&e.ID, &e.Name, &e.TemplateID, &e.State, &ps, &pe, &e.WorkflowID, &e.Owner, &e.OwnerGroup, &house, &warn, &e.CreatedBy, &e.CreatedAt, &e.UpdatedAt); err != nil {
+	if err := r.Scan(&e.ID, &e.Name, &e.TemplateID, &e.State, &ps, &pe, &e.WorkflowID, &e.Owner, &e.OwnerGroup, &house, &warn, &e.CreatedBy, &e.CreatedAt, &e.UpdatedAt, &chain, &mon); err != nil {
 		return e, err
 	}
 	_ = json.Unmarshal(warn, &e.Warnings)
@@ -143,23 +153,27 @@ func scanEvent(r scanner) (Event, error) {
 		e.PlannedEnd = &t
 	}
 	e.HouseFormat = rawOrNil(house)
+	e.Chain = rawOrNil(chain)
+	e.Monitoring = rawOrNil(mon)
 	e.Lines, e.Members = []Line{}, []Member{}
 	return e, nil
 }
 
 func (s *Store) loadChildren(ctx context.Context, e *Event) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, kind, transport, normalize, avsync, record, intercom, house_format, position FROM mcr_lines WHERE event_id=$1 ORDER BY position, id`, e.ID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, kind, transport, normalize, avsync, record, intercom, house_format, position, chain, monitoring FROM mcr_lines WHERE event_id=$1 ORDER BY position, id`, e.ID)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var l Line
-		var tr, no, av, rc, ic, hf []byte
-		if err := rows.Scan(&l.ID, &l.Name, &l.Kind, &tr, &no, &av, &rc, &ic, &hf, &l.Position); err != nil {
+		var tr, no, av, rc, ic, hf, ch, mo []byte
+		if err := rows.Scan(&l.ID, &l.Name, &l.Kind, &tr, &no, &av, &rc, &ic, &hf, &l.Position, &ch, &mo); err != nil {
 			return err
 		}
 		l.Transport, l.Normalize, l.Avsync, l.Record, l.Intercom, l.HouseFormat = rawOrNil(tr), rawOrNil(no), rawOrNil(av), rawOrNil(rc), rawOrNil(ic), rawOrNil(hf)
+		l.Chain = rawOrNil(ch)
+		l.Monitoring = rawOrNil(mo)
 		e.Lines = append(e.Lines, l)
 	}
 	if err := rows.Err(); err != nil {
@@ -218,8 +232,8 @@ func (s *Store) ListEvents(ctx context.Context, state string) ([]Event, error) {
 
 func insertLines(ctx context.Context, tx *sql.Tx, eventID string, lines []Line) error {
 	for i, l := range lines {
-		_, err := tx.ExecContext(ctx, `INSERT INTO mcr_lines (event_id, id, name, kind, transport, normalize, avsync, record, intercom, house_format, position) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-			eventID, l.ID, l.Name, l.Kind, obj(l.Transport), obj(l.Normalize), obj(l.Avsync), obj(l.Record), obj(l.Intercom), nullable(l.HouseFormat), i)
+		_, err := tx.ExecContext(ctx, `INSERT INTO mcr_lines (event_id, id, name, kind, transport, normalize, avsync, record, intercom, house_format, position, chain, monitoring) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			eventID, l.ID, l.Name, l.Kind, obj(l.Transport), obj(l.Normalize), obj(l.Avsync), obj(l.Record), obj(l.Intercom), nullable(l.HouseFormat), i, nullableJSON(l.Chain), nullableJSON(l.Monitoring))
 		if err != nil {
 			return err
 		}
@@ -244,8 +258,8 @@ func (s *Store) CreateEvent(ctx context.Context, e Event, actor string) (Event, 
 		return e, err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO mcr_events (id, name, template_id, state, planned_start, planned_end, owner, owner_group, house_format, created_by) VALUES ($1,$2,$3,'planned',$4,$5,$6,$7,$8,$9)`,
-		e.ID, e.Name, e.TemplateID, e.PlannedStart, e.PlannedEnd, e.Owner, e.OwnerGroup, nullable(e.HouseFormat), actor)
+	_, err = tx.ExecContext(ctx, `INSERT INTO mcr_events (id, name, template_id, state, planned_start, planned_end, owner, owner_group, house_format, created_by, chain, monitoring) VALUES ($1,$2,$3,'planned',$4,$5,$6,$7,$8,$9,$10,$11)`,
+		e.ID, e.Name, e.TemplateID, e.PlannedStart, e.PlannedEnd, e.Owner, e.OwnerGroup, nullable(e.HouseFormat), actor, nullableJSON(e.Chain), nullableJSON(e.Monitoring))
 	if err != nil {
 		return e, err
 	}
@@ -268,8 +282,8 @@ func (s *Store) UpdateEvent(ctx context.Context, e Event, replaceLines bool) (Ev
 		return e, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE mcr_events SET name=$2, planned_start=$3, planned_end=$4, owner=$5, owner_group=$6, house_format=$7, updated_at=now() WHERE id=$1`,
-		e.ID, e.Name, e.PlannedStart, e.PlannedEnd, e.Owner, e.OwnerGroup, nullable(e.HouseFormat))
+	res, err := tx.ExecContext(ctx, `UPDATE mcr_events SET name=$2, planned_start=$3, planned_end=$4, owner=$5, owner_group=$6, house_format=$7, chain=$8, monitoring=$9, updated_at=now() WHERE id=$1`,
+		e.ID, e.Name, e.PlannedStart, e.PlannedEnd, e.Owner, e.OwnerGroup, nullable(e.HouseFormat), nullableJSON(e.Chain), nullableJSON(e.Monitoring))
 	if err != nil {
 		return e, err
 	}

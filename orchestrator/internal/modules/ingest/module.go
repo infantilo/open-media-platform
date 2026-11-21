@@ -5,6 +5,7 @@ package ingest
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/events"
 	"io"
@@ -347,4 +348,31 @@ func (m *Module) BusyOn(hostID string, from, to time.Time) (bool, string) {
 func purgeAssets(tx *sql.Tx, ids []string) (func(), error) {
 	_, err := tx.Exec(`UPDATE ingest_jobs SET asset_id = '' WHERE asset_id = ANY($1)`, ids)
 	return nil, err
+}
+
+// RecordAdHoc legt einen Ad-hoc-Aufnahmeauftrag an und gibt seine Kennung zurück (für das MCR-Modul: Aufzeichnung je Leitung).
+func (m *Module) RecordAdHoc(ctx context.Context, in AdHocInput, actor string) (string, error) {
+	if m.svc == nil {
+		return "", errors.New("Ingest nicht bereit")
+	}
+	j, _, err := m.svc.CreateAdHoc(ctx, in, actor)
+	return j.ID, err
+}
+
+// AbortJob beendet einen Auftrag: noch nicht begonnene werden abgebrochen, laufende Aufnahmen werden mit Teilaufnahme gesichert.
+// Ein schon beendeter Auftrag ist kein Fehler.
+func (m *Module) AbortJob(ctx context.Context, jobID, actor string) error {
+	if m.svc == nil {
+		return errors.New("Ingest nicht bereit")
+	}
+	j, err := m.svc.St.GetJob(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	switch j.State {
+	case StBlocked, StScheduled, StWaiting, StStarting, StRecording:
+		_, err = m.svc.CancelJob(ctx, jobID, actor, true, j.Revision)
+		return err
+	}
+	return nil
 }

@@ -69,7 +69,11 @@ type Line struct {
 	Record      json.RawMessage `json:"record,omitempty"`
 	Intercom    json.RawMessage `json:"intercom,omitempty"`
 	HouseFormat json.RawMessage `json:"houseFormat,omitempty"`
-	Position    int             `json:"position"`
+	// Chain: Verarbeitungsstufen dieser Leitung (null/fehlt = erbt vom Event bzw. global, [] = keine Stufen).
+	Chain json.RawMessage `json:"chain,omitempty"`
+	// Monitoring: Profil und Abweichungen der Signalprüfung dieser Leitung (überstimmt das Event).
+	Monitoring json.RawMessage `json:"monitoring,omitempty"`
+	Position   int             `json:"position"`
 }
 
 type Member struct {
@@ -100,8 +104,12 @@ type Event struct {
 	Owner        string          `json:"owner,omitempty"`
 	OwnerGroup   string          `json:"ownerGroup,omitempty"`
 	HouseFormat  json.RawMessage `json:"houseFormat,omitempty"`
-	Lines        []Line          `json:"lines"`
-	Members      []Member        `json:"members"`
+	// Chain: Verarbeitungsstufen aller Leitungen dieses Events (null/fehlt = global), Leitungen dürfen überschreiben.
+	Chain json.RawMessage `json:"chain,omitempty"`
+	// Monitoring: Profil, Abweichungen und Reaktionsregeln der Überwachung dieses Events.
+	Monitoring json.RawMessage `json:"monitoring,omitempty"`
+	Lines      []Line          `json:"lines"`
+	Members    []Member        `json:"members"`
 	// Warnings: Hinweise des Abgleichs (z. B. „Rückweg ohne Quelle“); leer = keine.
 	Warnings  []string  `json:"warnings"`
 	CreatedBy string    `json:"createdBy,omitempty"`
@@ -109,6 +117,8 @@ type Event struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Nur in Antworten: wirksames Hausformat je Leitung (Vorgabe → Event → Leitung).
 	Effective map[string]HouseFormat `json:"effectiveHouse,omitempty"`
+	// Nur in Antworten: was die anfragende Person an diesem Event darf (106.14).
+	Access *EventAccess `json:"access,omitempty"`
 }
 
 // secretKeys: Feldnamen, die nie gespeichert werden (Vergleich ohne Groß-/Kleinschreibung). `passphraseKey` (Name eines

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -18,7 +19,10 @@ import (
 type WorkflowAPI interface {
 	Create(name string, def workflows.Definition, adopt map[string]workflows.RoleRuntime, ownerOrgID string) (workflows.Workflow, error)
 	Update(id, name string, def workflows.Definition) (workflows.Workflow, error)
+	// Reshape ändert Rollen und Verbindungen eines laufenden Workflows, ohne die übrigen Rollen zu unterbrechen.
+	Reshape(ctx context.Context, id, name string, def workflows.Definition) error
 	Get(id string) (workflows.Workflow, error)
+	List() ([]workflows.Workflow, error)
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string, confirm bool) error
 	Delete(id string) error
@@ -42,16 +46,40 @@ type Runtime struct {
 	Intercom *Intercom
 	// Sources verbindet vorhandene Nodes (`transport.existing`) mit dem Normalizer; nil = nicht verfügbar.
 	Sources SourceLinker
+	// Capacity: Hosts und Profile für die Vorprüfung; nil = keine Vorprüfung.
+	Capacity CapacitySource
+	// Resolve ordnet einen Node seiner Workflow-Rolle zu (Alarmzuordnung); nil = keine Alarmhistorie.
+	Resolve NodeResolver
+	// Recorder startet/beendet Aufnahmeaufträge im Ingest (Aufzeichnung je Leitung); nil = keine Aufzeichnung.
+	Recorder Recorder
+	// Binder legt Workflow-Bindungen für Event-Mitglieder an (Rechte je Event); nil = keine Bindungen.
+	Binder Binder
+	// GPIO setzt einen Kontaktausgang (Reaktion `gpio`); nil = nicht verfügbar.
+	GPIO GPIOSetter
+	// Monitor: Verbinden und Finden der Überwachungs-Instanzen (106.13); nil = keine Überwachung.
+	Monitor MonitorFabric
 	// Poll/Timeout: Wartezeit auf Workflow-Zustände (Tests setzen kleine Werte).
 	Poll    time.Duration
 	Timeout time.Duration
 
-	mu      sync.Mutex
-	applied map[string]string // "<eventID>/<Rolle>" → Instanz-ID, an die die Einstellungen zuletzt gingen
-	linked  map[string]string // "<eventID>/<Rolle>" → "<Normalizer-Instanz>|<Quelle>" der zuletzt verbundenen Quelle
+	mu          sync.Mutex
+	applied     map[string]string              // "<eventID>/<Rolle>" → Instanz-ID, an die die Einstellungen zuletzt gingen
+	monLinked   map[string]string              // "<eventID>/<Leitung>" → Normalizer-/Scope-Instanz der Verbindung
+	monAlarms   map[string]map[string][]string // eventID → Leitung → aktive Prüfungen
+	monLast     map[string]MVLayout            // eventID → zuletzt berechnete Kacheln (Ampel, UMD), unabhängig vom Multiviewer
+	recErr      map[string]string              // "<Event>/<Leitung>" → letzter Fehler beim Starten der Aufzeichnung
+	pip         map[string]PipState            // eventID → Zustand des Alarm-PiPs
+	alarmPurged time.Time
+	stationUsed time.Time            // letzte Nutzung der Abhör-/Messstation
+	watch       map[string]time.Time // eventID → letzte Ansicht der Überwachung
+	monSent     map[string]monSent   // eventID → zuletzt gesendeter Multiviewer-Zustand
+	linked      map[string]string    // "<eventID>/<Rolle>" → "<Normalizer-Instanz>|<Quelle>" der zuletzt verbundenen Quelle
 }
 
 var ErrConfirm = errors.New("mcr: Stoppen auf Sendung braucht Bestätigung")
+
+// ErrForbidden: die Person darf die Handlung an diesem Event nicht ausführen (106.14).
+var ErrForbidden = errors.New("mcr: dafür fehlt die Berechtigung")
 
 func (rt *Runtime) poll() time.Duration {
 	if rt.Poll > 0 {
@@ -80,7 +108,7 @@ func (rt *Runtime) definitionFor(s *Service, e Event) (workflows.Definition, map
 	if err != nil {
 		return workflows.Definition{}, nil, err
 	}
-	d, r, _, err := Materialize(e, g, rt.secrets())
+	d, r, _, err := Materialize(e, g, rt.secrets(), s.ChainConfig())
 	return d, r, err
 }
 
@@ -183,7 +211,13 @@ func (rt *Runtime) Refresh(ctx context.Context, s *Service, e Event) error {
 	if err != nil {
 		return err
 	}
-	if _, err := rt.Wf.Update(e.WorkflowID, WorkflowName(e), def); err != nil && !errors.Is(err, workflows.ErrNotStopped) {
+	// Läuft der Workflow und ändern sich Rollen oder Verbindungen (Leitung zugefügt/entfernt, Kette geändert), formt `Reshape` ihn
+	// um; sonst genügt `Update` (Einstellungen). So bekommt eine neue Leitung im laufenden Event ihre Bausteine ohne Neustart.
+	if cur, gerr := rt.Wf.Get(e.WorkflowID); gerr == nil && cur.Status == workflows.StatusStarted && topologyDiffers(cur.Definition, def) {
+		if err := rt.Wf.Reshape(ctx, e.WorkflowID, WorkflowName(e), def); err != nil {
+			return fmt.Errorf("Workflow umformen: %w", err)
+		}
+	} else if _, err := rt.Wf.Update(e.WorkflowID, WorkflowName(e), def); err != nil && !errors.Is(err, workflows.ErrNotStopped) {
 		return fmt.Errorf("Workflow aktualisieren: %w", err)
 	}
 	rt.ForceApply(e.ID)
@@ -273,7 +307,11 @@ func (rt *Runtime) Reconcile(ctx context.Context, s *Service, e Event) (int, err
 		rt.mu.Unlock()
 		done++
 	}
+	rt.ReconcileBindings(ctx, s, e)
+	rt.reconcileStages(ctx, e, wf, roles)
+	rt.reconcileRecordings(ctx, s, e, wf, roles)
 	rt.reconcileIntercom(ctx, s, e, wf, roles)
+	rt.reconcileMonitoring(ctx, s, e, wf, roles)
 	if err := rt.reconcileSources(ctx, e, wf, roles); err != nil && firstErr == nil {
 		firstErr = err
 	}
@@ -282,7 +320,8 @@ func (rt *Runtime) Reconcile(ctx context.Context, s *Service, e Event) (int, err
 
 // SourceLinker verbindet die Sender eines vorhandenen Nodes mit den Empfängern einer Normalizer-Instanz (Bild und Ton).
 type SourceLinker interface {
-	Link(ctx context.Context, src Existing, normalizerInstance string) error
+	// Link verbindet Bild mit der Instanz `videoInst` und Ton mit `audioInst` (erste Glieder der Kette, oft derselbe Normalizer).
+	Link(ctx context.Context, src Existing, videoInst, audioInst string) error
 }
 
 // reconcileSources verbindet vorhandene Quell-Nodes; je Normalizer-Instanz und Quelle nur einmal (nach einem Neustart erneut).
@@ -297,19 +336,19 @@ func (rt *Runtime) reconcileSources(ctx context.Context, e Event, wf workflows.W
 		if ex == nil || !ok {
 			continue
 		}
-		inst := instanceOf(wf, lr.Normalizer)
-		if inst == "" {
+		vInst, aInst := instanceOf(wf, lr.VideoIn()), instanceOf(wf, lr.AudioIn())
+		if vInst == "" || aInst == "" {
 			continue
 		}
 		key := e.ID + "/" + lr.Normalizer
-		sig := fmt.Sprintf("%s|%s|%s|%s|%s", inst, ex.NodeID, ex.NodeLabel, ex.VideoSenderID, ex.AudioSenderID)
+		sig := vInst + "|" + aInst + "|" + ex.Signature()
 		rt.mu.Lock()
 		same := rt.linked[key] == sig
 		rt.mu.Unlock()
 		if same {
 			continue
 		}
-		if err := rt.Sources.Link(ctx, *ex, inst); err != nil {
+		if err := rt.Sources.Link(ctx, *ex, vInst, aInst); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("Leitung %q: Quelle verbinden: %w", l.Name, err)
 			}
@@ -335,6 +374,9 @@ func (rt *Runtime) ReconcileLoop(ctx context.Context, s *Service, every time.Dur
 			return
 		case <-t.C:
 		}
+		rt.sweepOrphans(ctx, s)
+		rt.purgeAlarms(ctx, s)
+		rt.sweepStation(ctx)
 		for _, st := range []string{StateTesting, StateLive} {
 			evs, err := s.St.ListEvents(ctx, st)
 			if err != nil {
@@ -425,6 +467,12 @@ func (rt *Runtime) Status(ctx context.Context, s *Service, e Event) (map[string]
 		lines = append(lines, ls)
 	}
 	res["lines"] = lines
+	if rt.Monitor != nil {
+		res["monitoring"] = rt.MonitoringStatus(e.ID)
+	}
+	if rt.Recorder != nil {
+		res["recording"] = rt.RecordingStatus(ctx, s, e)
+	}
 	return res, nil
 }
 
@@ -450,6 +498,26 @@ func (rt *Runtime) NormalizerInstance(s *Service, e Event, lineID string) (strin
 		return "", ErrState
 	}
 	return rr.InstanceID, nil
+}
+
+// LineOutputs liefert die Instanzen am Ende der Kette einer Leitung (Bild, Ton); leer = läuft nicht.
+func (rt *Runtime) LineOutputs(s *Service, e Event, lineID string) (video, audio string, err error) {
+	if e.WorkflowID == "" {
+		return "", "", ErrState
+	}
+	wf, err := rt.Wf.Get(e.WorkflowID)
+	if err != nil {
+		return "", "", err
+	}
+	_, roles, err := rt.definitionFor(s, e)
+	if err != nil {
+		return "", "", err
+	}
+	lr, ok := roles[lineID]
+	if !ok {
+		return "", "", ErrNotFound
+	}
+	return instanceOf(wf, lr.VideoOut()), instanceOf(wf, lr.AudioOut()), nil
 }
 
 // CallNormalizer ruft eine Methode am Normalizer einer Leitung auf.
@@ -502,4 +570,73 @@ func (rt *Runtime) reconcileIntercom(ctx context.Context, s *Service, e Event, w
 	if err := s.St.SetWarnings(ctx, e.ID, warns); err != nil {
 		slog.Warn("mcr: Warnungen nicht gespeichert", "event", e.ID, "error", err)
 	}
+}
+
+// reconcileStages sendet die Parameter der Verarbeitungsstufen (Quelle der Wahrheit = Datenbank) an ihre Instanzen; je Instanz einmal.
+func (rt *Runtime) reconcileStages(ctx context.Context, e Event, wf workflows.Workflow, roles map[string]LineRoles) {
+	for _, l := range e.Lines {
+		for _, sr := range roles[l.ID].ChainRoles() {
+			inst := instanceOf(wf, sr.Role)
+			if inst == "" || len(sr.Stage.Params) == 0 {
+				continue
+			}
+			key := e.ID + "/" + sr.Role
+			rt.mu.Lock()
+			same := rt.applied[key] == inst
+			rt.mu.Unlock()
+			if same {
+				continue
+			}
+			base, ok := rt.Nodes.BaseURL(inst)
+			if !ok {
+				continue
+			}
+			names := make([]string, 0, len(sr.Stage.Params))
+			for k := range sr.Stage.Params {
+				names = append(names, k)
+			}
+			sort.Strings(names)
+			failed := false
+			for _, k := range names {
+				if err := rt.patch(ctx, base, k, sr.Stage.Params[k]); err != nil {
+					slog.Warn("mcr: Stufe: Parameter", "event", e.ID, "role", sr.Role, "param", k, "error", err)
+					failed = true
+					break
+				}
+			}
+			if failed {
+				continue
+			}
+			rt.mu.Lock()
+			if rt.applied == nil {
+				rt.applied = map[string]string{}
+			}
+			rt.applied[key] = inst
+			rt.mu.Unlock()
+		}
+	}
+}
+
+// topologyDiffers: unterscheiden sich Rollen (Name, Typ) oder Verbindungen zweier Definitionen?
+func topologyDiffers(a, b workflows.Definition) bool {
+	keys := func(d workflows.Definition) map[string]bool {
+		m := map[string]bool{}
+		for _, r := range d.Roles {
+			m["R\x00"+r.Name+"\x00"+r.NodeType] = true
+		}
+		for _, c := range d.Connections {
+			m["C\x00"+c.FromRole+"\x00"+c.FromSender+"\x00"+c.ToRole+"\x00"+c.ToReceiver] = true
+		}
+		return m
+	}
+	ka, kb := keys(a), keys(b)
+	if len(ka) != len(kb) {
+		return true
+	}
+	for k := range ka {
+		if !kb[k] {
+			return true
+		}
+	}
+	return false
 }

@@ -1249,8 +1249,18 @@ func main() {
 		Jobs: &jobrun.Runner{D: jobDisp, Caller: "convert", Class: jobrun.ClassScheduled}}
 	workflowSvc.RegisterRoleEnvHook(mcrMod.RoleEnvHook)
 	mcrMod.SetRuntime(&mcrmod.Runtime{Wf: workflowSvc, Nodes: mcrNodes{nodes: store, http: nodeHTTPClient}, SecretsDir: mcrSecretsDir,
-		Sources:  mcrFabric{nodes: store, graph: graphSvc},
+		Sources: mcrFabric{nodes: store, graph: graphSvc},
+		Monitor: mcrFabric{nodes: store, graph: graphSvc},
+		Resolve: func(nodeID string) (string, string, bool) {
+			wid, _, role, ok := workflowSvc.FindRoleForNode(nodeID)
+			return wid, role, ok
+		},
+		Recorder: mcrRecorder{m: ingestMod},
+		Binder:   mcrBinder{s: authzStore},
+		GPIO:     mcrGPIO{nodes: store, do: mcrNodes{nodes: store, http: nodeHTTPClient}.Do}.Set,
+		Capacity: mcrCapacity{hosts: hostStore, metrics: hostMetricsTracker, local: launcherSvc, profiles: profileStore},
 		Intercom: &mcrmod.Intercom{Svc: extsvcMod, Fabric: mcrFabric{nodes: store, graph: graphSvc}}})
+	go runWhileLeader(ctx, clusterNode, func(ctx context.Context) { mcrMod.WatchAlarms(ctx, hub) }) // Alarmhistorie (106.13d)
 	extsvcMod.S = extsvcmod.Services{Nodes: store, Secrets: serviceSecrets{l: launcherSvc, token: serviceToken}, HTTP: &http.Client{Transport: nodeauth.Wrap(nodeTransport), Timeout: 10 * time.Second}}
 	processStore := process.NewStore(database)
 	// EventPublisher = nc direkt (erfüllt process.EventPublisher: Publish
