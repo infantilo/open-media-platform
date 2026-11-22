@@ -23,6 +23,7 @@ pub mod cea608;
 pub mod au_ring;
 pub mod rtp;
 pub mod st2110;
+pub mod jxs;
 pub mod st2022_7;
 pub mod st2110_interlaced;
 pub mod kbypass;

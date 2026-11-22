@@ -4770,6 +4770,10 @@ ST 2110             ─► omp-2110-gateway      ┘   (Etiketten aus Quellzeit)
 | RIST (VSF TR-06-1 Simple Profile, TR-06-2 Main Profile) | Transport, Bündelung | TR-06-1:2020-06-25; TR-06-2 laut VSF-Seite aktuell 2024; GStreamer 1.22 `ristsrc` beschreibt sich als TR-06-1 (Simple Profile); Originaltext und Bündelungsverhalten vor 106.7 belegen |
 | SMPTE ST 337 | Kennung nicht-PCM-Daten im Tonkanal (keine Interpolation) | Nummer belegt, Abschnitt vor 106.5 prüfen |
 
+### 33.4a Umsetzungsstand (2026-11-22)
+
+Umgesetzt (Kap. 106.0–106.15f): Normalizer, A/V-Messung und -Ausgleich, Leitungseingang SRT/RIST, ST-2110-Eingang, Go-Modul `mcr` (Events, Vorlagen, Lebenszyklus, Rollen, Alarme, Reaktionen, Kette, Vorprüfung), Intercom-Rückwege, Multiview-Wand, Oberfläche. Abweichungen und Grenzen: `docs/entwuerfe/ENTWURF-MCR.md` §9. Offen: 106.16 (wartet auf Material).
+
 ### 33.5 Grenzen / Nicht-Ziele
 
 Keine bewegungskompensierte Normwandlung (59,94 → 50 vorerst nur über `videorate`/`blend` als Übergang, später als austauschbarer Dienst), nur

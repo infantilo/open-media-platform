@@ -119,3 +119,7 @@ Stehen vollständig unter „Entschiedene Punkte“ in `UMSETZUNG.md` Kapitel 10
 **Auswirkungen:** Kapazitäts-Vorprüfung zählt die Stufen automatisch (Rollen des Workflows). Änderungen der Kette wirken beim nächsten Start (planned → testing); ein laufender Workflow ändert seine Rollen nicht (siehe 106.13).
 
 **Nicht Teil dieses Schritts:** Filter-Nodes selbst; Bild-/Tonstufen mit mehreren Ausgängen; Umordnen laufender Ketten.
+
+## 9. Endstand (2026-11-22)
+
+Umgesetzt: 106.0–106.15f außer 106.16 (inhaltsbasierte Messung, wartet auf Testmaterial mit Sprechern). Abweichungen vom Plan: Funktionsrechte heißen `mcr.manage`/`mcr.live`/`mcr.view` (statt `configure`/`operate`/`view`), um bestehende Gruppenzuweisungen nicht zu brechen; Zugriffsregeln (`accessrules`) werden nicht gesetzt (Freigabelisten-Wirkung); Mitschnitt nur als dekodierter MXL-Fluss (Original-TS nicht möglich); ein Tonfluss je Leitung; Normalizer ohne Datenempfänger. Offen: Intercom-Hinweis `panel.notice`, Tally-Weitergabe, Test mit echtem Konto der Gruppe „hkr“, Aufzeichnung live gegen Ingest-Profil. Der Scope-Alarm bei zwei Leitungen auf der Entwicklungs-VM ist vermutlich CPU-Mangel.

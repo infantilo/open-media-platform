@@ -166,6 +166,9 @@ const CSS = `
 .mcr-rail-head { padding:12px 12px 8px; display:flex; flex-direction:column; gap:10px; }
 .mcr-chips { display:flex; flex-wrap:wrap; gap:6px; }
 .mcr-chip { border:1px solid var(--mcr-line); background:transparent; border-radius:999px; padding:3px 10px; font-size:var(--omp-font-size-sm); color:var(--omp-text-dim); }
+.mcr-adv { border:1px solid var(--mcr-line); border-radius:8px; padding:8px 12px; }
+.mcr-adv summary { cursor:pointer; color:var(--omp-text-dim); }
+.mcr-chip[data-custom] { color:var(--omp-warning,#e0a030); border-color:currentColor; cursor:default; }
 .mcr-chip[aria-pressed="true"] { color:var(--omp-text); border-color:var(--omp-accent-cyan); background:rgba(25,211,243,.08); }
 .mcr-rail-list { overflow:auto; padding:4px 10px 14px; display:flex; flex-direction:column; gap:8px; min-height:0; flex:1; }
 .mcr-ev { position:relative; text-align:left; border:1px solid var(--mcr-line); background:var(--mcr-card); border-radius:8px; padding:10px 12px 10px 16px; height:76px; display:grid; grid-template-rows:auto auto; gap:2px; align-content:center; overflow:hidden; }

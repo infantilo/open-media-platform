@@ -624,6 +624,16 @@ fn resolve_ingest_params() -> Result<IngestParams, String> {
     };
 
     if let Some(sdp_content) = sdp_content {
+        if omp_mediaio::jxs::sdp_is_jxs(&sdp_content) {
+            // ST 2110-22 (JPEG XS): optionales Profil, der Gateway-Datenpfad ist dafür noch nicht verdrahtet. Klare Meldung
+            // statt falsch als Rohvideo zu lesen; `video/raw` bleibt unverändert.
+            let a = omp_mediaio::jxs::availability();
+            return Err(if a.can_receive() {
+                "SDP beschreibt JPEG XS (video/jxsv, ST 2110-22): im 2110-Gateway noch nicht angeschlossen — nur video/raw (ST 2110-20)".to_string()
+            } else {
+                format!("SDP beschreibt JPEG XS (video/jxsv, ST 2110-22): Plugins fehlen ({}) — nur video/raw (ST 2110-20) möglich", a.missing().join(", "))
+            }.into());
+        }
         let parsed = sdp::parse_video_sdp(&sdp_content)?;
         let multicast_group = is_multicast(&parsed.host).then_some(parsed.host);
         return Ok(IngestParams {

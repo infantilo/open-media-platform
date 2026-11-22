@@ -2,6 +2,7 @@
 import { t } from "../host.ts";
 import { field, h, input, note, select } from "./mcr-dom.ts";
 import { parseParam, paramText } from "./chain-logic.ts";
+import { effectiveHold, isCustomized, PROFILES, SIMPLE_CHECKS, type SimpleCheck, withHold } from "./monitor-logic.ts";
 
 export interface Reaction {
   id: string; name?: string; enabled?: boolean;
@@ -19,8 +20,30 @@ const csv = (v: string): string[] | undefined => {
 
 export function monitorEditor(initial: MonCfg | null | undefined, opts: { withReactions: boolean; lines?: { id: string; name: string }[] }): { el: HTMLElement; read: () => MonCfg | null } {
   const cfg: MonCfg = JSON.parse(JSON.stringify(initial ?? {}));
-  const profile = input(cfg.profile ?? "", { placeholder: t("mcr.mon.profilePh") });
-  const ov = input(Object.entries(cfg.overrides ?? {}).map(([k, v]) => `${k}=${paramText(v)}`).join(", "), { placeholder: "black.holdSeconds=5, freeze.enabled=false" });
+  const prof0 = cfg.profile ?? "";
+  const profile = select([...PROFILES.map((p) => ({ value: p, label: t(`mcr.mon.prof.${p || "default"}`) })), ...((PROFILES as readonly string[]).includes(prof0) ? [] : [{ value: prof0, label: prof0 }])], prof0);
+  let simple: Record<string, unknown> = {};
+  const rest: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(cfg.overrides ?? {})) (k.endsWith(".holdSeconds") && SIMPLE_CHECKS.includes(k.split(".")[0] as SimpleCheck) ? simple : rest)[k] = v;
+  const ov = input(Object.entries(rest).map(([k, v]) => `${k}=${paramText(v)}`).join(", "), { placeholder: "black.threshold=20, freeze.enabled=false" });
+  const badge = h("span", { class: "mcr-chip", "data-custom": "true" }, t("mcr.mon.customized"));
+  const holds = h("div", { class: "mcr-form-grid" });
+  const drawHolds = () => {
+    const off = profile.value === "off";
+    badge.style.visibility = isCustomized(profile.value, { ...simple, ...rest }) ? "visible" : "hidden";
+    holds.replaceChildren(...SIMPLE_CHECKS.map((c) => {
+      const v = effectiveHold(profile.value, simple, c);
+      const inp = input(v ?? "", { type: "number", min: "0", max: "3600", step: "0.5" });
+      inp.disabled = off;
+      inp.addEventListener("change", () => {
+        if (inp.value !== "") simple = withHold(profile.value, simple, c, Number(inp.value));
+        drawHolds();
+      });
+      return field(t(`mcr.mon.hold.${c}`), inp);
+    }));
+  };
+  profile.addEventListener("change", () => { simple = {}; drawHolds(); });
+  drawHolds();
   let rules: Reaction[] = cfg.reactions ?? [];
   const box = h("div", { class: "mcr-chain-body" });
   const drawRules = () => {
@@ -80,14 +103,15 @@ export function monitorEditor(initial: MonCfg | null | undefined, opts: { withRe
     box.append(h("div", { class: "mcr-quick" }, add));
   };
   drawRules();
-  const el = h("div", { class: "mcr-form" }, h("div", { class: "mcr-form-grid" }, field(t("mcr.mon.profile"), profile, t("mcr.mon.profileHint")), field(t("mcr.mon.overrides"), ov, t("mcr.mon.overridesHint"))),
+  const adv = h("details", { class: "mcr-adv" }, h("summary", {}, t("mcr.mon.advanced")), field(t("mcr.mon.overrides"), ov, t("mcr.mon.overridesHint")));
+  const el = h("div", { class: "mcr-form" }, h("div", { class: "mcr-quick" }, field(t("mcr.mon.profile"), profile, t("mcr.mon.profileHint")), badge), note(t("mcr.mon.holdHint")), holds, adv,
     ...(opts.withReactions ? [h("h4", {}, t("mcr.mon.rules")), note(t("mcr.mon.rulesHint")), box] : []));
   return {
     el,
     read: () => {
       const out: MonCfg = {};
       if (profile.value.trim()) out.profile = profile.value.trim();
-      const o: Record<string, unknown> = {};
+      const o: Record<string, unknown> = { ...simple };
       for (const part of ov.value.split(",")) {
         const [k, ...v] = part.split("=");
         if (k.trim() && v.length) o[k.trim()] = parseParam(v.join("="));
