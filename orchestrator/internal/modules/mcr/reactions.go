@@ -17,6 +17,7 @@ const (
 	ActPip    = "pip"    // Quelle ins Alarm-PiP aufschalten
 	ActNotice = "notice" // Hinweis an die Bedienung (Toast in der Wand)
 	ActGPIO   = "gpio"   // Kontaktausgang setzen
+	ActPanel  = "panel"  // Textanzeige an Intercom-Sprechstellen (Vertragsrolle panel.notice)
 
 	NodeSwitcher = "omp-switcher"
 	monRoleAlarm = "alarm"
@@ -52,6 +53,7 @@ type Reaction struct {
 	Trigger     ReactionTrigger  `json:"trigger"`
 	Actions     []string         `json:"actions"`
 	GPIO        *GPIOAction      `json:"gpio,omitempty"`
+	Panels      []int            `json:"panels,omitempty"` // Teilnehmer-IDs der Sprechstellen für „panel“; leer = alle
 	HoldSeconds int              `json:"holdSeconds,omitempty"` // Haltezeit nach Alarmende
 	Select      string           `json:"select,omitempty"`      // highest (Standard) | latest
 	Fallback    ReactionFallback `json:"fallback,omitempty"`
@@ -83,12 +85,20 @@ func ValidateReactions(label string, rs []Reaction) error {
 			return bad("%s: Regel „%s“ hat keine Reaktion", label, r.ID)
 		}
 		for _, a := range r.Actions {
-			if a != ActBorder && a != ActPip && a != ActNotice && a != ActGPIO {
-				return bad("%s: Regel „%s“: Reaktion „%s“ unbekannt (border, pip, notice, gpio)", label, r.ID, a)
+			if a != ActBorder && a != ActPip && a != ActNotice && a != ActGPIO && a != ActPanel {
+				return bad("%s: Regel „%s“: Reaktion „%s“ unbekannt (border, pip, notice, gpio, panel)", label, r.ID, a)
 			}
 		}
 		if r.has(ActGPIO) && (r.GPIO == nil || strings.TrimSpace(r.GPIO.Target) == "" || r.GPIO.Pin < 1 || r.GPIO.Pin > 64) {
 			return bad("%s: Regel „%s“: Kontaktausgang braucht Ziel und Pin 1…64", label, r.ID)
+		}
+		if len(r.Panels) > 50 {
+			return bad("%s: Regel „%s“: höchstens 50 Sprechstellen", label, r.ID)
+		}
+		for _, p := range r.Panels {
+			if p < 1 {
+				return bad("%s: Regel „%s“: Sprechstellen-Kennung muss ≥ 1 sein", label, r.ID)
+			}
 		}
 		if r.Trigger.MinSeverity != "" && sevRank(r.Trigger.MinSeverity) < 0 {
 			return bad("%s: Regel „%s“: Schweregrad „%s“ unbekannt", label, r.ID, r.Trigger.MinSeverity)
@@ -262,6 +272,9 @@ type GPIOSetter func(ctx context.Context, target string, pin int, level bool) er
 // onAlarm führt die Reaktionen auf Eintritt/Ende eines Alarms aus (Kontaktausgang); Rahmen und PiP laufen über den Abgleich.
 func (rt *Runtime) onAlarm(ctx context.Context, s *Service, e Event, a Alarm, raised bool) {
 	mon, _ := ParseMon(e.Monitoring)
+	if raised {
+		rt.panelNotices(ctx, e, a, mon.Reactions)
+	}
 	if rt.GPIO == nil {
 		return
 	}
@@ -350,4 +363,34 @@ func (rt *Runtime) reconcilePip(ctx context.Context, s *Service, e Event, outSen
 	rt.applied[key] = want
 	rt.mu.Unlock()
 	return target
+}
+
+// panelNotices schickt bei Alarmeintritt den Text an die Sprechstellen der passenden Regeln (Intercom-Vertragsrolle
+// `panel.notice`, nur Anzeige, kein Ton). Fehlt der Intercom, wird nur gewarnt; der Alarm selbst ist nicht betroffen.
+func (rt *Runtime) panelNotices(ctx context.Context, e Event, a Alarm, rs []Reaction) {
+	if rt.Intercom == nil || rt.Intercom.Svc == nil {
+		return
+	}
+	for _, r := range rs {
+		if !r.on() || !r.has(ActPanel) || !r.Matches(a) {
+			continue
+		}
+		text := e.Name + " · " + a.LineName + ": " + a.Text
+		if a.Text == "" {
+			text = e.Name + " · " + a.LineName + ": " + a.Kind
+		}
+		if rn := []rune(text); len(rn) > 200 {
+			text = string(rn[:199]) + "…"
+		}
+		body := map[string]any{"event": e.ID, "text": text, "severity": a.Severity}
+		if len(r.Panels) > 0 {
+			body["to"] = r.Panels
+		} else {
+			body["to"] = "all"
+		}
+		code, _, err := rt.Intercom.Svc.CallRole(ctx, "intercom", "panel.notice", nil, body, "mcr")
+		if err != nil || code/100 != 2 {
+			slog.Warn("mcr: Sprechstellen-Hinweis", "event", e.ID, "rule", r.ID, "code", code, "error", err)
+		}
+	}
 }

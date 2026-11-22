@@ -187,6 +187,7 @@ html.embed .grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8
   function onMsg(m) {
     if (m.t === 'state') { state = m; render(); }
     else if (m.t === 'busy') { banner(m.name + ' ' + T.busy); setTimeout(() => banner(''), 3000); }
+    else if (m.t === 'notice') { beep(); if (navigator.vibrate) navigator.vibrate([100, 60, 100]); banner(String(m.text || '')); setTimeout(() => banner(''), m.severity === 'info' ? 6000 : 12000); }
     else if (m.t === 'ring') { beep(); if (navigator.vibrate) navigator.vibrate([200, 100, 200]); lastRing = m; banner(T.ring + ' ' + m.name); setTimeout(() => banner(''), 4000);
       document.querySelectorAll('.unit.call').forEach(e => { e.classList.remove('ring'); void e.offsetWidth; e.classList.add('ring'); }); }
   }

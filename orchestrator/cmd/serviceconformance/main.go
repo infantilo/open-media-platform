@@ -212,6 +212,23 @@ func main() {
 			}
 			r.check("Rolle event.return.delete", err)
 		}
+		// Textanzeige (optional): gültiger Aufruf = 2xx, leerer Text = 400.
+		for i := range mf.Routes {
+			if mf.Routes[i].Role != "panel.notice" {
+				continue
+			}
+			pn := mf.Routes[i]
+			code, b, err := r.do(pn.Method, mf.Base+pn.Path, []byte(`{"text":"Konformanztest","severity":"info","to":"all"}`), true, feats)
+			if err == nil && code/100 != 2 {
+				err = fmt.Errorf("HTTP %d: %s", code, strings.TrimSpace(string(b)))
+			}
+			r.check("Rolle panel.notice", err)
+			code, _, err = r.do(pn.Method, mf.Base+pn.Path, []byte(`{"text":"","severity":"info"}`), true, feats)
+			if err == nil && code != 400 {
+				err = fmt.Errorf("leerer Text: HTTP %d statt 400", code)
+			}
+			r.check("Rolle panel.notice (leerer Text abgelehnt)", err)
+		}
 	}
 
 	// Oberfläche: relative Bundles müssen unter `<Base>/ui/<Datei>` auslieferbar sein.

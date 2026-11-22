@@ -39,6 +39,8 @@ var Contracts = map[string]Contract{
 		// Event-Rückwege (Kapitel 106.12): Rückweg zu einer Leitung eines Events anlegen/abbauen.
 		"event.return.create": {Method: "POST", Params: 0},
 		"event.return.delete": {Method: "DELETE", Params: 1},
+		// Textanzeige an Sprechstellen (Kapitel 106.13d, z. B. Alarmhinweis): kein Ton.
+		"panel.notice": {Method: "POST", Params: 0},
 	},
 }
 

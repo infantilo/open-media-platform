@@ -267,3 +267,48 @@ func TestAlarmPipSwitchesWithoutRebuildingOthers(t *testing.T) {
 		t.Fatalf("Wand: %+v", wall)
 	}
 }
+
+type fakeNoticeSvc struct{ bodies []map[string]any }
+
+func (f *fakeNoticeSvc) CallRole(_ context.Context, _, role string, _ []string, body any, _ string) (int, []byte, error) {
+	if role == "panel.notice" {
+		f.bodies = append(f.bodies, body.(map[string]any))
+	}
+	return 200, []byte(`{"ok":true}`), nil
+}
+
+func TestPanelNoticeOnRaiseOnly(t *testing.T) {
+	svc, rt, ev, _ := alarmEnv(t)
+	f := &fakeNoticeSvc{}
+	rt.Intercom = &Intercom{Svc: f}
+	ctx := context.Background()
+	cur, _ := svc.St.GetEvent(ctx, ev.ID)
+	mon := `{"reactions":[{"id":"an-regie","actions":["panel"],"panels":[3,4],"trigger":{"kinds":["signal-black"]}},{"id":"alle","actions":["panel"],"trigger":{"kinds":["signal-black"]},"enabled":false}]}`
+	if _, err := svc.UpdateEvent(ctx, ev.ID, NewEventInput{Name: cur.Name, Lines: cur.Lines, Monitoring: json.RawMessage(mon)}, true, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	in := func(kind, state string) AlarmIn {
+		return AlarmIn{NodeID: "n-scope", Kind: kind, State: state, Severity: "critical", Message: "Schwarzbild"}
+	}
+	for _, a := range []AlarmIn{in("signal-freeze", "raised"), in("signal-black", "raised"), in("signal-black", "cleared")} {
+		if err := rt.IngestAlarm(ctx, svc, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(f.bodies) != 1 {
+		t.Fatalf("erwartet genau einen Hinweis (nur Eintritt, nur passende, nur aktive Regel): %v", f.bodies)
+	}
+	b := f.bodies[0]
+	if b["severity"] != "critical" || !strings.Contains(b["text"].(string), "Schwarzbild") || len(b["to"].([]int)) != 2 {
+		t.Fatalf("Inhalt: %v", b)
+	}
+}
+
+func TestValidatePanelReaction(t *testing.T) {
+	if err := ValidateReactions("x", []Reaction{{ID: "a", Actions: []string{"panel"}, Panels: []int{0}}}); err == nil {
+		t.Fatal("Kennung 0 muss abgelehnt werden")
+	}
+	if err := ValidateReactions("x", []Reaction{{ID: "a", Actions: []string{"panel"}, Panels: []int{2}}}); err != nil {
+		t.Fatal(err)
+	}
+}

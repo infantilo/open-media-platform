@@ -27,6 +27,7 @@ Funktionsrechte mit Präfix `<name>.` und die Routen mit **Rollen** (§2).
 | `guest.revoke` | `DELETE /guests/{id}` | nein | Gast-Zugang widerrufen |
 | `event.return.create` | `POST /event-returns` | nein | Rückweg zu einer Leitung eines Events anlegen (idempotent über `key`) |
 | `event.return.delete` | `DELETE /event-returns/{id}` | nein | alle Rückwege eines Events abbauen (`{id}` = Event-Kennung) |
+| `panel.notice` | `POST /panel-notices` | nein | Textanzeige an Sprechstellen (kein Ton), z. B. ein Alarmhinweis |
 
 Die Pfade wählt die Implementierung; maßgeblich sind Rolle, Methode und die Anzahl der Platzhalter (`{party}` = Teilnehmer-ID).
 Clients finden die Route über `GET /api/v1/ext` (Typ `intercom`, `roles`), nie über einen festen Pfad oder Namen.
@@ -56,6 +57,7 @@ Clients finden die Route über `GET /api/v1/ext` (Typ `intercom`, `roles`), nie 
   zweites Mal gibt den vorhandenen Rückweg zurück (kein Fehler). Rechte: `<name>.guest` oder `.admin`.
 * `event.return.delete`: räumt alle Rückwege des Events samt Kanälen, Teilnehmern und Gästen ab; kein Rückweg ist kein Fehler.
   Antwort `{"ok":true,"removed":N}`.
+* `panel.notice` (Kap. 106.13d): Körper `{"text":"…","severity":"info|warning|error|critical","to":[id…]|"all","event":"<optional>"}`; `text` 1–200 Zeichen. Der Dienst zeigt den Text an den verbundenen Sprechstellen an (Banner, kurzer Signalton; **kein** Audio im Mix). Antwort 200 `{"ok":true,"delivered":N}` (N = gerade verbundene Empfänger; 0 ist kein Fehler, nicht Verbundene erhalten den Hinweis nicht nachträglich). Rechte: `<name>.guest` oder `.admin`.
 * Rechte: `deck.*` nur für Sprechstellen, die die Person bedienen darf (eigene bzw. mit Administrationsrecht alle).
 
 ## 3. Sicherheit (gilt für jeden Dienst)

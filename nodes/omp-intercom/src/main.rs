@@ -312,6 +312,34 @@ impl Store {
                     Err(e) => reply(Self::admin_err(e)),
                 }
             }
+            service::Op::PanelNotice => {
+                let v = match body_json() {
+                    Ok(v) => v,
+                    Err(r) => return reply(r),
+                };
+                let text = v.get("text").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                if text.is_empty() || text.chars().count() > 200 {
+                    return reply(json_resp(400, json!({"error": "text: 1 bis 200 Zeichen"})));
+                }
+                let severity = match v.get("severity").and_then(Value::as_str).unwrap_or("warning") {
+                    s @ ("info" | "warning" | "error" | "critical") => s.to_string(),
+                    _ => return reply(json_resp(400, json!({"error": "severity: info, warning, error oder critical"}))),
+                };
+                let to = match v.get("to") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(s)) if s == "all" => None,
+                    Some(Value::Array(a)) => {
+                        let ids: Vec<u32> = a.iter().filter_map(Value::as_u64).map(|x| x as u32).collect();
+                        if ids.len() != a.len() || ids.is_empty() {
+                            return reply(json_resp(400, json!({"error": "to: Liste von Teilnehmer-IDs oder \"all\""})));
+                        }
+                        Some(ids)
+                    }
+                    _ => return reply(json_resp(400, json!({"error": "to: Liste von Teilnehmer-IDs oder \"all\""}))),
+                };
+                let delivered = self.hub.core.lock().expect("lock poisoned").notice(to, &text, &severity);
+                reply(json_resp(200, json!({"ok": true, "delivered": delivered})))
+            }
             service::Op::DeleteEventReturns(event) => {
                 let mut adm = self.admin.lock().expect("lock poisoned");
                 match adm.delete_event_returns(&event) {

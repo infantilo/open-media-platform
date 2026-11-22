@@ -7,12 +7,12 @@ import { effectiveHold, isCustomized, PROFILES, SIMPLE_CHECKS, type SimpleCheck,
 export interface Reaction {
   id: string; name?: string; enabled?: boolean;
   trigger: { kinds?: string[]; minSeverity?: string; lines?: string[] };
-  actions: string[]; gpio?: { target: string; pin: number };
+  actions: string[]; gpio?: { target: string; pin: number }; panels?: number[];
   holdSeconds?: number; select?: string; fallback?: { mode?: string; lineId?: string };
 }
 export interface MonCfg { profile?: string; overrides?: Record<string, unknown>; reactions?: Reaction[] }
 
-export const ACTIONS = ["border", "pip", "notice", "gpio"] as const;
+export const ACTIONS = ["border", "pip", "notice", "panel", "gpio"] as const;
 const csv = (v: string): string[] | undefined => {
   const l = v.split(",").map((x) => x.trim()).filter(Boolean);
   return l.length ? l : undefined;
@@ -82,6 +82,12 @@ export function monitorEditor(initial: MonCfg | null | undefined, opts: { withRe
       const syncG = () => (r.gpio = gt.value.trim() ? { target: gt.value.trim(), pin: Number(gp.value) || 0 } : undefined);
       gt.addEventListener("input", syncG);
       gp.addEventListener("input", syncG);
+      const pn = input((r.panels ?? []).join(", "), { placeholder: t("mcr.mon.panelsPh") });
+      pn.addEventListener("input", () => {
+        const l = pn.value.split(",").map((x) => Number(x.trim())).filter((x) => Number.isInteger(x) && x > 0);
+        r.panels = l.length ? l : undefined;
+      });
+      const panelRow = r.actions.includes("panel") ? h("div", { class: "mcr-form-grid" }, field(t("mcr.mon.panels"), pn, t("mcr.mon.panelsHint"))) : null;
       const del = h("button", { type: "button", class: "mcr-btn mcr-btn-sm mcr-btn-quiet", "aria-label": t("mcr.chain.remove") }, "✕");
       del.addEventListener("click", () => {
         rules.splice(i, 1);
@@ -91,7 +97,7 @@ export function monitorEditor(initial: MonCfg | null | undefined, opts: { withRe
       const pipRow = r.actions.includes("pip") ? h("div", { class: "mcr-form-grid" }, field(t("mcr.mon.select"), sel), field(t("mcr.mon.fallback"), h("div", { class: "mcr-quick" }, fbm, fbl))) : null;
       return h("div", { class: "mcr-chain-stage" }, h("div", { class: "mcr-chain-head" }, name, del),
         h("div", { class: "mcr-form-grid" }, field(t("mcr.mon.kinds"), kinds), field(t("mcr.mon.minSev"), sev)), field(t("mcr.mon.lines"), lines), field(t("mcr.mon.actions"), acts),
-        h("div", { class: "mcr-form-grid" }, field(t("mcr.mon.hold"), hold)), pipRow, gpioRow);
+        h("div", { class: "mcr-form-grid" }, field(t("mcr.mon.hold"), hold)), pipRow, panelRow, gpioRow);
     }));
     const add = h("button", { type: "button", class: "mcr-btn mcr-btn-sm" }, `+ ${t("mcr.mon.addRule")}`);
     add.addEventListener("click", () => {

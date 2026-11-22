@@ -76,6 +76,8 @@ pub struct Core {
     speakers: BTreeMap<ChannelId, Vec<PartyId>>,
     speaking: BTreeSet<PartyId>,
     pending_rings: Vec<(PartyId, PartyId)>, // (an, von)
+    /// Textanzeigen (106.13d `panel.notice`): (Empfänger oder alle, Text, Schweregrad)
+    pending_notices: Vec<(Option<Vec<PartyId>>, String, String)>,
     dirty: bool,
 }
 
@@ -115,6 +117,7 @@ impl Core {
             speakers: BTreeMap::new(),
             speaking: BTreeSet::new(),
             pending_rings: Vec::new(),
+            pending_notices: Vec::new(),
             dirty: true,
         }
     }
@@ -447,6 +450,18 @@ impl Core {
 
     /// Ruf starten/beenden. Ein Ruf ist ein temporärer Kanal: der Anrufer spricht, die Angerufenen hören
     /// (unabhängig von ihren übrigen Kanälen und auch dann, wenn sie sonst nichts hören).
+    /// Textanzeige an Sprechstellen (kein Ton am Mix, nur Banner/Signal im Panel). `to` = None: alle. Liefert die Zahl
+    /// der aktuell verbundenen Empfänger.
+    pub fn notice(&mut self, to: Option<Vec<PartyId>>, text: &str, severity: &str) -> usize {
+        let n = self.sessions.iter().filter(|(id, p)| p.connected() && to.as_ref().is_none_or(|l| l.contains(id))).count();
+        self.pending_notices.push((to, text.to_string(), severity.to_string()));
+        if self.pending_notices.len() > 32 {
+            self.pending_notices.remove(0);
+        }
+        self.dirty = true;
+        n
+    }
+
     pub fn call(&mut self, from: PartyId, to: &[PartyId], on: bool) {
         let id = CALL_BASE + from;
         if on {
@@ -605,6 +620,7 @@ impl Core {
             self.dirty = false;
             let rings = std::mem::take(&mut self.pending_rings);
             let busy = std::mem::take(&mut self.pending_busy);
+            let notices = std::mem::take(&mut self.pending_notices);
             for (id, peer) in &self.sessions {
                 if !peer.connected() {
                     continue;
@@ -616,6 +632,11 @@ impl Core {
                     if caller == id {
                         let name = self.parties.get(who).map(|p| p.name.clone()).unwrap_or_default();
                         peer.send_text(&json!({"t": "busy", "party": who, "name": name}).to_string());
+                    }
+                }
+                for (to, text, sev) in &notices {
+                    if to.as_ref().is_none_or(|l| l.contains(id)) {
+                        peer.send_text(&json!({"t": "notice", "text": text, "severity": sev}).to_string());
                     }
                 }
                 for (to, from) in &rings {
@@ -852,6 +873,17 @@ mod tests {
         let bad = json!({"channels": [{"id": 1}], "parties": [{"id": 1, "routes": [{"ch": 9, "talk": true}]}]});
         assert!(c.apply_config(&bad).is_err());
         assert_eq!(c.parties.len(), 3);
+    }
+
+    #[test]
+    fn notice_is_queued_and_counts_connected_targets() {
+        let mut c = Core::new();
+        assert_eq!(c.notice(None, "Schwarzbild", "critical"), 0, "keine Sitzung verbunden");
+        assert_eq!(c.pending_notices.len(), 1);
+        for i in 0..40 {
+            c.notice(Some(vec![1]), &format!("n{i}"), "info");
+        }
+        assert_eq!(c.pending_notices.len(), 32, "Warteschlange ist begrenzt");
     }
 
     #[test]
