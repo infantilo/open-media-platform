@@ -96,8 +96,9 @@ func RenameRolesInDefinition(def Definition, m map[string]string) (Definition, e
 	return out, nil
 }
 
-// RenameRoleStateJSON schreibt einen gesicherten Rollen-Zustand (Blob eines Nodes) um: die Alias-Platzhalter, die auf eine
-// umbenannte Rolle zeigen, schemafrei über den ganzen JSON-Baum.
+// RenameRoleStateJSON schreibt einen gesicherten Rollen-Zustand (Blob eines Nodes) um, schemafrei über den ganzen JSON-Baum:
+// die Alias-Platzhalter, die auf eine umbenannte Rolle zeigen, und Texte, die eine umbenannte Rolle beim Namen nennen
+// (genau der alte Name oder „<alter Name> …“).
 func RenameRoleStateJSON(raw json.RawMessage, m map[string]string) (json.RawMessage, error) {
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
@@ -131,6 +132,25 @@ func renameAliases(v any, m map[string]string) any {
 		if rest, ok := strings.CutPrefix(x, nodeAliasPrefix); ok {
 			if nv, ok := m[rest]; ok {
 				return nodeAliasPrefix + nv
+			}
+		}
+		// Nodes verweisen einander auch **über den Namen** (= Rollenname = Anzeigename): die Kopplung der Grafik an den Mischer
+		// (`"mixer":"<Name>"`), das Keyer-Ziel des Mischers (`"keyerSourceLabel":"<Name>"`), Port-Bezeichnungen „<Name> Fill“.
+		// Wer nur die Platzhalter umschreibt, bricht diese Verweise (Nutzerfund 2026-11-23: die Grafik fuhr nach der
+		// Umbenennung nicht mehr mit dem PIP). Ersetzt wird ein Text, der genau der alte Name ist oder mit „<alter Name> “ beginnt.
+		if nv, ok := m[x]; ok {
+			return nv
+		}
+		if i := strings.IndexByte(x, ' '); i > 0 {
+			// längster passender alter Name als Präfix (Namen dürfen selbst Leerzeichen enthalten)
+			best := ""
+			for old := range m {
+				if len(old) > len(best) && strings.HasPrefix(x, old+" ") {
+					best = old
+				}
+			}
+			if best != "" {
+				return m[best] + x[len(best):]
 			}
 		}
 		return x

@@ -86,7 +86,7 @@ func TestRenameRolesSwapAndErrors(t *testing.T) {
 }
 
 func TestRenameRoleStateAliases(t *testing.T) {
-	blob := json.RawMessage(`{"sources":[{"id":"@@omp-role-sender:Bildmischer:1"},"@@omp-role-sender:Quelle 1:0","@@omp-role-sender:Fremd:2"],"follow":"@@omp-role-node:Bildmischer","plain":"Bildmischer","n":3}`)
+	blob := json.RawMessage(`{"sources":[{"id":"@@omp-role-sender:Bildmischer:1"},"@@omp-role-sender:Quelle 1:0","@@omp-role-sender:Fremd:2"],"follow":"@@omp-role-node:Bildmischer","plain":"Bildmischer","port":"Bildmischer Fill","longer":"Bildmischerei","other":"Fremd","empty":"","n":3}`)
 	m := map[string]string{"Bildmischer": "Video Mixer", "Quelle 1": "Source 1"}
 	out, err := RenameRoleStateJSON(blob, m)
 	if err != nil {
@@ -98,8 +98,12 @@ func TestRenameRoleStateAliases(t *testing.T) {
 	if src[0].(map[string]any)["id"] != "@@omp-role-sender:Video Mixer:1" || src[1] != "@@omp-role-sender:Source 1:0" || src[2] != "@@omp-role-sender:Fremd:2" {
 		t.Errorf("Sender-Alias: %v", src)
 	}
-	if v["follow"] != "@@omp-role-node:Video Mixer" || v["plain"] != "Bildmischer" || v["n"].(float64) != 3 {
+	// Verweise über den Namen folgen ebenfalls (Kopplung der Grafik an den Mischer, Keyer-Ziel, Port-Bezeichnung).
+	if v["follow"] != "@@omp-role-node:Video Mixer" || v["plain"] != "Video Mixer" || v["n"].(float64) != 3 {
 		t.Errorf("Rest: %v", v)
+	}
+	if v["port"] != "Video Mixer Fill" || v["longer"] != "Bildmischerei" || v["other"] != "Fremd" || v["empty"] != "" {
+		t.Errorf("Namensverweise: %v", v)
 	}
 	// Schlüssel der Zustandsliste folgen ebenfalls; der Rolle-Zustand bleibt erhalten.
 	states := map[string]json.RawMessage{"Bildmischer": blob, "Recorder": json.RawMessage(`{"a":1}`)}
@@ -181,5 +185,26 @@ func TestRenameRolesRunsHooksAndRollsBack(t *testing.T) {
 	}
 	if !undone {
 		t.Error("der erste Hook wird zurückgenommen")
+	}
+}
+
+// Nutzerfund 2026-11-23: „OGraf folgt PIPs“ nach der Umbenennung — die Grafik trägt den Mischer als `"mixer":"Bildmischer"`, der Mischer
+// das Keyer-Ziel als `"keyerSourceLabel":"Grafik"`. Beides muss mit umbenannt werden, sonst folgt die Grafik nicht mehr.
+func TestRenameRoleStateKeepsNameReferencesBetweenNodes(t *testing.T) {
+	m := map[string]string{"Bildmischer": "Video Mixer", "Grafik": "Graphics"}
+	graphics := json.RawMessage(`{"state":{"layout":[{"kind":"follow","mixer":"Bildmischer","zone":"pip1"},{"kind":"follow","mixer":"Bildmischer","zone":"pip2"}]}}`)
+	mixer := json.RawMessage(`{"state":{"keyerSourceLabel":"Grafik","pipPresets":[{"graphic":{"node":"Grafik"},"keyer":{"label":"Grafik"}}],"keyerSourceSenderId":"@@omp-role-sender:Grafik:1"}}`)
+	g, _ := RenameRoleStateJSON(graphics, m)
+	if !strings.Contains(string(g), `"mixer":"Video Mixer"`) || strings.Contains(string(g), "Bildmischer") {
+		t.Errorf("Grafik: %s", g)
+	}
+	x, _ := RenameRoleStateJSON(mixer, m)
+	for _, want := range []string{`"keyerSourceLabel":"Graphics"`, `"node":"Graphics"`, `"label":"Graphics"`, `@@omp-role-sender:Graphics:1`} {
+		if !strings.Contains(string(x), want) {
+			t.Errorf("Mischer ohne %s: %s", want, x)
+		}
+	}
+	if strings.Contains(string(x), "Grafik") {
+		t.Errorf("Mischer enthält noch den alten Namen: %s", x)
 	}
 }
