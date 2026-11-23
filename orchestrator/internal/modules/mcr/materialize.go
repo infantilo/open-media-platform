@@ -26,6 +26,7 @@ const (
 	NodeHLS         = "omp-hls-source"
 	NodeNormalizer  = "omp-normalizer"
 	NodeContribOut  = "omp-contribution-out"
+	NodeAudioSplit  = "omp-audio-split"
 )
 
 // LineRoles nennt die Rollen einer Leitung im Workflow (Eingang kann leer sein).
@@ -34,6 +35,9 @@ type LineRoles struct {
 	Normalizer string `json:"normalizer"`
 	// Return: Rolle der SRT-/RIST-Rückleitung dieser Leitung (nur bei Rückweg mit Art „mix“ und Ziel).
 	Return string `json:"return,omitempty"`
+	// Split: Rolle des Tonteilers dieser Leitung (leer = keiner); SplitOutputs: seine Ausgänge in Hauskanälen.
+	Split        string     `json:"split,omitempty"`
+	SplitOutputs []SplitOut `json:"splitOutputs,omitempty"`
 	// Verarbeitungskette (106.13g): Stufen vor und nach dem Normalizer in Reihenfolge.
 	Pre  []StageRole `json:"pre,omitempty"`
 	Post []StageRole `json:"post,omitempty"`
@@ -342,6 +346,26 @@ func Materialize(e Event, global *HouseFormat, secretsDir string, chain ...Chain
 			}
 			def.Roles = append(def.Roles, workflows.Role{Name: lr.Return, NodeType: NodeContribOut})
 			envs[lr.Return] = renv
+		}
+		// Tonteiler (normalize.audioSplit): hängt hinter dem Ton-Ausgang der Kette, jeder Ausgang wird ein Workflow-Ausgang.
+		houseCh := 0
+		if eff.Audio != nil {
+			houseCh = eff.Audio.Channels
+		}
+		splitOuts, err := ResolveAudioSplit(l, houseCh)
+		if err != nil {
+			return def, nil, nil, err
+		}
+		if len(splitOuts) > 0 && w.outAudio != "" {
+			lr.Split = base + "-split"
+			lr.SplitOutputs = splitOuts
+			def.Roles = append(def.Roles, workflows.Role{Name: lr.Split, NodeType: cc.splitterType()})
+			envs[lr.Split] = SplitterEnv(splitOuts, houseCh)
+			def.Connections = append(def.Connections, workflows.Connection{FromRole: w.outAudio, FromSender: w.outAudioPort, ToRole: lr.Split, ToReceiver: cc.splitterIn()})
+			for _, so := range splitOuts {
+				pn := l.Name + " · " + so.Name
+				def.Interface.Outputs = append(def.Interface.Outputs, workflows.InterfacePort{Name: pn, Label: pn, Members: []workflows.InterfaceMember{{Role: lr.Split, Port: so.Name}}})
+			}
 		}
 		def.Interface.Outputs = append(def.Interface.Outputs, workflows.InterfacePort{Name: l.Name, Label: l.Name, Members: []workflows.InterfaceMember{
 			{Role: lr.OutVideo, Port: w.outVideoPort}, {Role: lr.OutAudio, Port: w.outAudioPort}}})

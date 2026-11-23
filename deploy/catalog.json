@@ -78,6 +78,16 @@
     "latency": { "video": { "minLatencyFrames": 1, "maxLatencyFrames": 1 } }
   },
   {
+    "type": "omp-audio-split",
+    "label": "Ton-Teiler (Mehrkanal)",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-audio-split"],
+    "env": {},
+    "description": "Teilt einen Mehrkanal-Ton-Flow (z. B. 16 Spuren) in einzelne Ausgangs-Flows, zum Beispiel Spur 1/2 Stereo-Programm, 3/4 internationaler Ton, 9 Kommentar. Jeder Ausgang ist ein eigener MXL-Sender (Name = Ausgangsname) und kann einzeln, z. B. vom Audiomischer, per Verbindung im Flow Editor bezogen werden. Reiner Kanalkopierer: je Kanal eine bitgleiche Kopie, der Sample-Index bleibt (Bild, Ton und Daten bleiben ausgerichtet), nicht-PCM-Datenkanäle gehen unverändert durch; ein Quellkanal darf in mehreren Ausgängen vorkommen, nicht gewählte Kanäle entfallen. Die Ausgänge stehen beim Start fest: Start-Option OMP_SPLIT_OUTPUTS als JSON, z. B. [{\"name\":\"Programm\",\"channels\":[1,2]},{\"name\":\"IT\",\"channels\":[3,4]}]; ohne Angabe je zwei Kanäle ein Ausgang aus OMP_SPLIT_INPUT_CHANNELS (Standard 16). Zur Laufzeit lassen sich die Kanäle eines Ausgangs umhängen (Parameter split.outputs, gleiche Namen und Kanalzahlen). Die Quelle muss audio/float32 mit 48 kHz sein und mindestens so viele Kanäle haben wie der größte genannte; sonst wird sie mit Meldung abgelehnt. Im MCR wählbar als Funktion „Ton-Teiler“ je Leitung.",
+    "i18n": { "en": {"description": "Splits a multichannel audio flow (e.g. 16 tracks) into separate output flows, for example tracks 1/2 stereo programme, 3/4 international sound, 9 commentary. Each output is its own MXL sender (named after the output) and can be taken individually, e.g. by the audio mixer, by connecting it in the flow editor. A pure channel copier: one bit-exact copy per channel, the sample index is kept (picture, sound and data stay aligned), non-PCM data channels pass through unchanged; a source channel may appear in several outputs, unselected channels are dropped. The outputs are fixed at start: start option OMP_SPLIT_OUTPUTS as JSON, e.g. [{\"name\":\"Programme\",\"channels\":[1,2]},{\"name\":\"IT\",\"channels\":[3,4]}]; without it every two channels become one output, based on OMP_SPLIT_INPUT_CHANNELS (default 16). At runtime the channels of an output can be re-assigned (parameter split.outputs, same names and channel counts). The source must be audio/float32 at 48 kHz with at least as many channels as the highest one named; otherwise it is rejected with a message. In the MCR it can be chosen as the “audio splitter” function per line.", "expectedResources": "very low (memory copy)"} },
+    "expectedResources": "sehr gering (Speicherkopie)"
+  },
+  {
     "type": "omp-avdelay",
     "label": "A/V-Delay",
     "runner": "process",

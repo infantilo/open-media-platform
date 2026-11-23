@@ -101,11 +101,13 @@ type Slots struct {
 	Normalizer Slot `json:"normalizer"`
 	Converter  Slot `json:"converter"`
 	AVDelay    Slot `json:"avdelay"`
+	// Splitter: Ton-Teiler je Leitung (Standard `omp-audio-split`), teilt Mehrkanalton in einzelne Ausgänge (audiosplit.go).
+	Splitter Slot `json:"splitter"`
 }
 
 // DefaultSlots: ohne Einstellung wie bisher (alles im Normalizer).
 func DefaultSlots() Slots {
-	return Slots{Normalizer: Slot{NodeType: NodeNormalizer, Video: true, Audio: true}}
+	return Slots{Normalizer: Slot{NodeType: NodeNormalizer, Video: true, Audio: true}, Splitter: Slot{NodeType: NodeAudioSplit, Audio: true}}
 }
 
 // normalized füllt den Normalizer-Standard nach.
@@ -113,13 +115,16 @@ func (sl Slots) normalized() Slots {
 	if strings.TrimSpace(sl.Normalizer.NodeType) == "" {
 		sl.Normalizer = DefaultSlots().Normalizer
 	}
+	if strings.TrimSpace(sl.Splitter.NodeType) == "" {
+		sl.Splitter = DefaultSlots().Splitter
+	}
 	return sl
 }
 
 // Validate: Typnamen plausibel; ein getrennter Node muss mindestens eine Art tragen.
 func (sl Slots) Validate() error {
 	sl = sl.normalized()
-	for name, s := range map[string]Slot{"Normalizer": sl.Normalizer, "Converter": sl.Converter, "A/V-Delay": sl.AVDelay} {
+	for name, s := range map[string]Slot{"Normalizer": sl.Normalizer, "Converter": sl.Converter, "A/V-Delay": sl.AVDelay, "Ton-Teiler": sl.Splitter} {
 		t := strings.TrimSpace(s.NodeType)
 		if t == "" {
 			continue
@@ -127,7 +132,7 @@ func (sl Slots) Validate() error {
 		if !nodeTypeRe.MatchString(t) {
 			return bad("Funktion %s: Node-Typ „%s“ ungültig", name, s.NodeType)
 		}
-		if name != "Normalizer" && !s.Video && !s.Audio {
+		if name != "Normalizer" && name != "Ton-Teiler" && !s.Video && !s.Audio {
 			return bad("Funktion %s: Node trägt weder Bild noch Ton", name)
 		}
 		if s.MaxFrames < 0 || s.MaxFrames > 250 {
@@ -169,6 +174,12 @@ func (c ChainConfig) autoStages() []Stage {
 		out = append(out, Stage{ID: "avdelay", NodeType: t, Where: WherePost, Label: "A/V-Delay", Params: sl.AVDelay.Params})
 	}
 	return out
+}
+
+// splitterType / splitterPorts: Node-Typ und Eingangs-Port des Tonteilers (Standard „Receiver 1“, sein einziger Empfänger).
+func (c ChainConfig) splitterType() string { return c.Slots.normalized().Splitter.NodeType }
+func (c ChainConfig) splitterIn() string {
+	return orDefault(c.Slots.normalized().Splitter.Ports.AudioIn, "Receiver 1")
 }
 
 // normalizerType: Node-Typ des Hauptknotens je Leitung.

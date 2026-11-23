@@ -192,6 +192,13 @@ func validateLine(l *Line) error {
 	if _, err := ParseHouse(l.HouseFormat); err != nil {
 		return bad("Leitung „%s“: %v", l.Name, err)
 	}
+	if a, err := ParseAudioSplit(*l); err != nil {
+		return err
+	} else if a != nil && len(a.Outputs) > 0 {
+		if err := ValidateSplitOutputs("Leitung „"+l.Name+"“ Tonteiler", a.Outputs); err != nil {
+			return err
+		}
+	}
 	if len(l.Avsync) > 0 {
 		var a struct {
 			Mode string `json:"mode"`

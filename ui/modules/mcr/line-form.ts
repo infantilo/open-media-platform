@@ -279,6 +279,23 @@ export function openLineForm(initial: LineDraft | null, others: { id: string; na
   // Verarbeitungskette (erbt vom Event oder global, oder eigene)
   const chain = chainEditor(d.chain as Stage[] | null | undefined, opts.stageTypes ?? [], { canInherit: true, inheritHint: t("mcr.chain.lineHint") });
 
+  // Ton-Teiler (normalize.audioSplit): Mehrkanalton in einzelne Ausgänge teilen (z. B. für den Audiomischer)
+  const nz = (d.normalize ?? {}) as Record<string, unknown>;
+  const sp = nz.audioSplit as { mode?: string; outputs?: { name: string; channels: number[] }[] } | undefined;
+  let splitMode = sp?.outputs?.length ? "custom" : sp?.mode === "tracks" || sp?.mode === "pairs" ? sp.mode : "off";
+  const splitJson = input(sp?.outputs?.length ? JSON.stringify(sp.outputs) : "", { placeholder: '[{"name":"Programm","channels":[1,2]},{"name":"IT","channels":[3,4]}]' });
+  const splitJsonRow = field(t("mcr.split.json"), splitJson, t("mcr.split.jsonHint"));
+  const syncSplit = () => (splitJsonRow.style.display = splitMode === "custom" ? "" : "none");
+  const splitSeg = segmented(
+    [{ value: "off", label: t("mcr.split.off") }, { value: "tracks", label: t("mcr.split.tracks"), title: t("mcr.split.tracksHint") }, { value: "pairs", label: t("mcr.split.pairs"), title: t("mcr.split.pairsHint") }, { value: "custom", label: t("mcr.split.custom") }],
+    splitMode,
+    (v) => {
+      splitMode = v;
+      syncSplit();
+    },
+  );
+  syncSplit();
+
   // Überwachung (Profil/Abweichungen der Leitung) und Aufzeichnung
   const mon = monitorEditor(d.monitoring as MonCfg | null | undefined, { withReactions: false });
   const recCfg = (d.record ?? {}) as { house?: boolean; profileId?: string; dir?: string };
@@ -322,6 +339,7 @@ export function openLineForm(initial: LineDraft | null, others: { id: string; na
     h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.f.transport")), srcSeg, tpBox, ex.el),
     h("div", { class: "mcr-fieldset" }, sw(ownHouse, t("mcr.f.ownHouse")), hfBox),
     h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.chain.title")), chain.el),
+    h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.split.title")), note(t("mcr.split.hint")), splitSeg, splitJsonRow),
     h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.mon.title")), mon.el),
     h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.rec.title")), h("label", { class: "mcr-sw" }, recOn, t("mcr.rec.house")), recBox, note(t("mcr.rec.hint"))),
     h("div", { class: "mcr-fieldset" }, sw(wantRet, t("mcr.f.wantReturn")), retBox),
@@ -344,6 +362,21 @@ export function openLineForm(initial: LineDraft | null, others: { id: string; na
       else delete out.monitoring;
       if (recOn.checked) out.record = { house: true, profileId: recProfile.value.trim(), ...(recDir.value.trim() ? { dir: recDir.value.trim() } : {}) };
       else delete out.record;
+      const norm = { ...nz } as Record<string, unknown>;
+      if (splitMode === "tracks" || splitMode === "pairs") norm.audioSplit = { mode: splitMode };
+      else if (splitMode === "custom") {
+        let list: unknown;
+        try {
+          list = JSON.parse(splitJson.value);
+        } catch {
+          throw new Error(t("mcr.split.badJson"));
+        }
+        const ok = Array.isArray(list) && list.length > 0 && list.every((o) => o && typeof o.name === "string" && o.name.trim() && Array.isArray(o.channels) && o.channels.length > 0 && o.channels.every((c: unknown) => Number.isInteger(c) && (c as number) >= 1 && (c as number) <= 64));
+        if (!ok) throw new Error(t("mcr.split.badJson"));
+        norm.audioSplit = { outputs: list };
+      } else delete norm.audioSplit;
+      if (Object.keys(norm).length) out.normalize = norm;
+      else delete out.normalize;
       const chosen = chain.read();
       if (chosen === null) delete out.chain;
       else out.chain = chosen as unknown[];

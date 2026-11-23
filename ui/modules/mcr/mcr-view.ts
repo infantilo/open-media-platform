@@ -56,7 +56,7 @@ interface CardRefs {
 }
 
 interface Slot { nodeType?: string; video?: boolean; audio?: boolean; strict?: boolean; ports?: Record<string, string>; env?: Record<string, string>; params?: Record<string, unknown>; maxFrames?: number }
-interface Slots { normalizer?: Slot; converter?: Slot; avdelay?: Slot }
+interface Slots { normalizer?: Slot; converter?: Slot; avdelay?: Slot; splitter?: Slot }
 
 class McrView extends HTMLElement {
   #tab: "wall" | "events" | "timeline" | "alarms" | "templates" | "house" = "wall";
@@ -962,7 +962,7 @@ class McrView extends HTMLElement {
       if (r.ok) await this.#loadGlobal();
     });
     return h("div", { class: "mcr-form", style: "margin-top:18px" }, h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.slots.title")), note(t("mcr.slots.hint")), note(t("mcr.slots.override")),
-      h("div", { class: "mcr-chain-params" }, row("normalizer", t("mcr.slots.normalizer"), false), row("converter", t("mcr.slots.converter"), true), row("avdelay", t("mcr.slots.avdelay"), true)),
+      h("div", { class: "mcr-chain-params" }, row("normalizer", t("mcr.slots.normalizer"), false), row("converter", t("mcr.slots.converter"), true), row("avdelay", t("mcr.slots.avdelay"), true), row("splitter", t("mcr.slots.splitter"), false)),
       h("div", { style: "display:flex;gap:12px;align-items:center" }, save, out)));
   }
 

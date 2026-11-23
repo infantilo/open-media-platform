@@ -9,6 +9,7 @@ members = [
     "omp-hls-source",
     "omp-mxl-bridge",
     "omp-avdelay",
+    "omp-audio-split",
     "omp-capture-card",
     "omp-viewer",
     "omp-switcher",

@@ -386,6 +386,249 @@ impl Drop for RawAudioCopy {
     }
 }
 
+/// Ein Ausgang des Tonteilers ([`RawAudioSplit`]): eigener Flow aus ausgewählten Eingangskanälen.
+#[derive(Clone, Debug)]
+pub struct SplitOutput {
+    pub flow_id: String,
+    pub label: String,
+    /// Eingangskanäle (1-basiert) in der Reihenfolge der Ausgangskanäle.
+    pub channels: Vec<usize>,
+}
+
+/// Prüft die `flow_def` der Quelle für den Tonteiler: `audio/float32`, Abtastrate, mindestens `min_channels` Kanäle.
+/// Gibt die Definition und die Kanalzahl der Quelle zurück.
+pub fn check_split_source(source_flow_def: &str, sample_rate: u32, min_channels: u32) -> Result<(serde_json::Value, u32), String> {
+    let v: serde_json::Value = serde_json::from_str(source_flow_def).map_err(|e| format!("flow_def: {e}"))?;
+    let media = v.get("media_type").and_then(|x| x.as_str()).unwrap_or("");
+    if media != "audio/float32" {
+        return Err(format!("Medientyp {media} (nur audio/float32 wird geteilt)"));
+    }
+    let rate = v.get("sample_rate").and_then(|r| r.get("numerator")).and_then(|x| x.as_u64()).unwrap_or(0);
+    if rate != sample_rate as u64 {
+        return Err(format!("Abtastrate {rate} Hz statt {sample_rate} Hz"));
+    }
+    let channels = v.get("channel_count").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+    if channels < min_channels {
+        return Err(format!("Quelle hat {channels} Kanäle, die Ausgänge brauchen mindestens {min_channels}"));
+    }
+    Ok((v, channels))
+}
+
+/// Tonteiler: liest einen Mehrkanal-Ton-Flow und schreibt je Ausgang einen **eigenen** Flow aus den gewählten Kanälen
+/// (z. B. 16 Kanäle → Stereo 1/2 Programm, 3/4 internationaler Ton, …). Reiner Kanalkopierer: je Kanal eine bitgleiche
+/// Speicherkopie, der Sample-Index bleibt erhalten (Bild/Ton/Daten bleiben ausgerichtet). Nicht-PCM-Datenkanäle gehen so
+/// unverändert durch. Ein Quellkanal darf in mehreren Ausgängen vorkommen; nicht gewählte Kanäle werden verworfen.
+pub struct RawAudioSplit {
+    running: Arc<AtomicBool>,
+    dead: Arc<AtomicBool>,
+    handle: Mutex<Option<JoinHandle<()>>>,
+    map: Arc<std::sync::RwLock<Vec<Vec<usize>>>>,
+}
+
+impl RawAudioSplit {
+    #[allow(clippy::too_many_arguments)]
+    pub fn start(
+        in_ctx: Arc<MxlContext>,
+        out_ctx: Arc<MxlContext>,
+        source_flow_id: &str,
+        source_def: serde_json::Value,
+        outputs: &[SplitOutput],
+        sample_rate: u32,
+        flowed: Arc<AtomicBool>,
+        on_dead: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Self, String> {
+        if outputs.is_empty() {
+            return Err("keine Ausgänge".into());
+        }
+        let mut writers = Vec::with_capacity(outputs.len());
+        for o in outputs {
+            let mut def = source_def.clone();
+            if let Some(m) = def.as_object_mut() {
+                m.insert("id".into(), o.flow_id.clone().into());
+                m.insert("label".into(), o.label.clone().into());
+                m.insert("description".into(), format!("OpenMediaPlatform: {}", o.label).into());
+                m.insert("channel_count".into(), (o.channels.len() as u64).into());
+                m.insert("tags".into(), serde_json::json!({"urn:x-nmos:tag:grouphint/v1.0": [crate::group::tag_value("Audio", &o.flow_id)]}));
+            }
+            let (writer, _cfg, _created) = out_ctx.instance().create_flow_writer(&def.to_string(), None).map_err(|e| format!("create_flow_writer({}): {e}", o.label))?;
+            writers.push(writer.to_samples_writer().map_err(|e| format!("to_samples_writer({}): {e}", o.label))?);
+        }
+        let samples_reader = in_ctx
+            .instance()
+            .create_flow_reader(source_flow_id)
+            .and_then(|r| r.to_samples_reader())
+            .map_err(|e| format!("create_flow_reader({source_flow_id}): {e}"))?;
+        let map = Arc::new(std::sync::RwLock::new(outputs.iter().map(|o| o.channels.clone()).collect::<Vec<_>>()));
+        let running = Arc::new(AtomicBool::new(true));
+        let dead = Arc::new(AtomicBool::new(false));
+        let (run, dd, mp) = (running.clone(), dead.clone(), map.clone());
+        let handle = thread::Builder::new()
+            .name("mxl-audio-split".into())
+            .spawn(move || {
+                let now_index = || in_ctx.ns_to_index(in_ctx.now_ns(), sample_rate, 1).unwrap_or(0);
+                let batch = AUDIO_BATCH as u64;
+                let mut index = now_index().saturating_sub(batch * 3);
+                let mut last_ok = Instant::now();
+                while run.load(Ordering::Relaxed) {
+                    match samples_reader.get_samples(index, AUDIO_BATCH, READ_TIMEOUT) {
+                        Ok(data) => {
+                            let channels = mp.read().map(|g| g.clone()).unwrap_or_default();
+                            let mut wrote = false;
+                            for (o, writer) in writers.iter().enumerate() {
+                                match writer.open_samples(index, AUDIO_BATCH) {
+                                    Ok(mut access) => {
+                                        for (k, &ch) in channels.get(o).into_iter().flatten().enumerate() {
+                                            if ch >= 1 && ch <= data.num_of_channels() && k < access.channels() {
+                                                if let (Ok(src), Ok(dst)) = (data.channel_data(ch - 1), access.channel_data_mut(k)) {
+                                                    copy_fragments(src, dst);
+                                                }
+                                            }
+                                        }
+                                        wrote |= access.commit().is_ok();
+                                    }
+                                    Err(e) => eprintln!("omp-mediaio(split): open_samples {index} (Ausgang {o}) failed: {e}"),
+                                }
+                            }
+                            if wrote {
+                                flowed.store(true, Ordering::Relaxed);
+                                last_ok = Instant::now();
+                            }
+                            index += batch;
+                        }
+                        Err(mxl::Error::Timeout) => {}
+                        Err(mxl::Error::OutOfRangeTooLate) => index = index.max(now_index().saturating_sub(batch * 2)),
+                        Err(mxl::Error::OutOfRangeTooEarly) => thread::sleep(Duration::from_millis(2)),
+                        Err(_) => thread::sleep(Duration::from_millis(20)),
+                    }
+                    if last_ok.elapsed() > STALL {
+                        dd.store(true, Ordering::Relaxed);
+                        on_dead();
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| format!("thread: {e}"))?;
+        Ok(RawAudioSplit { running, dead, handle: Mutex::new(Some(handle)), map })
+    }
+
+    /// Ordnet die Kanäle eines Ausgangs neu zu (gleiche Kanalzahl; wirkt ab dem nächsten Block).
+    pub fn set_channels(&self, output: usize, channels: Vec<usize>) -> Result<(), String> {
+        let mut g = self.map.write().map_err(|_| "vergiftet".to_string())?;
+        let cur = g.get_mut(output).ok_or_else(|| format!("Ausgang {output} gibt es nicht"))?;
+        if cur.len() != channels.len() {
+            return Err(format!("Ausgang {output}: Kanalzahl {} statt {} (nur Neuzuordnung, keine andere Kanalzahl)", channels.len(), cur.len()));
+        }
+        *cur = channels;
+        Ok(())
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.dead.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for RawAudioSplit {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+        if let Some(h) = self.handle.lock().expect("lock poisoned").take() {
+            let _ = h.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+
+    fn def(media: &str, rate: u64, ch: u64) -> String {
+        serde_json::json!({"media_type": media, "sample_rate": {"numerator": rate}, "channel_count": ch}).to_string()
+    }
+
+    #[test]
+    fn split_source_check() {
+        assert_eq!(check_split_source(&def("audio/float32", 48000, 16), 48000, 8).unwrap().1, 16);
+        assert!(check_split_source(&def("audio/float32", 48000, 4), 48000, 8).unwrap_err().contains("mindestens 8"));
+        assert!(check_split_source(&def("audio/float32", 44100, 16), 48000, 2).unwrap_err().contains("Abtastrate"));
+        assert!(check_split_source(&def("video/v210", 48000, 16), 48000, 2).unwrap_err().contains("Medientyp"));
+    }
+
+    /// 16-Kanal-Quelle (Kanal c trägt den Wert c/100) → Ausgänge 1/2, 3/4 und Mono 9; Werte und Kanalzahlen müssen stimmen.
+    #[test]
+    #[ignore = "braucht die MXL-Laufzeit (libmxl, siehe deploy/dev/mxl.env)"]
+    fn live_split_16_channels_into_separate_flows() {
+        let dir = format!("/dev/shm/omp-split-test-{}", std::process::id());
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = Arc::new(MxlContext::new(&dir).unwrap());
+        let (src, o1, o2, o3) = ("00000000-0000-4000-8000-0000000000b0", "00000000-0000-4000-8000-0000000000b1", "00000000-0000-4000-8000-0000000000b2", "00000000-0000-4000-8000-0000000000b3");
+        let (w, _, _) = ctx.instance().create_flow_writer(&crate::mxl::audio_flow_def(src, "Quelle", 48000, 16), None).unwrap();
+        let writer = w.to_samples_writer().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (st, c2) = (stop.clone(), ctx.clone());
+        let feeder = thread::spawn(move || {
+            let mut idx = c2.ns_to_index(c2.now_ns(), 48000, 1).unwrap().saturating_sub(AUDIO_BATCH as u64 * 6);
+            while !st.load(Ordering::Relaxed) {
+                if let Ok(mut a) = writer.open_samples(idx, AUDIO_BATCH) {
+                    for ch in 0..16usize {
+                        if let Ok(dst) = a.channel_data_mut(ch) {
+                            let word = ((ch + 1) as f32 / 100.0).to_le_bytes();
+                            let buf: Vec<u8> = (0..AUDIO_BATCH).flat_map(|_| word).collect();
+                            copy_fragments((&buf, &[]), dst);
+                        }
+                    }
+                    let _ = a.commit();
+                }
+                idx += AUDIO_BATCH as u64;
+                while c2.ns_to_index(c2.now_ns(), 48000, 1).unwrap() + (AUDIO_BATCH as u64) < idx {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+        });
+        thread::sleep(Duration::from_millis(300));
+        let (def, n) = check_split_source(&ctx.flow_def(src).unwrap(), 48000, 9).unwrap();
+        assert_eq!(n, 16);
+        let outs = vec![
+            SplitOutput { flow_id: o1.into(), label: "Programm".into(), channels: vec![1, 2] },
+            SplitOutput { flow_id: o2.into(), label: "IT".into(), channels: vec![3, 4] },
+            SplitOutput { flow_id: o3.into(), label: "Kommentar".into(), channels: vec![9] },
+        ];
+        let flowed = Arc::new(AtomicBool::new(false));
+        let split = RawAudioSplit::start(ctx.clone(), ctx.clone(), src, def, &outs, 48000, flowed.clone(), Arc::new(|| {})).unwrap();
+        thread::sleep(Duration::from_millis(1200));
+        assert!(flowed.load(Ordering::Relaxed), "nichts geschrieben");
+        let first = |flow: &str, ch: usize| -> (u32, f32) {
+            let r = ctx.instance().create_flow_reader(flow).and_then(|r| r.to_samples_reader()).unwrap();
+            let index = ctx.ns_to_index(ctx.now_ns(), 48000, 1).unwrap().saturating_sub(AUDIO_BATCH as u64 * 2);
+            let d = r.get_samples(index, AUDIO_BATCH, Duration::from_millis(500)).unwrap();
+            let (a, b) = d.channel_data(ch).unwrap();
+            let bytes: Vec<u8> = a.iter().chain(b.iter()).copied().collect();
+            (d.num_of_channels() as u32, f32::from_le_bytes(bytes[..4].try_into().unwrap()))
+        };
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-6;
+        let (n1, v10) = first(o1, 0);
+        let (_, v11) = first(o1, 1);
+        assert_eq!(n1, 2);
+        assert!(near(v10, 0.01) && near(v11, 0.02), "Programm: {v10} {v11}");
+        let (n2, v20) = first(o2, 0);
+        let (_, v21) = first(o2, 1);
+        assert_eq!(n2, 2);
+        assert!(near(v20, 0.03) && near(v21, 0.04), "IT: {v20} {v21}");
+        let (n3, v30) = first(o3, 0);
+        assert_eq!(n3, 1);
+        assert!(near(v30, 0.09), "Kommentar: {v30}");
+        // Neuzuordnung zur Laufzeit: IT = Kanäle 5/6.
+        split.set_channels(1, vec![5, 6]).unwrap();
+        assert!(split.set_channels(1, vec![5]).is_err(), "andere Kanalzahl muss abgelehnt werden");
+        thread::sleep(Duration::from_millis(600));
+        let (_, v) = first(o2, 0);
+        assert!(near(v, 0.05), "nach Neuzuordnung: {v}");
+        drop(split);
+        stop.store(true, Ordering::Relaxed);
+        let _ = feeder.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 pub struct RawVideoCopy {
     running: Arc<AtomicBool>,
     dead: Arc<AtomicBool>,
