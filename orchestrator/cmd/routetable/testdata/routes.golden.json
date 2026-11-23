@@ -2995,6 +2995,12 @@
   },
   {
     "method": "POST",
+    "path": "/api/v1/workflows/{id}/rename-roles",
+    "auth": "verb:Configure",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
     "path": "/api/v1/workflows/{id}/roles/{role}/migrate",
     "auth": "verb:Admin",
     "domain": "core"
