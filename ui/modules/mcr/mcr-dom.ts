@@ -358,5 +358,21 @@ const CSS = `
 .mcr-alarm-table tr[data-open="true"] td { color:var(--omp-error); }
 .mcr-wall-pipbar { display:flex; align-items:center; gap:8px; color:var(--omp-text-dim); font-size:var(--omp-font-size-sm); }
 .mcr-wall-pipbar b { color:var(--omp-text); }
+.mcr-tl { border:1px solid var(--mcr-line); border-radius:8px; background:var(--mcr-card); padding:0 0 6px; overflow:hidden; }
+.mcr-tl-axis { position:relative; height:24px; border-bottom:1px solid var(--mcr-line); color:var(--omp-text-dim); font-size:var(--omp-font-size-xs); }
+.mcr-tl-tick { position:absolute; top:5px; transform:translateX(3px); white-space:nowrap; }
+.mcr-tl-tick[data-major="true"] { color:var(--omp-text); font-weight:600; }
+.mcr-tl-grid { position:relative; min-height:36px; }
+.mcr-tl-gl { position:absolute; top:0; bottom:0; width:1px; background:color-mix(in srgb,var(--mcr-line) 60%,transparent); }
+.mcr-tl-gl[data-major="true"] { background:var(--mcr-line); }
+.mcr-tl-bar { position:absolute; height:30px; min-width:4px; padding:0 8px; border:1px solid color-mix(in srgb,var(--st) 70%,transparent); border-left:4px solid var(--st); border-radius:5px; background:color-mix(in srgb,var(--st) 20%,var(--mcr-card)); color:var(--omp-text); text-align:left; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:var(--omp-font-size-sm); }
+.mcr-tl-bar:hover { background:color-mix(in srgb,var(--st) 32%,var(--mcr-card)); }
+.mcr-tl-bar[data-over="true"] { box-shadow:0 0 0 1px var(--mcr-warn); }
+.mcr-tl-bar[data-open="true"] { border-right-style:dashed; }
+.mcr-tl-bar[data-cs="true"] { border-top-left-radius:0; border-bottom-left-radius:0; }
+.mcr-tl-bar[data-ce="true"] { border-top-right-radius:0; border-bottom-right-radius:0; }
+.mcr-tl-bar span { pointer-events:none; }
+.mcr-tl-now { position:absolute; top:0; bottom:0; width:2px; background:var(--omp-onair); pointer-events:none; }
+.mcr-tl-nodate { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:10px 12px 4px; }
 .mcr-members-row { display:grid; grid-template-columns:110px 1fr 200px auto; gap:6px; }
 `;

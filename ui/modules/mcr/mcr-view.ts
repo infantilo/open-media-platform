@@ -7,6 +7,7 @@ import { dateTime, ensureStyle, field, h, input, modal, nextFullHour, note, quic
 import { houseFields, openLineForm } from "./line-form.ts";
 import { openMatrix } from "./matrix-view.ts";
 import { chainEditor } from "./chain-editor.ts";
+import { Timeline } from "./timeline-view.ts";
 import { type Stage, type StageType } from "./chain-logic.ts";
 import { Wall } from "./wall-view.ts";
 import { AlarmHistory } from "./alarm-view.ts";
@@ -58,7 +59,8 @@ interface Slot { nodeType?: string; video?: boolean; audio?: boolean; strict?: b
 interface Slots { normalizer?: Slot; converter?: Slot; avdelay?: Slot }
 
 class McrView extends HTMLElement {
-  #tab: "wall" | "events" | "alarms" | "templates" | "house" = "wall";
+  #tab: "wall" | "events" | "timeline" | "alarms" | "templates" | "house" = "wall";
+  #timeline: Timeline | null = null;
   #alarms: AlarmHistory | null = null;
   #wall: Wall | null = null;
   #events: Obj[] = [];
@@ -198,7 +200,7 @@ class McrView extends HTMLElement {
 
   #tabsBar(): HTMLElement {
     const tabs = h("div", { class: "mcr-tabs", role: "tablist" });
-    const mk = (id: "wall" | "events" | "alarms" | "templates" | "house", label: string) => {
+    const mk = (id: "wall" | "events" | "timeline" | "alarms" | "templates" | "house", label: string) => {
       const b = h("button", { class: "mcr-tab", role: "tab", type: "button", "aria-selected": String(this.#tab === id) }, label);
       b.addEventListener("click", () => {
         this.#tab = id;
@@ -208,17 +210,35 @@ class McrView extends HTMLElement {
       });
       return b;
     };
-    tabs.append(mk("wall", t("mcr.tab.wall")), mk("events", t("mcr.tab.events")), mk("alarms", t("mcr.tab.alarms")), ...(this.#canManage ? [mk("templates", t("mcr.tab.templates")), mk("house", t("mcr.tab.house"))] : []), h("span", { class: "mcr-tab-spacer" }), this.#clock);
+    tabs.append(mk("wall", t("mcr.tab.wall")), mk("events", t("mcr.tab.events")), mk("timeline", t("mcr.tab.timeline")), mk("alarms", t("mcr.tab.alarms")), ...(this.#canManage ? [mk("templates", t("mcr.tab.templates")), mk("house", t("mcr.tab.house"))] : []), h("span", { class: "mcr-tab-spacer" }), this.#clock);
     return tabs;
   }
 
   #paint() {
     if (this.#tab !== "wall") this.#wall?.stop();
+    if (this.#tab !== "timeline") this.#timeline?.stop();
     if (this.#tab === "wall") this.#paintWall();
     else if (this.#tab === "events") void this.#loadEvent().then(() => this.#paintEvents(true));
+    else if (this.#tab === "timeline") this.#paintTimeline();
     else if (this.#tab === "alarms") this.#paintAlarms();
     else if (this.#tab === "templates") this.#paintTemplates();
     else this.#paintHouse();
+  }
+
+  #paintTimeline() {
+    if (!this.#timeline) {
+      this.#timeline = new Timeline((id) => {
+        this.#sel = id;
+        this.#tab = "events";
+        const tabs = this.querySelectorAll(".mcr-tab");
+        tabs.forEach((x) => x.setAttribute("aria-selected", "false"));
+        tabs[1]?.setAttribute("aria-selected", "true");
+        this.#paint();
+      });
+    }
+    this.#timeline.setEvents(this.#events as never);
+    this.#body.replaceChildren(this.#timeline.el);
+    this.#timeline.start();
   }
 
   #paintAlarms() {
