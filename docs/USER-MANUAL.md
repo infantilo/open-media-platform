@@ -1357,8 +1357,8 @@ one below the other):
   `demo-studio` (studio zone) and `demo-external` (**sealed off**, 🔒) — both are created (Administration → MXL domains).
   In `demo-studio` run *Studio Source* and *Studio Monitor*, in `demo-external` the *External Monitor*; the *Zone Bridge*
   is the only way in between and copies picture and sound bit-exactly. To demonstrate: start the workflow, in the Flow Editor switch on the
-  **domain view** (the demo is in the lane "Groups across several …", a double click opens it and shows
-  the nodes with their domain tabs). Three things can be shown: (1) A **direct connection** from the Studio Source
+  **domain view** (a running workflow whose nodes run in different domains is expanded automatically in this view:
+  its nodes stand individually in the zones of their domain, with domain tabs; in the host view it remains one collective tile). Three things can be shown: (1) A **direct connection** from the Studio Source
   to the External Monitor is rejected ("sender and receiver are in different MXL domains … a bridge between the domains is
   needed"). (2) The *External Monitor* sees in its file system (`/proc/<pid>/root/dev/shm`) **only** `omp-mxl-demo-external`,
   the bridge sees both zones, nodes without sealing see all domains. (3) The bridge shows "copied directly" for picture and

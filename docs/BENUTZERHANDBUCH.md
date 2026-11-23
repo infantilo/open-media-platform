@@ -1373,8 +1373,8 @@ untereinander):
   `demo-studio` (Studio-Zone) und `demo-external` (**abgeschottet**, 🔒) — beide sind angelegt (Administration → MXL-Domains).
   In `demo-studio` laufen *Studio Source* und *Studio Monitor*, in `demo-external` der *External Monitor*; die *Zone Bridge*
   ist der einzige Weg dazwischen und kopiert Bild und Ton bitgleich. Zum Vorführen: Workflow starten, im Flow Editor die
-  **Domain-Ansicht** einschalten (die Demo steht in der Spur „Gruppen über mehrere …“, ein Doppelklick öffnet sie und zeigt
-  die Nodes mit ihren Domain-Reitern). Drei Dinge lassen sich zeigen: (1) Eine **direkte Verbindung** von der Studio Source
+  **Domain-Ansicht** einschalten (ein laufender Workflow, dessen Nodes in verschiedenen Domains laufen, wird in dieser Ansicht automatisch aufgeklappt:
+  seine Nodes stehen einzeln in den Zonen ihrer Domain, mit Domain-Reitern; in der Host-Ansicht bleibt er eine Sammelkachel). Drei Dinge lassen sich zeigen: (1) Eine **direkte Verbindung** von der Studio Source
   zum External Monitor wird abgelehnt („sender and receiver are in different MXL domains … a bridge between the domains is
   needed“). (2) Der *External Monitor* sieht in seinem Dateisystem (`/proc/<pid>/root/dev/shm`) **nur** `omp-mxl-demo-external`,
   die Brücke sieht beide Zonen, Nodes ohne Abschottung sehen alle Domains. (3) Die Brücke zeigt „direkt kopiert“ für Bild und

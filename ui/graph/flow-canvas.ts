@@ -1484,9 +1484,26 @@ export class FlowCanvas extends HTMLElement {
   // kollabierten Workflow-Kachel gezählt werden (s. dortige Doku, sonst
   // erschiene ein laufender Workflow doppelt: als Kachel UND als seine
   // einzelnen Mitglieder).
+  // Domain-Ansicht: ein laufender Workflow, dessen Instanzen in verschiedenen MXL-Domains laufen (z. B. die Zonentrennungs-
+  // Demo), wird nicht als eine Sammelkachel gezeigt, sondern aufgeklappt: seine Nodes stehen einzeln in den Zonen ihrer
+  // Domain. Sonst ließe sich die Trennung am Root nicht sehen.
+  #expandedWorkflowIds(): Set<string> {
+    const out = new Set<string>();
+    if (this.#zoneMode !== "domain") return out;
+    for (const wf of this.#workflows) {
+      const rts = Object.values(wf.runtime ?? {});
+      if (rts.length === 0) continue;
+      const doms = new Set(rts.map((rt) => instanceDomain(this.#paletteInstances.find((i) => i.id === rt.instanceId))));
+      if (doms.size > 1) out.add(wf.id);
+    }
+    return out;
+  }
+
   #allWorkflowMemberNodeIds(): Set<string> {
     const ids = new Set<string>();
+    const expanded = this.#expandedWorkflowIds();
     for (const wf of this.#workflows) {
+      if (expanded.has(wf.id)) continue;
       for (const rt of Object.values(wf.runtime ?? {})) {
         if (rt.nodeId) ids.add(rt.nodeId);
       }
@@ -3052,7 +3069,10 @@ export class FlowCanvas extends HTMLElement {
   // obwohl #buildTilesForWorkflowFilter() bereits nur dessen eigene
   // Node-Kacheln zeigt (widersprüchliches Bild sonst).
   #workflowsInScope(): WorkflowSummary[] {
-    if (!this.#workflowFilter) return this.#workflows;
+    if (!this.#workflowFilter) {
+      const expanded = this.#expandedWorkflowIds();
+      return expanded.size === 0 ? this.#workflows : this.#workflows.filter((wf) => !expanded.has(wf.id));
+    }
     return this.#workflows.filter((wf) => wf.id === this.#workflowFilter);
   }
 
