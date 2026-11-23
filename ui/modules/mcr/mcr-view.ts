@@ -903,7 +903,7 @@ class McrView extends HTMLElement {
         });
         return i;
       };
-      const ports = withKinds ? h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px", class: "mcr-hint" }, t("mcr.slots.ports")), port("videoIn", "Receiver 1"), port("videoOut", "Sender 1"), port("audioIn", "Receiver 2"), port("audioOut", "Sender 2")) : null;
+      const ports = withKinds ? h("div", { class: "mcr-chain-head", style: "display:grid;grid-template-columns:260px repeat(4,minmax(0,1fr));gap:6px;align-items:center" }, h("span", { class: "mcr-hint" }, t("mcr.slots.ports")), port("videoIn", "Receiver 1"), port("videoOut", "Sender 1"), port("audioIn", "Receiver 2"), port("audioOut", "Sender 2")) : null;
       // Erweitert: Start-Umgebung-Vorlage (env), Start-Parameter (params) als JSON-Objekt, Bildobergrenze des Delay-Nodes.
       const json = (k: "env" | "params", ph: string) => {
         const i = input(s[k] && Object.keys(s[k]!).length ? JSON.stringify(s[k]) : "", { placeholder: ph });
