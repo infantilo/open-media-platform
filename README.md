@@ -117,8 +117,9 @@ images, system packages, plugin) on a connected machine and install it with one
 script — [`docs/betrieb/OFFLINE-INSTALLATION.md`](docs/betrieb/OFFLINE-INSTALLATION.md)
 (`deploy/offline/`). Troubleshooting:
 [`docs/HANDBUCH.md`](docs/HANDBUCH.md). User guide for the UI (with
-screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
-(The docs are in German — this README is the only English-language
+screenshots): [`docs/USER-MANUAL.md`](docs/USER-MANUAL.md) (English), German original
+[`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md). Technical manual in English:
+[`docs/MANUAL.md`](docs/MANUAL.md). (The other docs are in German — this README is the only English-language
 entry point so far.)
 
 ## Screenshots

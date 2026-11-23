@@ -1,5 +1,7 @@
 # OpenMediaPlatform — Benutzerhandbuch
 
+> English version: [`USER-MANUAL.md`](USER-MANUAL.md) (same section numbers). Technical manual: [`HANDBUCH.md`](HANDBUCH.md), English [`MANUAL.md`](MANUAL.md).
+
 Anleitung für Bediener/Operatoren der Weboberfläche (Flow Editor,
 Instanz-Start, Workflows, Alarme, Administration). Screenshots stammen
 aus einer echten, lokal laufenden Entwicklungsinstanz (`make start`),
@@ -50,8 +52,8 @@ erscheinen in der gewählten Sprache; bekannte Meldungen des Servers
 übersetzt, unbekannte bleiben deutsch. Die Handy-Seiten des WebRTC-Gateways
 (Kamera/Monitor) folgen der Browsersprache (oder `?lang=en`). **Noch
 deutsch:** Meldungen und Beschreibungen, die ein Node selbst erzeugt,
-Workflow-Namen/-Beschreibungen und Audio-Gruppennamen aus Ihren Daten sowie
-die Handbücher.
+Workflow-Namen/-Beschreibungen und Audio-Gruppennamen aus Ihren Daten.
+Die beiden Handbücher gibt es auf Deutsch und Englisch (`BENUTZERHANDBUCH.md`/`USER-MANUAL.md`, `HANDBUCH.md`/`MANUAL.md`).
 
 ## 2. Der Flow Editor
 
