@@ -102,20 +102,56 @@ func (s *Store) EventAlarms(ctx context.Context, eventID string, openOnly bool) 
 	return s.queryAlarms(ctx, q+` ORDER BY started_at DESC LIMIT 500`, eventID)
 }
 
+// AlarmFilter: Filter der Alarmhistorie. Leere Felder filtern nicht.
+//   - EventID: genau dieses Event.
+//   - Kind: Teilstring der Art, ohne Groß-/Kleinschreibung; „freeze“ trifft auch „signal-freeze“.
+//   - Line: Teilstring des Leitungsnamens, ohne Groß-/Kleinschreibung.
+//   - Severity: genau (z. B. error, warning).
+//   - State: open (läuft noch), ended (beendet) oder unacked (nicht quittiert).
+type AlarmFilter struct {
+	EventID, Kind, Line, Severity, State string
+}
+
+// likeEscape macht aus Nutzereingabe einen Teilstring-Ausdruck für ILIKE (Platzhalter %, _ und \ wörtlich).
+func likeEscape(s string) string {
+	return "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.TrimSpace(s)) + "%"
+}
+
 // AlarmHistory: Historie über alle Events seit `since` (optional nach Event/Art gefiltert), neueste zuerst.
 func (s *Store) AlarmHistory(ctx context.Context, since time.Time, eventID, kind string, limit int) ([]Alarm, error) {
+	return s.AlarmSearch(ctx, since, AlarmFilter{EventID: eventID, Kind: kind}, limit)
+}
+
+// AlarmSearch: wie AlarmHistory mit allen Filtern (AlarmFilter).
+func (s *Store) AlarmSearch(ctx context.Context, since time.Time, f AlarmFilter, limit int) ([]Alarm, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
 	q := `SELECT ` + alarmCols + ` FROM mcr_alarms WHERE started_at >= $1`
 	args := []any{since}
-	if eventID != "" {
-		args = append(args, eventID)
-		q += ` AND event_id=$2`
+	arg := func(v any) string {
+		args = append(args, v)
+		return "$" + itoa(len(args))
 	}
-	if kind != "" {
-		args = append(args, kind)
-		q += ` AND kind=$` + string(rune('0'+len(args)))
+	if f.EventID != "" {
+		q += ` AND event_id=` + arg(f.EventID)
+	}
+	if strings.TrimSpace(f.Kind) != "" {
+		q += ` AND kind ILIKE ` + arg(likeEscape(f.Kind))
+	}
+	if strings.TrimSpace(f.Line) != "" {
+		q += ` AND line_name ILIKE ` + arg(likeEscape(f.Line))
+	}
+	if f.Severity != "" {
+		q += ` AND severity=` + arg(f.Severity)
+	}
+	switch f.State {
+	case "open":
+		q += ` AND ended_at IS NULL`
+	case "ended":
+		q += ` AND ended_at IS NOT NULL`
+	case "unacked":
+		q += ` AND acked_at IS NULL`
 	}
 	return s.queryAlarms(ctx, q+` ORDER BY started_at DESC LIMIT `+itoa(limit), args...)
 }
@@ -363,7 +399,10 @@ func (a *api) alarmHistory() http.HandlerFunc {
 				days = n
 			}
 		}
-		out, err := a.svc.St.AlarmHistory(r.Context(), time.Now().AddDate(0, 0, -days), r.URL.Query().Get("event"), r.URL.Query().Get("kind"), 300)
+		qv := r.URL.Query()
+		out, err := a.svc.St.AlarmSearch(r.Context(), time.Now().AddDate(0, 0, -days), AlarmFilter{
+			EventID: qv.Get("event"), Kind: qv.Get("kind"), Line: qv.Get("line"), Severity: qv.Get("severity"), State: qv.Get("state"),
+		}, 300)
 		if err != nil {
 			writeErr(w, err)
 			return

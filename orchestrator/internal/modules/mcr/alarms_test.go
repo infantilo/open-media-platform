@@ -165,3 +165,76 @@ func TestOpenAlarmsAreClosedWhenEventLeavesTestOrLive(t *testing.T) {
 		t.Fatalf("Historie bleibt mit Ende: %+v", all)
 	}
 }
+
+// Filter der Historie (Nutzerfund 2026-11-23: „Filter geht nicht, liefert leere Liste“): Art als Teilstring ohne Groß-/Kleinschreibung
+// und ohne das Präfix „signal-“ (so steht sie in der Tabelle), Leitung als Teilstring, Zustand, Schweregrad.
+func TestAlarmHistoryFilters(t *testing.T) {
+	svc, rt, ev, _ := alarmEnv(t)
+	ctx := context.Background()
+	for _, in := range []AlarmIn{
+		{NodeID: "n-scope", Kind: "signal-black", State: "raised", Severity: "critical", Line: "A", Message: "Schwarzbild"},
+		{NodeID: "n-scope", Kind: "signal-freeze", State: "raised", Severity: "warning", Line: "A", Message: "Standbild"},
+		{NodeID: "n-scope", Kind: "signal-silence", State: "raised", Severity: "critical", Line: "A", Message: "Stille"},
+	} {
+		if err := rt.IngestAlarm(ctx, svc, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	since := time.Now().Add(-time.Hour)
+	count := func(f AlarmFilter) int {
+		if f.EventID == "" {
+			f.EventID = ev.ID // die Test-Datenbank behält Alarme früherer Läufe: immer auf das eigene Event eingrenzen
+		}
+		got, err := svc.St.AlarmSearch(ctx, since, f, 50)
+		if err != nil {
+			t.Fatalf("%+v: %v", f, err)
+		}
+		return len(got)
+	}
+	for name, c := range map[string]struct {
+		f    AlarmFilter
+		want int
+	}{
+		"alles":                              {AlarmFilter{}, 3},
+		"Art ohne Präfix":                    {AlarmFilter{Kind: "freeze"}, 1},
+		"Art mit Präfix":                     {AlarmFilter{Kind: "signal-black"}, 1},
+		"Art ohne Groß-/Kleinschreibung":     {AlarmFilter{Kind: "FREEZE"}, 1},
+		"Art Teilstring":                     {AlarmFilter{Kind: "sil"}, 1},
+		"gemeinsames Präfix":                 {AlarmFilter{Kind: "signal"}, 3},
+		"unbekannte Art":                     {AlarmFilter{Kind: "loudness"}, 0},
+		"Leitung ohne Groß-/Kleinschreibung": {AlarmFilter{Line: "a"}, 3},
+		"Leitung genau":                      {AlarmFilter{Line: "A"}, 3},
+		"andere Leitung":                     {AlarmFilter{Line: "kamera"}, 0},
+		"Leitung wörtliches Prozent":         {AlarmFilter{Line: "%"}, 0},
+		"Leitung wörtlicher Unterstrich":     {AlarmFilter{Line: "_"}, 0},
+		"Art und Leitung":                    {AlarmFilter{Kind: "black", Line: "a"}, 1},
+		"Art und falsche Leitung":            {AlarmFilter{Kind: "black", Line: "kamera"}, 0},
+		"Schweregrad":                        {AlarmFilter{Severity: "warning"}, 1},
+		"Event":                              {AlarmFilter{EventID: ev.ID}, 3},
+		"anderes Event":                      {AlarmFilter{EventID: "gibt-es-nicht"}, 0},
+		"offen":                              {AlarmFilter{State: "open"}, 3},
+		"beendet":                            {AlarmFilter{State: "ended"}, 0},
+		"nicht quittiert":                    {AlarmFilter{State: "unacked"}, 3},
+	} {
+		if got := count(c.f); got != c.want {
+			t.Errorf("%s: %d statt %d", name, got, c.want)
+		}
+	}
+	// Ende und Quittierung ändern die Zustandsfilter.
+	if err := rt.IngestAlarm(ctx, svc, AlarmIn{NodeID: "n-scope", Kind: "signal-black", State: "cleared"}); err != nil {
+		t.Fatal(err)
+	}
+	open, _ := svc.St.EventAlarms(ctx, ev.ID, true)
+	if _, err := svc.St.AckAlarm(ctx, ev.ID, open[0].ID, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(AlarmFilter{State: "ended"}); n != 1 {
+		t.Errorf("beendet: %d", n)
+	}
+	if n := count(AlarmFilter{State: "open"}); n != 2 {
+		t.Errorf("offen: %d", n)
+	}
+	if n := count(AlarmFilter{State: "unacked"}); n != 2 {
+		t.Errorf("nicht quittiert: %d", n)
+	}
+}

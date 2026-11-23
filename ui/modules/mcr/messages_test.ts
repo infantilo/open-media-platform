@@ -9,7 +9,7 @@ Deno.test("alle im Quelltext benutzten Schlüssel stehen in beiden Sprachen", as
   // Das Projekt startet `deno test ui/` ohne Dateirechte: dann überspringen (mit --allow-read läuft die Prüfung).
   if ((await Deno.permissions.query({ name: "read" })).state !== "granted") return;
   const used = new Set<string>();
-  for (const f of ["mcr-view.ts", "line-form.ts", "mcr-dom.ts", "timeline-view.ts"]) {
+  for (const f of ["mcr-view.ts", "line-form.ts", "mcr-dom.ts", "timeline-view.ts", "alarm-view.ts"]) {
     const src = await Deno.readTextFile(new URL(f, import.meta.url));
     for (const m of src.matchAll(/\bt\(\s*"(mcr\.[A-Za-z0-9_.]*[A-Za-z0-9_])"/g)) used.add(m[1]);
   }
