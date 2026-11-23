@@ -366,3 +366,46 @@ func TestSlotsValidateAdvancedFields(t *testing.T) {
 		}
 	}
 }
+
+func TestDataTrackIsPartOfTheChain(t *testing.T) {
+	dataLine := Line{ID: "l1", Name: "A", Kind: KindMXL, Transport: raw(`{"existing":{"videoNodeId":"v","audioNodeId":"v","dataNodeId":"d","dataNodeLabel":"D"}}`)}
+	plain := Line{ID: "l2", Name: "B", Kind: KindMXL, Transport: raw(`{"existing":{"nodeLabel":"V"}}`)}
+	e := Event{ID: "ev", Name: "K", Lines: []Line{dataLine, plain}}
+	outputs := func(cc ChainConfig) (map[string][]string, map[string]bool) {
+		def, _, _, err := Materialize(e, nil, "", cc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := map[string][]string{}
+		for _, p := range def.Interface.Outputs {
+			for _, m := range p.Members {
+				o[p.Name] = append(o[p.Name], m.Role+":"+m.Port)
+			}
+		}
+		c := map[string]bool{}
+		for _, x := range def.Connections {
+			c[x.FromRole+":"+x.FromSender+">"+x.ToRole+":"+x.ToReceiver] = true
+		}
+		return o, c
+	}
+	// Ohne Stufen: die Datenspur kommt aus dem Normalizer; nur die Leitung mit Datenquelle führt sie nach außen.
+	o, _ := outputs(ChainConfig{})
+	if len(o["A"]) != 3 || o["A"][2] != "a-norm:Daten" || len(o["B"]) != 2 {
+		t.Fatalf("Schnittstelle: %v", o)
+	}
+	// Stufe ohne Daten (A/V-Delay): die Datenspur läuft an ihr vorbei, Ausgang bleibt der Normalizer.
+	o, _ = outputs(ChainConfig{Slots: Slots{AVDelay: Slot{NodeType: "omp-avdelay", Video: true, Audio: true}}})
+	if o["A"][2] != "a-norm:Daten" || o["A"][0] != "a-post-avdelay:Sender 1" {
+		t.Fatalf("Stufe ohne Daten: %v", o["A"])
+	}
+	// Stufe mit Daten: verbunden und Ausgang der Kette.
+	o, c := outputs(ChainConfig{Slots: Slots{AVDelay: Slot{NodeType: "omp-avdelay-d", Video: true, Audio: true, Data: true}}})
+	if !c["a-norm:Daten>a-post-avdelay:Daten"] || o["A"][2] != "a-post-avdelay:Daten" {
+		t.Fatalf("Stufe mit Daten: %v %v", o["A"], c)
+	}
+	// Eigene Port-Namen für die Daten.
+	o, c = outputs(ChainConfig{Slots: Slots{AVDelay: Slot{NodeType: "x", Video: true, Audio: true, Data: true, Ports: Ports{DataIn: "ANC in", DataOut: "ANC out"}}}})
+	if !c["a-norm:Daten>a-post-avdelay:ANC in"] || o["A"][2] != "a-post-avdelay:ANC out" {
+		t.Fatalf("Daten-Ports: %v %v", o["A"], c)
+	}
+}

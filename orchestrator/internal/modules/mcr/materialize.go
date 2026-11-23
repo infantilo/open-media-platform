@@ -47,6 +47,8 @@ type LineRoles struct {
 	EntryAudio string `json:"entryAudio,omitempty"`
 	OutVideo   string `json:"outVideo,omitempty"`
 	OutAudio   string `json:"outAudio,omitempty"`
+	// OutData: letzte Rolle der Kette, die die Datenspur trägt (nur gesetzt, wenn die Leitung eine Datenquelle hat).
+	OutData string `json:"outData,omitempty"`
 }
 
 // ChainRoles: alle Stufen-Rollen der Leitung in Kettenreihenfolge.
@@ -367,8 +369,13 @@ func Materialize(e Event, global *HouseFormat, secretsDir string, chain ...Chain
 				def.Interface.Outputs = append(def.Interface.Outputs, workflows.InterfacePort{Name: pn, Label: pn, Members: []workflows.InterfaceMember{{Role: lr.Split, Port: so.Name}}})
 			}
 		}
-		def.Interface.Outputs = append(def.Interface.Outputs, workflows.InterfacePort{Name: l.Name, Label: l.Name, Members: []workflows.InterfaceMember{
-			{Role: lr.OutVideo, Port: w.outVideoPort}, {Role: lr.OutAudio, Port: w.outAudioPort}}})
+		// Die Datenspur (ANC, Zeitcode, Untertitel) geht nur mit, wenn die Leitung eine Datenquelle hat.
+		members := []workflows.InterfaceMember{{Role: lr.OutVideo, Port: w.outVideoPort}, {Role: lr.OutAudio, Port: w.outAudioPort}}
+		if HasDataSource(l) && w.outData != "" {
+			lr.OutData = w.outData
+			members = append(members, workflows.InterfaceMember{Role: w.outData, Port: w.outDataPort})
+		}
+		def.Interface.Outputs = append(def.Interface.Outputs, workflows.InterfacePort{Name: l.Name, Label: l.Name, Members: members})
 		roles[l.ID] = lr
 	}
 	// Bestätigung beim Stoppen ab `live` (Fehlbedienung auf Sendung vermeiden).
@@ -558,6 +565,12 @@ func (x Existing) Signature() string {
 }
 
 // ExistingSourceOf liest `transport.existing`; nil, wenn die Leitung keinen vorhandenen Node nennt.
+// HasDataSource: die Leitung nennt eine Datenquelle (Node oder Sender für ANC/Zeitcode/Untertitel).
+func HasDataSource(l Line) bool {
+	ex := ExistingSourceOf(l)
+	return ex != nil && (ex.DataNodeID != "" || ex.DataSenderID != "" || ex.DataNodeLabel != "")
+}
+
 func ExistingSourceOf(l Line) *Existing {
 	if len(l.Transport) == 0 {
 		return nil

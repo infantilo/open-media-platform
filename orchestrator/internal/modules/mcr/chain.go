@@ -42,7 +42,9 @@ type StageType struct {
 	Label    string `json:"label,omitempty"`
 	Video    bool   `json:"video"`
 	Audio    bool   `json:"audio"`
-	Ports    Ports  `json:"ports,omitempty"`
+	// Data: die Stufe trägt auch die Datenspur (ANC, Zeitcode, Untertitel); sonst läuft sie an ihr vorbei.
+	Data  bool  `json:"data,omitempty"`
+	Ports Ports `json:"ports,omitempty"`
 	// Env: Vorlage der Start-Umgebung aus dem wirksamen Hausformat der Leitung (Platzhalter siehe houseEnv). Leer = Standard des Typs.
 	Env map[string]string `json:"env,omitempty"`
 }
@@ -59,6 +61,8 @@ type Ports struct {
 	VideoOut string `json:"videoOut,omitempty"`
 	AudioIn  string `json:"audioIn,omitempty"`
 	AudioOut string `json:"audioOut,omitempty"`
+	DataIn   string `json:"dataIn,omitempty"`
+	DataOut  string `json:"dataOut,omitempty"`
 }
 
 func orDefault(v, def string) string {
@@ -70,7 +74,7 @@ func orDefault(v, def string) string {
 
 // resolved: Ports mit Standardwerten.
 func (p Ports) resolved() Ports {
-	return Ports{orDefault(p.VideoIn, "Receiver 1"), orDefault(p.VideoOut, "Sender 1"), orDefault(p.AudioIn, "Receiver 2"), orDefault(p.AudioOut, "Sender 2")}
+	return Ports{orDefault(p.VideoIn, "Receiver 1"), orDefault(p.VideoOut, "Sender 1"), orDefault(p.AudioIn, "Receiver 2"), orDefault(p.AudioOut, "Sender 2"), orDefault(p.DataIn, "Daten"), orDefault(p.DataOut, "Daten")}
 }
 
 // Slot benennt den Node-Typ, der eine MCR-Funktion erfüllt. Austausch = anderen Typ eintragen (Einstellung `mcr.slots`),
@@ -80,6 +84,8 @@ type Slot struct {
 	// Video/Audio: welche Arten der Node trägt (nur bei Converter/AVDelay; der Normalizer trägt immer beides).
 	Video bool `json:"video,omitempty"`
 	Audio bool `json:"audio,omitempty"`
+	// Data: der Node trägt auch die Datenspur (sonst läuft sie an ihm vorbei).
+	Data bool `json:"data,omitempty"`
 	// Strict (nur Converter): der Normalizer wandelt nicht mehr selbst (`copyOnly`); bleibt eine Abweichung, blockiert er mit Alarm
 	// statt heimlich nachzuwandeln. Ohne Strict bleibt er Sicherheitsnetz (`auto`: kopiert bei passendem Format, wandelt sonst).
 	Strict bool `json:"strict,omitempty"`
@@ -196,7 +202,7 @@ func (c ChainConfig) typeOf(nodeType string) (StageType, bool) {
 	sl := c.Slots.normalized()
 	for _, x := range []Slot{sl.Converter, sl.AVDelay} {
 		if x.NodeType != "" && x.NodeType == nodeType {
-			return StageType{NodeType: nodeType, Video: x.Video, Audio: x.Audio, Ports: x.Ports, Env: x.Env}, true
+			return StageType{NodeType: nodeType, Video: x.Video, Audio: x.Audio, Data: x.Data, Ports: x.Ports, Env: x.Env}, true
 		}
 	}
 	for _, t := range c.types() {
@@ -292,33 +298,35 @@ type chainWiring struct {
 	outVideo, outAudio     string
 	outVideoPort           string // Ausgangsport der letzten Rolle je Art
 	outAudioPort           string
+	outData                string // letzte Rolle, die die Datenspur trägt (der Normalizer, wenn keine Stufe sie trägt)
+	outDataPort            string
 	conns                  [][4]string // fromRole, fromPort, toRole, toPort
 }
 
 // wire legt die Verbindungen der Kette fest. `input` darf leer sein (vorhandene Quelle: der Normalizer-Zufluss kommt vom Quell-Node).
 func wire(input string, pre []StageRole, norm string, post []StageRole, cfg ChainConfig) chainWiring {
 	type member struct {
-		role         string
-		video, audio bool
-		ports        Ports
+		role               string
+		video, audio, data bool
+		ports              Ports
 	}
 	std := Ports{}.resolved()
 	var order []member
 	if input != "" {
-		order = append(order, member{input, true, true, std})
+		order = append(order, member{input, true, true, false, std})
 	}
 	for _, s := range pre {
 		t, _ := cfg.typeOf(s.Stage.NodeType)
-		order = append(order, member{s.Role, t.Video, t.Audio, t.Ports.resolved()})
+		order = append(order, member{s.Role, t.Video, t.Audio, t.Data, t.Ports.resolved()})
 	}
-	order = append(order, member{norm, true, true, std})
+	order = append(order, member{norm, true, true, true, std})
 	for _, s := range post {
 		t, _ := cfg.typeOf(s.Stage.NodeType)
-		order = append(order, member{s.Role, t.Video, t.Audio, t.Ports.resolved()})
+		order = append(order, member{s.Role, t.Video, t.Audio, t.Data, t.Ports.resolved()})
 	}
 	var w chainWiring
-	prevV, prevA := "", ""
-	var prevVP, prevAP string // Ausgangsport der vorigen Rolle je Art
+	prevV, prevA, prevD := "", "", ""
+	var prevVP, prevAP, prevDP string // Ausgangsport der vorigen Rolle je Art
 	for _, m := range order {
 		if m.video {
 			if prevV != "" {
@@ -340,9 +348,17 @@ func wire(input string, pre []StageRole, norm string, post []StageRole, cfg Chai
 			}
 			prevA, prevAP = m.role, m.ports.AudioOut
 		}
+		// Datenspur: nur zwischen Gliedern, die sie tragen (Bild-/Ton-Stufen ohne Daten werden übersprungen).
+		if m.data {
+			if prevD != "" {
+				w.conns = append(w.conns, [4]string{prevD, prevDP, m.role, m.ports.DataIn})
+			}
+			prevD, prevDP = m.role, m.ports.DataOut
+		}
 	}
 	w.outVideo, w.outAudio = prevV, prevA
 	w.outVideoPort, w.outAudioPort = prevVP, prevAP
+	w.outData, w.outDataPort = prevD, prevDP
 	return w
 }
 

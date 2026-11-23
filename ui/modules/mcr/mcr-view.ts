@@ -55,7 +55,7 @@ interface CardRefs {
   sig: string;
 }
 
-interface Slot { nodeType?: string; video?: boolean; audio?: boolean; strict?: boolean; ports?: Record<string, string>; env?: Record<string, string>; params?: Record<string, unknown>; maxFrames?: number }
+interface Slot { nodeType?: string; video?: boolean; audio?: boolean; data?: boolean; strict?: boolean; ports?: Record<string, string>; env?: Record<string, string>; params?: Record<string, unknown>; maxFrames?: number }
 interface Slots { normalizer?: Slot; converter?: Slot; avdelay?: Slot; splitter?: Slot }
 
 class McrView extends HTMLElement {
@@ -512,6 +512,14 @@ class McrView extends HTMLElement {
 
   #transportSummary(l: Obj): string {
     const tr = (l.transport ?? {}) as Obj;
+    // Vorhandene Quelle(n): Name des gewählten Nodes statt der Art; Bild, Ton und Daten dürfen aus verschiedenen Nodes kommen.
+    const ex = tr.existing as Obj | undefined;
+    if (ex) {
+      const v = String(ex.videoNodeLabel ?? ex.nodeLabel ?? ""), a = String(ex.audioNodeLabel ?? ex.nodeLabel ?? ""), d = String(ex.dataNodeLabel ?? "");
+      const names = [...new Set([v, a, d].filter(Boolean))];
+      if (names.length === 1) return names[0];
+      if (names.length > 1) return [v && `${t("mcr.mx.video")} ${v}`, a && `${t("mcr.mx.audio")} ${a}`, d && `${t("mcr.mx.data")} ${d}`].filter(Boolean).join(" · ");
+    }
     return String(tr.uri ?? tr.url ?? (tr.videoPort ? `UDP ${tr.videoPort}` : t(`mcr.kind.${l.kind}`)));
   }
 
@@ -885,7 +893,7 @@ class McrView extends HTMLElement {
       const nt = input(s.nodeType ?? "", { placeholder: withKinds ? t("mcr.slots.internal") : t("mcr.slots.typePh") });
       nt.disabled = !this.#isAdmin;
       nt.addEventListener("input", () => (s.nodeType = nt.value.trim()));
-      const cb = (k: "video" | "audio" | "strict", lbl: string, title?: string) => {
+      const cb = (k: "video" | "audio" | "data" | "strict", lbl: string, title?: string) => {
         const c = h("input", { type: "checkbox" }) as HTMLInputElement;
         c.checked = !!s[k];
         if (title) c.title = title;
@@ -903,7 +911,7 @@ class McrView extends HTMLElement {
         });
         return i;
       };
-      const ports = withKinds ? h("div", { class: "mcr-chain-head", style: "display:grid;grid-template-columns:260px repeat(4,minmax(0,1fr));gap:6px;align-items:center" }, h("span", { class: "mcr-hint" }, t("mcr.slots.ports")), port("videoIn", "Receiver 1"), port("videoOut", "Sender 1"), port("audioIn", "Receiver 2"), port("audioOut", "Sender 2")) : null;
+      const ports = withKinds ? h("div", { class: "mcr-chain-head", style: "display:grid;grid-template-columns:260px repeat(6,minmax(0,1fr));gap:6px;align-items:center" }, h("span", { class: "mcr-hint" }, t("mcr.slots.ports")), port("videoIn", "Receiver 1"), port("videoOut", "Sender 1"), port("audioIn", "Receiver 2"), port("audioOut", "Sender 2"), port("dataIn", "Daten"), port("dataOut", "Daten")) : null;
       // Erweitert: Start-Umgebung-Vorlage (env), Start-Parameter (params) als JSON-Objekt, Bildobergrenze des Delay-Nodes.
       const json = (k: "env" | "params", ph: string) => {
         const i = input(s[k] && Object.keys(s[k]!).length ? JSON.stringify(s[k]) : "", { placeholder: ph });
@@ -947,7 +955,7 @@ class McrView extends HTMLElement {
         h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px", class: "mcr-hint" }, t("mcr.slots.env")), json("env", '{"OMP_WIDTH":"{width}"}')),
         h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px", class: "mcr-hint" }, t("mcr.slots.params")), json("params", '{"delay.slewPermille":5}')),
         ...(maxF ? [h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px", class: "mcr-hint" }, t("mcr.slots.maxFrames")), maxF)] : [])) : null;
-      return h("div", {}, h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px" }, label), nt, ...(withKinds ? [cb("video", t("mcr.chain.typeVideo")), cb("audio", t("mcr.chain.typeAudio")), ...(key === "converter" ? [cb("strict", t("mcr.slots.strict"), t("mcr.slots.strictHint"))] : [])] : [])), ports, adv);
+      return h("div", {}, h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px" }, label), nt, ...(withKinds ? [cb("video", t("mcr.chain.typeVideo")), cb("audio", t("mcr.chain.typeAudio")), cb("data", t("mcr.mx.data"), t("mcr.slots.dataHint")), ...(key === "converter" ? [cb("strict", t("mcr.slots.strict"), t("mcr.slots.strictHint"))] : [])] : [])), ports, adv);
     };
     const save = h("button", { type: "button", class: "mcr-btn mcr-btn-primary", disabled: !this.#isAdmin }, t("mcr.save"));
     save.addEventListener("click", async () => {
