@@ -239,7 +239,7 @@ fn client_from_env() -> Result<(Client, String), String> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let label = env_or("OMP_LABEL", "TAMS-Wiedergabe");
+    let label = env_or("OMP_LABEL", "TAMS Playback");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "9361").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");

@@ -428,7 +428,7 @@ impl ParamStore for SignStore {
 
 #[tokio::main(flavor = "current_thread")]
 async fn run_node_async(w: usize, h: usize, ss: usize) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let label = env_or("OMP_LABEL", "Gebärdensprache");
+    let label = env_or("OMP_LABEL", "Sign Language");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "9340").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");

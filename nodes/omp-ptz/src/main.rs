@@ -360,7 +360,7 @@ async fn publisher(mut rx: UnboundedReceiver<Msg>, handle: omp_node_sdk::NodeHan
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let label = env_or("OMP_LABEL", "PTZ-Kamera");
+    let label = env_or("OMP_LABEL", "PTZ Camera");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "0").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");

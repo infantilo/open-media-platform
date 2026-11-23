@@ -23,7 +23,7 @@
   },
   {
     "type": "omp-normalizer",
-    "label": "Normalizer (Hausformat)",
+    "label": "Normalizer (House Format)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-normalizer"],
     "env": {},
@@ -38,7 +38,7 @@
   },
   {
     "type": "omp-contribution-in",
-    "label": "Leitungseingang (SRT)",
+    "label": "Contribution Input (SRT)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-contribution"],
     "env": { "OMP_CONTRIB_DIRECTION": "in" },
@@ -53,7 +53,7 @@
   },
   {
     "type": "omp-contribution-out",
-    "label": "Rückleitung (SRT/RIST)",
+    "label": "Return Feed (SRT/RIST)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-contribution"],
     "env": { "OMP_CONTRIB_DIRECTION": "out" },
@@ -79,7 +79,7 @@
   },
   {
     "type": "omp-audio-split",
-    "label": "Ton-Teiler (Mehrkanal)",
+    "label": "Audio Splitter (Multichannel)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-audio-split"],
     "env": {},
@@ -89,7 +89,7 @@
   },
   {
     "type": "omp-avdelay",
-    "label": "A/V-Delay",
+    "label": "A/V Delay",
     "runner": "process",
     "command": ["../nodes/target/release/omp-avdelay"],
     "env": {},
@@ -137,7 +137,7 @@
   },
   {
     "type": "omp-2110-gateway-output",
-    "label": "ST 2110 Gateway (Ausgabe)",
+    "label": "ST 2110 Gateway (Output)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-2110-gateway"],
     "env": { "OMP_2110_GATEWAY_DIRECTION": "output" },
@@ -149,7 +149,7 @@
   },
   {
     "type": "omp-srt-gateway-uplink",
-    "label": "SRT-Gateway (Uplink)",
+    "label": "SRT Gateway (Uplink)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-srt-gateway"],
     "env": { "OMP_SRT_GATEWAY_DIRECTION": "uplink" },
@@ -160,7 +160,7 @@
   },
   {
     "type": "omp-srt-gateway-downlink",
-    "label": "SRT-Gateway (Downlink)",
+    "label": "SRT Gateway (Downlink)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-srt-gateway"],
     "env": { "OMP_SRT_GATEWAY_DIRECTION": "downlink" },
@@ -171,7 +171,7 @@
   },
   {
     "type": "omp-fabrics-gateway-target",
-    "label": "Fabrics/RDMA-Gateway (Empfänger)",
+    "label": "Fabrics/RDMA Gateway (Receiver)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-fabrics-gateway"],
     "env": { "OMP_FABRICS_GATEWAY_ROLE": "target" },
@@ -182,7 +182,7 @@
   },
   {
     "type": "omp-fabrics-gateway-initiator",
-    "label": "Fabrics/RDMA-Gateway (Sender)",
+    "label": "Fabrics/RDMA Gateway (Sender)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-fabrics-gateway"],
     "env": { "OMP_FABRICS_GATEWAY_ROLE": "initiator" },
@@ -215,7 +215,7 @@
   },
   {
     "type": "omp-webrtc-gateway-camera",
-    "label": "WebRTC-Gateway (Handy-Kamera)",
+    "label": "WebRTC Gateway (Phone Camera)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-webrtc-gateway"],
     "env": { "OMP_HTTPS": "1", "OMP_HTTPS_PORT": "9443" },
@@ -226,7 +226,7 @@
   },
   {
     "type": "omp-webrtc-gateway-monitor",
-    "label": "WebRTC-Gateway (Handy-Monitor)",
+    "label": "WebRTC Gateway (Phone Monitor)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-webrtc-gateway"],
     "env": { "OMP_WEBRTC_GATEWAY_DIRECTION": "monitor", "OMP_HTTPS": "1", "OMP_HTTPS_PORT": "9444" },
@@ -257,7 +257,7 @@
   },
   {
     "type": "omp-scope",
-    "label": "Messgerät (Scope)",
+    "label": "Scope (Measurement)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-scope"],
     "env": {},
@@ -299,7 +299,7 @@
   },
   {
     "type": "omp-mxf-player",
-    "label": "MXF-Player",
+    "label": "MXF Player",
     "runner": "process",
     "command": ["../nodes/target/release/omp-mxf-player"],
     "env": {},
@@ -309,7 +309,7 @@
   },
   {
     "type": "omp-mxf-player-direct",
-    "label": "MXF-Player (Direkt, ohne Playlist)",
+    "label": "MXF Player (Direct, No Playlist)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-mxf-player-direct"],
     "env": { "OMP_MXF_FILE": "ET270438.mxf" },
@@ -319,7 +319,7 @@
   },
   {
     "type": "omp-channel-player",
-    "label": "Kanal-Player",
+    "label": "Channel Player",
     "runner": "process",
     "command": ["../nodes/target/release/omp-channel-player"],
     "env": {},
@@ -329,7 +329,7 @@
   },
   {
     "type": "omp-audio-player",
-    "label": "Audio-Player (Radio)",
+    "label": "Audio Player (Radio)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-channel-player"],
     "env": { "OMP_AUDIO_ONLY": "1" },
@@ -360,7 +360,7 @@
   },
   {
     "type": "omp-playout-automation",
-    "label": "Playout-Automation",
+    "label": "Playout Automation",
     "runner": "process",
     "command": ["../nodes/target/release/omp-playout-automation"],
     "env": {},
@@ -370,7 +370,7 @@
   },
   {
     "type": "omp-ograf",
-    "label": "OGraf Grafik",
+    "label": "OGraf Graphics",
     "runner": "process",
     "command": ["../nodes/target/release/omp-ograf"],
     "env": {},
@@ -400,7 +400,7 @@
   },
   {
     "type": "omp-tams-writer",
-    "label": "TAMS-Aufnahme",
+    "label": "TAMS Recording",
     "runner": "process",
     "command": ["../nodes/target/release/omp-tams-writer"],
     "mediaKind": "any", "env": {},
@@ -410,7 +410,7 @@
   },
   {
     "type": "omp-tams-reader",
-    "label": "TAMS-Wiedergabe",
+    "label": "TAMS Playback",
     "runner": "process",
     "command": ["../nodes/target/release/omp-tams-reader"],
     "mediaKind": "any", "env": {},
@@ -420,7 +420,7 @@
   },
   {
     "type": "omp-tams-janitor",
-    "label": "TAMS-Aufbewahrung",
+    "label": "TAMS Retention",
     "runner": "process",
     "command": ["../nodes/target/release/omp-tams-janitor"],
     "mediaKind": "any", "env": {},
@@ -430,7 +430,7 @@
   },
   {
     "type": "omp-vfa",
-    "label": "Video folgt Audio",
+    "label": "Video Follows Audio",
     "runner": "process",
     "command": ["../nodes/target/release/omp-vfa"],
     "env": {},
@@ -440,7 +440,7 @@
   },
   {
     "type": "omp-vfa-vision",
-    "label": "Gesichtserkennung (Video folgt Audio)",
+    "label": "Face Detection (Video Follows Audio)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-vfa-vision"],
     "env": {},
@@ -450,7 +450,7 @@
   },
   {
     "type": "omp-xy-panel",
-    "label": "X/Y-Panel (Kreuzschiene)",
+    "label": "X/Y Panel (Crosspoint Matrix)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-xy-panel"],
     "env": {},
@@ -460,7 +460,7 @@
   },
   {
     "type": "omp-channel-desk",
-    "label": "Mehrkanal-Platz (Playout)",
+    "label": "Multichannel Desk (Playout)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-channel-desk"],
     "env": {},
@@ -470,7 +470,7 @@
   },
   {
     "type": "omp-sign-avatar",
-    "label": "Gebärdensprach-Avatar",
+    "label": "Sign Language Avatar",
     "runner": "process",
     "command": ["../nodes/target/release/omp-sign-avatar"],
     "env": {},
@@ -481,7 +481,7 @@
   {
     "type": "omp-device-hub",
     "hostBound": true,
-    "label": "Geräte-Hub",
+    "label": "Device Hub",
     "runner": "process",
     "command": ["../nodes/target/release/omp-device-hub"],
     "env": {},
@@ -502,7 +502,7 @@
   },
   {
     "type": "omp-audio-delay",
-    "label": "Audio-Verzögerung (Radio)",
+    "label": "Audio Delay (Radio)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-audio-delay"],
     "env": {},
@@ -513,7 +513,7 @@
   },
   {
     "type": "omp-segue-player",
-    "label": "Segue-Player (Radio)",
+    "label": "Segue Player (Radio)",
     "runner": "process",
     "command": ["../nodes/target/release/omp-segue-player"],
     "env": {},
@@ -524,7 +524,7 @@
   },
   {
     "type": "omp-radio-automation",
-    "label": "Radio-Automation",
+    "label": "Radio Automation",
     "runner": "process",
     "command": ["../nodes/target/release/omp-radio-automation"],
     "env": {},
@@ -547,7 +547,7 @@
   },
   {
     "type": "omp-ptz",
-    "label": "PTZ-Kamera",
+    "label": "PTZ Camera",
     "runner": "process",
     "command": ["../nodes/target/release/omp-ptz"],
     "env": {"OMP_PTZ_TARGET": "192.168.0.100", "OMP_PTZ_PRESETS": "16"},
@@ -558,7 +558,7 @@
   },
   {
     "type": "omp-studio-logic",
-    "label": "Studio-Logik",
+    "label": "Studio Logic",
     "runner": "process",
     "command": ["../nodes/target/release/omp-studio-logic"],
     "env": {},
@@ -570,7 +570,7 @@
   {
     "type": "omp-midi-gateway",
     "hostBound": true,
-    "label": "MIDI-Gateway",
+    "label": "MIDI Gateway",
     "runner": "process",
     "command": ["../nodes/target/release/omp-midi-gateway"],
     "env": {},
@@ -581,7 +581,7 @@
   },
   {
     "type": "omp-failover",
-    "label": "Havarieumschalter",
+    "label": "Failover Switch",
     "runner": "process",
     "command": ["../nodes/target/release/omp-failover"],
     "env": {},
@@ -593,7 +593,7 @@
   },
   {
     "type": "omp-playout-buffer",
-    "label": "Playout-Puffer",
+    "label": "Playout Buffer",
     "anchor": true,
     "runner": "process",
     "command": ["../nodes/target/release/omp-playout-buffer"],
@@ -631,7 +631,7 @@
   {
     "type": "omp-lowlat-mixer",
     "hostBound": true,
-    "label": "Studio-Mischer (niedrige Latenz)",
+    "label": "Studio Mixer (Low Latency)",
     "runner": "process",
     "command": [
       "../nodes/target/release/omp-lowlat-mixer"

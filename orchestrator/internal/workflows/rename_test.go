@@ -140,3 +140,46 @@ func TestServiceRenameRolesMigratesStateAndNeedsStopped(t *testing.T) {
 		t.Fatal("unbekannter Workflow")
 	}
 }
+
+func TestRenameRolesRunsHooksAndRollsBack(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	wf, err := svc.Create("W", renameDef(), nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	svc.RegisterRoleRenameHook(func(id string, m map[string]string) error {
+		calls = append(calls, id+":"+m["Bildmischer"]+"/"+m["Video Mixer"])
+		return nil
+	})
+	if _, err := svc.RenameRoles(wf.ID, map[string]string{"Bildmischer": "Video Mixer"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0] != wf.ID+":Video Mixer/" {
+		t.Fatalf("Hook: %v", calls)
+	}
+	// Scheitert ein Hook, bleibt der Workflow unverändert und bereits laufende Hooks werden zurückgenommen.
+	calls = nil
+	var undone bool
+	svc.renameHooks = nil
+	svc.RegisterRoleRenameHook(func(id string, m map[string]string) error {
+		if m["Video Mixer"] == "" && m["Tonmischer"] == "" { // Rücknahme: alt/neu vertauscht
+			undone = true
+		}
+		return nil
+	})
+	svc.RegisterRoleRenameHook(func(string, map[string]string) error { return errors.New("kaputt") })
+	if _, err := svc.RenameRoles(wf.ID, map[string]string{"Tonmischer": "Audio Mixer"}); err == nil || !strings.Contains(err.Error(), "kaputt") {
+		t.Fatalf("Fehler des Hooks wird gemeldet: %v", err)
+	}
+	cur, _ := store.Get(wf.ID)
+	for _, r := range cur.Definition.Roles {
+		if r.Name == "Audio Mixer" {
+			t.Fatal("Definition darf bei Hook-Fehler nicht geändert sein")
+		}
+	}
+	if !undone {
+		t.Error("der erste Hook wird zurückgenommen")
+	}
+}

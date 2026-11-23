@@ -6679,7 +6679,7 @@ fn env_or(key: &str, fallback: &str) -> String {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let label = env_or("OMP_LABEL", "PlayoutAutomation");
+    let label = env_or("OMP_LABEL", "Playout Automation");
     let hook_label = label.clone();
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "9370").parse()?;

@@ -473,7 +473,7 @@ fn env_or(key: &str, fallback: &str) -> String {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let label = env_or("OMP_LABEL", "Havarieumschalter");
+    let label = env_or("OMP_LABEL", "Failover Switch");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "0").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");

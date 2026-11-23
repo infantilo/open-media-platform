@@ -419,7 +419,7 @@ fn clock_loop(shared: Arc<Shared>, out: Arc<io::MxlOut>, shutdown: Arc<AtomicBoo
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let label = env_or("OMP_LABEL", "Segue-Player");
+    let label = env_or("OMP_LABEL", "Segue Player");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "0").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");

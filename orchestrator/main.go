@@ -9,6 +9,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/clusterupdate"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/kpi"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/playout"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profile"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/uiorigin"
 	"io"
@@ -993,6 +994,10 @@ func main() {
 	workflowSvc.SetDomains(mxlDomainStore)
 	workflowSvc.SetIdentity(cfg.OrchestratorURL) // Umzugs-Journal: wer einen Umzug führt
 	playoutmod.Register(workflowSvc)
+	// Rollen umbenennen: Playout-Channels sind an (Workflow, Rollenname) gebunden und ziehen mit.
+	workflowSvc.RegisterRoleRenameHook(func(workflowID string, m map[string]string) error {
+		return playout.NewStore(database).RenameChannelRoles(workflowID, m)
+	})
 	// Video folgt Audio (Kapitel 46) steuert Bild- und Tonmischer fern und braucht wie die Automation ein Service-Token.
 	workflowSvc.RegisterControlPlaneType("omp-vfa")
 	workflowSvc.RegisterControlPlaneType("omp-radio-automation") // Radio-Automation (Kapitel 89/RB4): steuert den Segue-Player über den Proxy

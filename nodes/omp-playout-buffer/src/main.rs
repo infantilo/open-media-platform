@@ -621,7 +621,7 @@ fn env_num<T: std::str::FromStr>(key: &str, fallback: T) -> T {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let label = env_or("OMP_LABEL", "Playout-Puffer");
+    let label = env_or("OMP_LABEL", "Playout Buffer");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "9385").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");

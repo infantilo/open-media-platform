@@ -1011,7 +1011,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if argv.get(1).map(String::as_str) == Some("--alsa-test") {
         std::process::exit(alsa_test(&argv[2..]));
     }
-    let label = env_or("OMP_LABEL", "Studio-Mischer");
+    let label = env_or("OMP_LABEL", "Studio Mixer");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "0").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");

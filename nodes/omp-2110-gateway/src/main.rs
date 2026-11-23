@@ -716,7 +716,7 @@ fn resolve_audio_ingest_params() -> Result<AudioIngestParams, String> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let label = env_or("OMP_LABEL", "2110-Gateway");
+    let label = env_or("OMP_LABEL", "2110 Gateway");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "9400").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");

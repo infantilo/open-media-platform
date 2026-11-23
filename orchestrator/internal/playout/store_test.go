@@ -185,3 +185,35 @@ func TestRecordExecutionIsIdempotent(t *testing.T) {
 		t.Fatal("after prune the ID should count as first again")
 	}
 }
+
+func TestRenameChannelRoles(t *testing.T) {
+	s, _ := testStore(t)
+	a, err := s.CreateChannel(ChannelInput{Name: "A", WorkflowID: "wf1", Role: "Playout-Automation"}, "u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.CreateChannel(ChannelInput{Name: "B", WorkflowID: "wf1", Role: "Zweite"}, "u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.CreateChannel(ChannelInput{Name: "C", WorkflowID: "wf2", Role: "Playout-Automation"}, "u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Umbenennen und gleichzeitig tauschen (der eindeutige Index darf nicht stören); fremder Workflow bleibt unberührt.
+	if err := s.RenameChannelRoles("wf1", map[string]string{"Playout-Automation": "Zweite", "Zweite": "Playout Automation"}); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := s.ChannelByRole("wf1", "Zweite"); err != nil || c.ID != a.ID {
+		t.Fatalf("A heißt jetzt Zweite: %+v %v", c, err)
+	}
+	if c, err := s.ChannelByRole("wf1", "Playout Automation"); err != nil || c.ID != b.ID {
+		t.Fatalf("B heißt jetzt Playout Automation: %+v %v", c, err)
+	}
+	if c, err := s.ChannelByRole("wf2", "Playout-Automation"); err != nil || c.ID != other.ID {
+		t.Fatalf("fremder Workflow bleibt: %+v %v", c, err)
+	}
+	if err := s.RenameChannelRoles("", map[string]string{"x": "y"}); err != nil {
+		t.Fatal(err)
+	}
+}

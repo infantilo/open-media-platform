@@ -310,7 +310,7 @@ fn run_loop(sh: Arc<Mutex<Shared>>, url: String, auth: OrchestratorAuth, reg: Re
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let label = env_or("OMP_LABEL", "Studio-Logik");
+    let label = env_or("OMP_LABEL", "Studio Logic");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "0").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://127.0.0.1:8010");

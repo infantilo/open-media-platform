@@ -154,6 +154,14 @@ func RenameRoleStateMap(states map[string]json.RawMessage, m map[string]string) 
 	return out
 }
 
+// RoleRenameHook: ein Modul, das Rollen eines Workflows beim Namen kennt (z. B. Playout-Channels), zieht bei einer Umbenennung nach.
+type RoleRenameHook func(workflowID string, m map[string]string) error
+
+// RegisterRoleRenameHook meldet ein solches Modul an.
+func (s *Service) RegisterRoleRenameHook(h RoleRenameHook) {
+	s.renameHooks = append(s.renameHooks, h)
+}
+
 // RenameRoles benennt Rollen eines gestoppten Workflows um (Definition und gesicherter Zustand). Läuft der Workflow, ist
 // `ErrNotStopped` die Antwort: laufende Instanzen tragen den alten Namen als Bezeichnung.
 func (s *Service) RenameRoles(id string, m map[string]string) (Workflow, error) {
@@ -171,9 +179,25 @@ func (s *Service) RenameRoles(id string, m map[string]string) (Workflow, error) 
 	if err := validate(def); err != nil {
 		return Workflow{}, err
 	}
+	// Zuerst die Module (schlägt eines fehl, bleibt alles wie es war), dann die Definition; scheitert die, laufen die Module zurück.
+	inverse := map[string]string{}
+	for old, nw := range m {
+		inverse[nw] = old
+	}
+	for i, h := range s.renameHooks {
+		if err := h(id, m); err != nil {
+			for _, done := range s.renameHooks[:i] {
+				_ = done(id, inverse)
+			}
+			return Workflow{}, fmt.Errorf("Rollenbezug eines Moduls: %w", err)
+		}
+	}
 	wf.Definition = def
 	wf.UpdatedAt = time.Now()
 	if err := s.store.Put(wf); err != nil {
+		for _, h := range s.renameHooks {
+			_ = h(id, inverse)
+		}
 		return Workflow{}, err
 	}
 	if err := s.store.RenameRoleState(id, m); err != nil {

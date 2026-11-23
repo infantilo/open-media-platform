@@ -166,7 +166,9 @@ func (f *fakeStore) ClearRoleState(id string) error {
 func (f *fakeStore) RenameRoleState(id string, m map[string]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.roleStates[id] = RenameRoleStateMap(f.roleStates[id], m)
+	if cur, ok := f.roleStates[id]; ok {
+		f.roleStates[id] = RenameRoleStateMap(cur, m)
+	}
 	return nil
 }
 

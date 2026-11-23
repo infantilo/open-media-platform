@@ -295,3 +295,28 @@ func (s *Store) PruneExecutions(olderThan time.Time) (int64, error) {
 	}
 	return res.RowsAffected()
 }
+
+// RenameChannelRoles ordnet die Channels eines Workflows nach einer Umbenennung der Rollen neu zu (alt → neu). Zweistufig in einer
+// Transaktion, damit auch ein Tausch zweier Namen den eindeutigen Index (workflow_id, role) nicht verletzt.
+func (s *Store) RenameChannelRoles(workflowID string, m map[string]string) error {
+	if workflowID == "" || len(m) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	const tmp = "~umbenennen~"
+	for old := range m {
+		if _, err := tx.Exec(`UPDATE playout_channels SET role=$3 WHERE workflow_id=$1 AND role=$2`, workflowID, old, tmp+old); err != nil {
+			return err
+		}
+	}
+	for old, nw := range m {
+		if _, err := tx.Exec(`UPDATE playout_channels SET role=$3 WHERE workflow_id=$1 AND role=$2`, workflowID, tmp+old, nw); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}

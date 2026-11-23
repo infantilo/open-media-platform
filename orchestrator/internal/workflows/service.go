@@ -325,7 +325,9 @@ type Service struct {
 	// authz (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — s. AuthzBinder.
 	authz AuthzBinder
 	// alertRules (Kap. 83): E-Mail-Alarmregeln je Workflow — beim Löschen aufräumen, beim Export/Import mitnehmen. nil = aus.
-	alertRules AlertRuleBinder
+	// renameHooks: Module, die Rollennamen speichern (rename.go).
+	renameHooks []RoleRenameHook
+	alertRules  AlertRuleBinder
 	// groups: Gruppenname ↔ ID für den Export/Import von Rollenbindungen. nil = aus.
 	groups GroupDirectory
 	// hostDir: bekannte Hosts für die Importprüfung. nil = keine Prüfung.
