@@ -1,6 +1,6 @@
 {
   "type": "omp-subtitle-asr",
-  "label": "Auto-Untertitel",
+  "label": "Auto Subtitles",
   "runner": "podman",
   "env": {},
   "description": "Automatische Untertitelung (Spracherkennung): liest einen MXL-Audiostream, erkennt die Sprache abschnittsweise mit einer lokalen Engine (whisper.cpp-Server) und liefert den Text live in die Untertitel-Ebene eines Grafik-Nodes (Vorlage „subtitle“) als fortlaufende SRT-Spur in data/subtitles zur Nachbearbeitung und Wiederholung sowie über zwei verdrahtbare MXL-Daten-Ausgänge: Untertitel-Text (für den Aux-Eingang „Untertitel“ von Viewer und Multiviewer) und CEA-608 im CDP (ANC-Datenspur für Gateways). Sprache einstellbar oder automatisch; der Text erscheint mit einigen Sekunden Verzug nach dem Sprechen, die Spur trägt die echten Sprechzeiten. Engine (whisper.cpp) und Modelle sind im Paket enthalten und laufen im Node-Container; beim Entfernen des Node-Typs verschwindet alles mit. Aus einer Mediendatei kann der Node auch komplette SRT-Dateien erzeugen, auf Wunsch mit Sprechererkennung (Sprechernamen); dabei pausiert die Live-Untertitelung, solange am Ausgang eine Untertitel-Datei läuft. Medienverzeichnisse werden schreibgeschützt aus OMP_MEDIA_MOUNTS (Orchestrator-Umgebung) eingehängt.",

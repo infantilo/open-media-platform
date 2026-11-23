@@ -1,6 +1,6 @@
 {
   "type": "omp-ograf",
-  "label": "OGraf Grafik",
+  "label": "OGraf Graphics",
   "runner": "podman",
   "env": {},
   "description": "Rendert eine EBU-OGraf-Grafikvorlage (Bauchbinde, Laufband u. a.) als Fill+Key-MXL-Ausgang für den Bildmischer-DSK. Der Web-Renderer und die Grafikvorlagen sind im Paket enthalten und laufen im Node-Container; beim Entfernen des Node-Typs verschwindet alles mit.",
