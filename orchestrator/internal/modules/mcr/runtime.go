@@ -287,7 +287,7 @@ func (rt *Runtime) Reconcile(ctx context.Context, s *Service, e Event) (int, err
 		}
 		lh, _ := ParseHouse(l.HouseFormat)
 		failed := false
-		for _, p := range NodeParams(l, Effective(g, ev, lh)) {
+		for _, p := range NodeParams(l, Effective(g, ev, lh), s.FunctionSlots()) {
 			if err := rt.patch(ctx, base, p.Name, p.Value); err != nil {
 				failed = true
 				if firstErr == nil {

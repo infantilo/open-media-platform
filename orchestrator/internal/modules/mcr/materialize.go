@@ -214,7 +214,7 @@ func inputEnv(l Line, secretsDir string) (map[string]string, error) {
 }
 
 // normalizerEnv: Startumgebung des Normalizers aus dem **wirksamen** Hausformat der Leitung und den Einstellungen.
-func normalizerEnv(l Line, eff HouseFormat) (map[string]string, error) {
+func normalizerEnv(l Line, eff HouseFormat, sl Slots) (map[string]string, error) {
 	env := map[string]string{}
 	if eff.Video != nil || eff.Audio != nil {
 		b, err := json.Marshal(eff)
@@ -236,6 +236,9 @@ func normalizerEnv(l Line, eff HouseFormat) (map[string]string, error) {
 		env["OMP_NORMALIZE_MODE"] = "copyOnly"
 	default:
 		return nil, bad("Leitung „%s“: normalize.mode „%s“ unbekannt (auto, copyOnly)", l.Name, n.Mode)
+	}
+	if _, strict := sl.normalizerOverrides(); strict {
+		env["OMP_NORMALIZE_MODE"] = "copyOnly"
 	}
 	if len(n.AudioMap) > 0 && string(n.AudioMap) != "null" {
 		env["OMP_AUDIO_MAP"] = string(n.AudioMap)
@@ -275,11 +278,11 @@ func Materialize(e Event, global *HouseFormat, secretsDir string, chain ...Chain
 		if err := validateTracks(l); err != nil {
 			return def, nil, nil, err
 		}
-		nenv, err := normalizerEnv(l, eff)
+		nenv, err := normalizerEnv(l, eff, cc.Slots)
 		if err != nil {
 			return def, nil, nil, err
 		}
-		stages := ResolveChain(cc.Global, e.Chain, l.Chain)
+		stages := append(cc.autoStages(), ResolveChain(cc.Global, e.Chain, l.Chain)...)
 		for _, st := range stages {
 			if _, ok := cc.typeOf(st.NodeType); !ok {
 				return def, nil, nil, bad("Leitung „%s“: Stufe „%s“: Node-Typ „%s“ ist nicht zugelassen", l.Name, st.ID, st.NodeType)
@@ -296,7 +299,7 @@ func Materialize(e Event, global *HouseFormat, secretsDir string, chain ...Chain
 		for _, sr := range lr.Pre {
 			def.Roles = append(def.Roles, workflows.Role{Name: sr.Role, NodeType: sr.Stage.NodeType})
 		}
-		def.Roles = append(def.Roles, workflows.Role{Name: lr.Normalizer, NodeType: NodeNormalizer})
+		def.Roles = append(def.Roles, workflows.Role{Name: lr.Normalizer, NodeType: cc.normalizerType()})
 		envs[lr.Normalizer] = nenv
 		for _, sr := range lr.Post {
 			def.Roles = append(def.Roles, workflows.Role{Name: sr.Role, NodeType: sr.Stage.NodeType})
@@ -317,7 +320,7 @@ func Materialize(e Event, global *HouseFormat, secretsDir string, chain ...Chain
 			envs[lr.Return] = renv
 		}
 		def.Interface.Outputs = append(def.Interface.Outputs, workflows.InterfacePort{Name: l.Name, Label: l.Name, Members: []workflows.InterfaceMember{
-			{Role: lr.OutVideo, Port: "Sender 1"}, {Role: lr.OutAudio, Port: "Sender 2"}}})
+			{Role: lr.OutVideo, Port: w.outVideoPort}, {Role: lr.OutAudio, Port: w.outAudioPort}}})
 		roles[l.ID] = lr
 	}
 	// Bestätigung beim Stoppen ab `live` (Fehlbedienung auf Sendung vermeiden).
@@ -342,7 +345,7 @@ type ParamSet struct {
 	Value any
 }
 
-func NodeParams(l Line, eff HouseFormat) []ParamSet {
+func NodeParams(l Line, eff HouseFormat, slots ...Slots) []ParamSet {
 	var out []ParamSet
 	if eff.Video != nil || eff.Audio != nil {
 		b, _ := json.Marshal(eff)
@@ -383,6 +386,15 @@ func NodeParams(l Line, eff HouseFormat) []ParamSet {
 	}
 	if a.Mode != "" {
 		out = append(out, ParamSet{"avsync.mode", a.Mode}) // zuletzt: erst Werte, dann Modus
+	}
+	if len(slots) > 0 {
+		off, strict := slots[0].normalizerOverrides()
+		if off {
+			out = append(out, ParamSet{"avsync.mode", "off"}) // getrennter A/V-Delay-Node: nicht doppelt ausgleichen
+		}
+		if strict {
+			out = append(out, ParamSet{"normalize.mode", "copyOnly"})
+		}
 	}
 	return out
 }

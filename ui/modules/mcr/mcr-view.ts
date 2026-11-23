@@ -54,6 +54,9 @@ interface CardRefs {
   sig: string;
 }
 
+interface Slot { nodeType?: string; video?: boolean; audio?: boolean; strict?: boolean; ports?: Record<string, string> }
+interface Slots { normalizer?: Slot; converter?: Slot; avdelay?: Slot }
+
 class McrView extends HTMLElement {
   #tab: "wall" | "events" | "alarms" | "templates" | "house" = "wall";
   #alarms: AlarmHistory | null = null;
@@ -68,6 +71,7 @@ class McrView extends HTMLElement {
   #global: Obj | null = null;
   #globalChain: Stage[] = [];
   #stageTypes: StageType[] = [];
+  #slots: Slots = {};
   #isAdmin = false;
   #canManage = true;
   #canLive = true;
@@ -157,11 +161,12 @@ class McrView extends HTMLElement {
     if (r.ok) this.#templates = r.data.templates ?? [];
   }
   async #loadGlobal() {
-    const r = await api<{ houseFormat: Obj | null; chain?: Stage[]; stageTypes?: StageType[] }>("GET", "/settings");
+    const r = await api<{ houseFormat: Obj | null; chain?: Stage[]; stageTypes?: StageType[]; slots?: Slots }>("GET", "/settings");
     if (r.ok) {
       this.#global = r.data.houseFormat ?? null;
       this.#globalChain = r.data.chain ?? [];
       this.#stageTypes = r.data.stageTypes ?? [];
+      this.#slots = r.data.slots ?? {};
     }
   }
   async #loadEvent() {
@@ -850,6 +855,48 @@ class McrView extends HTMLElement {
     return h("div", { class: "mcr-form" }, h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.chain.types")), note(t("mcr.chain.typesHint")), list, h("div", { class: "mcr-quick" }, add), h("div", { style: "display:flex;gap:12px;align-items:center" }, save, out)));
   }
 
+  /** Austauschbare Funktionen (106.13h): Node-Typ für Normalizer, Converter und A/V-Delay (nur Administratoren). */
+  #slotsEditor(): HTMLElement {
+    const cur: Slots = JSON.parse(JSON.stringify(this.#slots));
+    const out = h("div", { class: "mcr-hint", "aria-live": "polite", style: "min-height:18px" });
+    const row = (key: keyof Slots, label: string, withKinds: boolean) => {
+      const s = (cur[key] ??= { nodeType: "" });
+      const nt = input(s.nodeType ?? "", { placeholder: withKinds ? t("mcr.slots.internal") : t("mcr.slots.typePh") });
+      nt.disabled = !this.#isAdmin;
+      nt.addEventListener("input", () => (s.nodeType = nt.value.trim()));
+      const cb = (k: "video" | "audio" | "strict", lbl: string, title?: string) => {
+        const c = h("input", { type: "checkbox" }) as HTMLInputElement;
+        c.checked = !!s[k];
+        if (title) c.title = title;
+        c.disabled = !this.#isAdmin;
+        c.addEventListener("change", () => (s[k] = c.checked));
+        return h("label", { class: "mcr-sw" }, c, lbl);
+      };
+      const port = (k: string, ph: string) => {
+        const i = input(s.ports?.[k] ?? "", { placeholder: ph });
+        i.disabled = !this.#isAdmin;
+        i.title = t("mcr.slots.portsHint");
+        i.addEventListener("input", () => {
+          s.ports = { ...(s.ports ?? {}), [k]: i.value.trim() };
+          if (!i.value.trim()) delete s.ports[k];
+        });
+        return i;
+      };
+      const ports = withKinds ? h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px", class: "mcr-hint" }, t("mcr.slots.ports")), port("videoIn", "Receiver 1"), port("videoOut", "Sender 1"), port("audioIn", "Receiver 2"), port("audioOut", "Sender 2")) : null;
+      return h("div", {}, h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px" }, label), nt, ...(withKinds ? [cb("video", t("mcr.chain.typeVideo")), cb("audio", t("mcr.chain.typeAudio")), ...(key === "converter" ? [cb("strict", t("mcr.slots.strict"), t("mcr.slots.strictHint"))] : [])] : [])), ports);
+    };
+    const save = h("button", { type: "button", class: "mcr-btn mcr-btn-primary", disabled: !this.#isAdmin }, t("mcr.save"));
+    save.addEventListener("click", async () => {
+      const r = await api("PUT", "/settings", { slots: cur });
+      out.style.color = r.ok ? "var(--omp-preset)" : "var(--omp-error)";
+      out.textContent = r.ok ? t("mcr.slots.saved") : errText(r.data);
+      if (r.ok) await this.#loadGlobal();
+    });
+    return h("div", { class: "mcr-form", style: "margin-top:18px" }, h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.slots.title")), note(t("mcr.slots.hint")), note(t("mcr.slots.override")),
+      h("div", { class: "mcr-chain-params" }, row("normalizer", t("mcr.slots.normalizer"), false), row("converter", t("mcr.slots.converter"), true), row("avdelay", t("mcr.slots.avdelay"), true)),
+      h("div", { style: "display:flex;gap:12px;align-items:center" }, save, out)));
+  }
+
   // ---- Hausformat -----------------------------------------------------------------------------------------------------
 
   #paintHouse() {
@@ -885,8 +932,9 @@ class McrView extends HTMLElement {
       }
     });
     const types = this.#typesEditor();
+    const slots = this.#slotsEditor();
     page.append(h("h2", {}, t("mcr.tab.house")), h("p", { class: "mcr-sub" }, t("mcr.house.sub")), h("div", { class: "mcr-form" }, h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.house.global")), hf.el), h("div", { style: "display:flex;gap:12px;align-items:center" }, save, out), this.#isAdmin ? null : note(t("mcr.house.adminOnly"))),
-      h("div", { class: "mcr-form", style: "margin-top:18px" }, h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.chain.global")), note(t("mcr.chain.globalHint")), chain.el, h("div", { style: "display:flex;gap:12px;align-items:center" }, csave, cout)), types));
+      h("div", { class: "mcr-form", style: "margin-top:18px" }, h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.chain.global")), note(t("mcr.chain.globalHint")), chain.el, h("div", { style: "display:flex;gap:12px;align-items:center" }, csave, cout)), slots, types));
     this.#body.replaceChildren(page);
   }
 }

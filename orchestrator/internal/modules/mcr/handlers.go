@@ -326,7 +326,7 @@ func (a *api) getSettings() http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"houseFormat": h, "chain": a.svc.chainOrEmpty(), "stageTypes": a.svc.StageTypes(), "alarmRetentionDays": a.svc.AlarmRetentionDays()})
+		writeJSON(w, 200, map[string]any{"houseFormat": h, "chain": a.svc.chainOrEmpty(), "stageTypes": a.svc.StageTypes(), "slots": a.svc.FunctionSlots(), "alarmRetentionDays": a.svc.AlarmRetentionDays()})
 	}
 }
 
@@ -356,6 +356,18 @@ func (a *api) putSettings() http.HandlerFunc {
 				return
 			}
 		}
+		if raw, ok := in["slots"]; ok {
+			var sl Slots
+			if err := json.Unmarshal(raw, &sl); err != nil {
+				writeErr(w, bad("slots: %v", err))
+				return
+			}
+			if err := a.svc.SetFunctionSlots(sl); err != nil {
+				writeErr(w, err)
+				return
+			}
+			a.svc.audit(actorOf(r), "settings", "settings.slots", nil)
+		}
 		chain, hasChain := in["chain"]
 		var types *[]StageType
 		if raw, ok := in["stageTypes"]; ok {
@@ -377,7 +389,7 @@ func (a *api) putSettings() http.HandlerFunc {
 			a.svc.audit(actorOf(r), "settings", "settings.chain", nil)
 		}
 		h, _ := a.svc.GlobalHouse()
-		writeJSON(w, 200, map[string]any{"houseFormat": h, "chain": a.svc.chainOrEmpty(), "stageTypes": a.svc.StageTypes(), "alarmRetentionDays": a.svc.AlarmRetentionDays()})
+		writeJSON(w, 200, map[string]any{"houseFormat": h, "chain": a.svc.chainOrEmpty(), "stageTypes": a.svc.StageTypes(), "slots": a.svc.FunctionSlots(), "alarmRetentionDays": a.svc.AlarmRetentionDays()})
 	}
 }
 

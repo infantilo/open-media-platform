@@ -14,6 +14,7 @@ import (
 const (
 	SettingChain      = "mcr.chain"
 	SettingStageTypes = "mcr.stageTypes"
+	SettingSlots      = "mcr.slots"
 	MaxStages         = 8
 
 	WherePre  = "pre"
@@ -40,6 +41,7 @@ type StageType struct {
 	Label    string `json:"label,omitempty"`
 	Video    bool   `json:"video"`
 	Audio    bool   `json:"audio"`
+	Ports    Ports  `json:"ports,omitempty"`
 }
 
 // DefaultStageTypes: was ohne Einstellung zulässig ist (der Skalierer trägt nur Bild).
@@ -47,11 +49,106 @@ func DefaultStageTypes() []StageType {
 	return []StageType{{NodeType: "omp-scaler", Label: "Scaler", Video: true}}
 }
 
+// Ports: Bezeichnungen der Ein-/Ausgänge einer Stufe. Leer = Standard der MCR-Nodes („Receiver 1“/„Sender 1“ = Bild,
+// „Receiver 2“/„Sender 2“ = Ton). Fremde Nodes mit anderen Bezeichnungen tragen sie hier ein.
+type Ports struct {
+	VideoIn  string `json:"videoIn,omitempty"`
+	VideoOut string `json:"videoOut,omitempty"`
+	AudioIn  string `json:"audioIn,omitempty"`
+	AudioOut string `json:"audioOut,omitempty"`
+}
+
+func orDefault(v, def string) string {
+	if strings.TrimSpace(v) == "" {
+		return def
+	}
+	return v
+}
+
+// resolved: Ports mit Standardwerten.
+func (p Ports) resolved() Ports {
+	return Ports{orDefault(p.VideoIn, "Receiver 1"), orDefault(p.VideoOut, "Sender 1"), orDefault(p.AudioIn, "Receiver 2"), orDefault(p.AudioOut, "Sender 2")}
+}
+
+// Slot benennt den Node-Typ, der eine MCR-Funktion erfüllt. Austausch = anderen Typ eintragen (Einstellung `mcr.slots`),
+// ohne Codeänderung; wirksam beim nächsten Aufbau der Leitung.
+type Slot struct {
+	NodeType string `json:"nodeType"`
+	// Video/Audio: welche Arten der Node trägt (nur bei Converter/AVDelay; der Normalizer trägt immer beides).
+	Video bool `json:"video,omitempty"`
+	Audio bool `json:"audio,omitempty"`
+	// Strict (nur Converter): der Normalizer wandelt nicht mehr selbst (`copyOnly`); bleibt eine Abweichung, blockiert er mit Alarm
+	// statt heimlich nachzuwandeln. Ohne Strict bleibt er Sicherheitsnetz (`auto`: kopiert bei passendem Format, wandelt sonst).
+	Strict bool `json:"strict,omitempty"`
+	// Ports: abweichende Port-Bezeichnungen des Nodes (leer = MCR-Standard).
+	Ports Ports `json:"ports,omitempty"`
+}
+
+// Slots: austauschbare Funktionen des MCR.
+//   - Normalizer: der Hauptknoten je Leitung (Standard `omp-normalizer`, Alleskönner: Format, Versatz).
+//   - Converter: getrennter Up-/Down-Converter vor dem Normalizer; leer = Wandlung intern im Normalizer.
+//   - AVDelay: getrennter A/V-Delay-Node nach dem Normalizer; leer = Ausgleich intern im Normalizer.
+type Slots struct {
+	Normalizer Slot `json:"normalizer"`
+	Converter  Slot `json:"converter"`
+	AVDelay    Slot `json:"avdelay"`
+}
+
+// DefaultSlots: ohne Einstellung wie bisher (alles im Normalizer).
+func DefaultSlots() Slots {
+	return Slots{Normalizer: Slot{NodeType: NodeNormalizer, Video: true, Audio: true}}
+}
+
+// normalized füllt den Normalizer-Standard nach.
+func (sl Slots) normalized() Slots {
+	if strings.TrimSpace(sl.Normalizer.NodeType) == "" {
+		sl.Normalizer = DefaultSlots().Normalizer
+	}
+	return sl
+}
+
+// Validate: Typnamen plausibel; ein getrennter Node muss mindestens eine Art tragen.
+func (sl Slots) Validate() error {
+	sl = sl.normalized()
+	for name, s := range map[string]Slot{"Normalizer": sl.Normalizer, "Converter": sl.Converter, "A/V-Delay": sl.AVDelay} {
+		t := strings.TrimSpace(s.NodeType)
+		if t == "" {
+			continue
+		}
+		if !nodeTypeRe.MatchString(t) {
+			return bad("Funktion %s: Node-Typ „%s“ ungültig", name, s.NodeType)
+		}
+		if name != "Normalizer" && !s.Video && !s.Audio {
+			return bad("Funktion %s: Node trägt weder Bild noch Ton", name)
+		}
+	}
+	return nil
+}
+
+var nodeTypeRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
 // ChainConfig sind die globalen Vorgaben für `Materialize`.
 type ChainConfig struct {
 	Global json.RawMessage // mcr.chain
 	Types  []StageType     // mcr.stageTypes; leer = DefaultStageTypes
+	Slots  Slots           // mcr.slots; leer = DefaultSlots
 }
+
+// autoStages: aus den Slots abgeleitete Stufen (Converter vorn, A/V-Delay hinten), die vor der Benutzerkette stehen.
+func (c ChainConfig) autoStages() []Stage {
+	sl := c.Slots.normalized()
+	var out []Stage
+	if t := strings.TrimSpace(sl.Converter.NodeType); t != "" {
+		out = append(out, Stage{ID: "conv", NodeType: t, Where: WherePre, Label: "Converter"})
+	}
+	if t := strings.TrimSpace(sl.AVDelay.NodeType); t != "" {
+		out = append(out, Stage{ID: "avdelay", NodeType: t, Where: WherePost, Label: "A/V-Delay"})
+	}
+	return out
+}
+
+// normalizerType: Node-Typ des Hauptknotens je Leitung.
+func (c ChainConfig) normalizerType() string { return c.Slots.normalized().Normalizer.NodeType }
 
 func (c ChainConfig) types() []StageType {
 	if len(c.Types) == 0 {
@@ -61,6 +158,12 @@ func (c ChainConfig) types() []StageType {
 }
 
 func (c ChainConfig) typeOf(nodeType string) (StageType, bool) {
+	sl := c.Slots.normalized()
+	for _, x := range []Slot{sl.Converter, sl.AVDelay} {
+		if x.NodeType != "" && x.NodeType == nodeType {
+			return StageType{NodeType: nodeType, Video: x.Video, Audio: x.Audio, Ports: x.Ports}, true
+		}
+	}
 	for _, t := range c.types() {
 		if t.NodeType == nodeType {
 			return t, true
@@ -152,6 +255,8 @@ type StageRole struct {
 type chainWiring struct {
 	entryVideo, entryAudio string
 	outVideo, outAudio     string
+	outVideoPort           string // Ausgangsport der letzten Rolle je Art
+	outAudioPort           string
 	conns                  [][4]string // fromRole, fromPort, toRole, toPort
 }
 
@@ -160,44 +265,58 @@ func wire(input string, pre []StageRole, norm string, post []StageRole, cfg Chai
 	type member struct {
 		role         string
 		video, audio bool
+		ports        Ports
 	}
+	std := Ports{}.resolved()
 	var order []member
 	if input != "" {
-		order = append(order, member{input, true, true})
+		order = append(order, member{input, true, true, std})
 	}
 	for _, s := range pre {
 		t, _ := cfg.typeOf(s.Stage.NodeType)
-		order = append(order, member{s.Role, t.Video, t.Audio})
+		order = append(order, member{s.Role, t.Video, t.Audio, t.Ports.resolved()})
 	}
-	order = append(order, member{norm, true, true})
+	order = append(order, member{norm, true, true, std})
 	for _, s := range post {
 		t, _ := cfg.typeOf(s.Stage.NodeType)
-		order = append(order, member{s.Role, t.Video, t.Audio})
+		order = append(order, member{s.Role, t.Video, t.Audio, t.Ports.resolved()})
 	}
 	var w chainWiring
 	prevV, prevA := "", ""
+	var prevVP, prevAP string // Ausgangsport der vorigen Rolle je Art
 	for _, m := range order {
 		if m.video {
 			if prevV != "" {
-				w.conns = append(w.conns, [4]string{prevV, "Sender 1", m.role, "Receiver 1"})
+				w.conns = append(w.conns, [4]string{prevV, prevVP, m.role, m.ports.VideoIn})
 			} else if m.role != input {
 				w.entryVideo = m.role
 			}
 			if w.entryVideo == "" && prevV == "" && m.role != input {
 				w.entryVideo = m.role
 			}
-			prevV = m.role
+			prevV, prevVP = m.role, m.ports.VideoOut
 		}
 		if m.audio {
 			if prevA != "" {
-				w.conns = append(w.conns, [4]string{prevA, "Sender 2", m.role, "Receiver 2"})
+				w.conns = append(w.conns, [4]string{prevA, prevAP, m.role, m.ports.AudioIn})
 			}
 			if w.entryAudio == "" && prevA == "" && m.role != input {
 				w.entryAudio = m.role
 			}
-			prevA = m.role
+			prevA, prevAP = m.role, m.ports.AudioOut
 		}
 	}
 	w.outVideo, w.outAudio = prevV, prevA
+	w.outVideoPort, w.outAudioPort = prevVP, prevAP
 	return w
+}
+
+// normalizerOverrides: Einstellungen, die der Normalizer bekommt, weil Funktionen an getrennte Nodes abgegeben sind.
+//   - A/V-Delay getrennt: sein eigener Ausgleich ist aus (`avsync.mode=off`), sonst würde der Versatz doppelt korrigiert.
+//     Das gilt auch gegen die Einstellung der Leitung. Messen bleibt möglich, Übernehmen wirkt dann nicht auf den Normalizer.
+//   - Converter getrennt und `strict`: `normalize.mode=copyOnly`.
+//   - Converter getrennt ohne `strict`: nichts; ein passendes Format wird ohnehin nur kopiert, der Normalizer wandelt nur bei Abweichung.
+func (sl Slots) normalizerOverrides() (avsyncOff, copyOnly bool) {
+	sl = sl.normalized()
+	return strings.TrimSpace(sl.AVDelay.NodeType) != "", strings.TrimSpace(sl.Converter.NodeType) != "" && sl.Converter.Strict
 }

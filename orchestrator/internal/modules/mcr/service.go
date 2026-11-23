@@ -503,7 +503,32 @@ func (s *Service) StageTypes() []StageType {
 
 // ChainConfig bündelt die globalen Vorgaben für Materialize und Prüfung.
 func (s *Service) ChainConfig() ChainConfig {
-	return ChainConfig{Global: s.GlobalChain(), Types: s.StageTypes()}
+	return ChainConfig{Global: s.GlobalChain(), Types: s.StageTypes(), Slots: s.FunctionSlots()}
+}
+
+// FunctionSlots: eingestellte Node-Typen für Normalizer, Converter und A/V-Delay (Standard: alles im Normalizer).
+func (s *Service) FunctionSlots() Slots {
+	if s.Settings != nil {
+		if b, err := s.Settings.Get(SettingSlots); err == nil {
+			var sl Slots
+			if json.Unmarshal(b, &sl) == nil {
+				return sl.normalized()
+			}
+		}
+	}
+	return DefaultSlots()
+}
+
+// SetFunctionSlots speichert die Funktionszuordnung; gilt ab dem nächsten Aufbau (laufende Events bleiben unberührt).
+func (s *Service) SetFunctionSlots(sl Slots) error {
+	if s.Settings == nil {
+		return bad("keine Einstellungen verfügbar")
+	}
+	if err := sl.Validate(); err != nil {
+		return err
+	}
+	b, _ := json.Marshal(sl.normalized())
+	return s.Settings.Put(SettingSlots, b)
 }
 
 // SetChainSettings speichert die globale Kette und/oder die zugelassenen Typen (nil = unverändert).

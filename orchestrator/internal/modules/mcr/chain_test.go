@@ -198,3 +198,95 @@ func TestLiveEventRejectsChainChange(t *testing.T) {
 		t.Fatalf("unveränderte Kette bleibt erlaubt: %v", err)
 	}
 }
+
+func TestMaterializeWithFunctionSlots(t *testing.T) {
+	cc := ChainConfig{Slots: Slots{
+		Normalizer: Slot{NodeType: "omp-normalizer-v2"},
+		Converter:  Slot{NodeType: "omp-udc-pro", Video: true},
+		AVDelay:    Slot{NodeType: "omp-avdelay-pro", Video: true, Audio: true},
+	}}
+	e := Event{ID: "ev", Name: "K", Lines: []Line{{ID: "l1", Name: "A", Kind: KindSRT, Transport: raw(`{"uri":"srt://:9000"}`)}}}
+	def, roles, _, err := Materialize(e, nil, "", cc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]string{}
+	for _, r := range def.Roles {
+		types[r.Name] = r.NodeType
+	}
+	if types["a-norm"] != "omp-normalizer-v2" || types["a-pre-conv"] != "omp-udc-pro" || types["a-post-avdelay"] != "omp-avdelay-pro" {
+		t.Fatalf("Rollen/Typen: %v", types)
+	}
+	if lr := roles["l1"]; lr.OutVideo != "a-post-avdelay" {
+		t.Fatalf("Kette: %+v", lr)
+	}
+	// Standard: alles im Normalizer, keine Zusatzstufen.
+	def, _, _, _ = Materialize(e, nil, "", ChainConfig{})
+	if len(def.Roles) != 2 {
+		t.Fatalf("Standard: %d Rollen, erwartet 2 (Eingang + Normalizer)", len(def.Roles))
+	}
+	if err := (Slots{Converter: Slot{NodeType: "x y"}}).Validate(); err == nil {
+		t.Error("ungültiger Typname muss abgelehnt werden")
+	}
+	if err := (Slots{AVDelay: Slot{NodeType: "omp-x"}}).Validate(); err == nil {
+		t.Error("Slot ohne Bild/Ton muss abgelehnt werden")
+	}
+}
+
+func TestNormalizerOverridesFromSlots(t *testing.T) {
+	l := Line{ID: "l1", Name: "A", Kind: KindSRT, Avsync: raw(`{"mode":"once","heldMs":40}`)}
+	last := func(ps []ParamSet, name string) any {
+		var v any
+		for _, p := range ps {
+			if p.Name == name {
+				v = p.Value
+			}
+		}
+		return v
+	}
+	// Standard: Einstellung der Leitung gilt, kein Zwang.
+	if v := last(NodeParams(l, HouseFormat{}, DefaultSlots()), "avsync.mode"); v != "once" {
+		t.Fatalf("Standard: %v", v)
+	}
+	// Getrennter A/V-Delay: Normalizer-Ausgleich aus, auch gegen die Leitungseinstellung.
+	sl := Slots{AVDelay: Slot{NodeType: "omp-avdelay-pro", Video: true, Audio: true}, Converter: Slot{NodeType: "omp-udc-pro", Video: true, Strict: true}}
+	ps := NodeParams(l, HouseFormat{}, sl)
+	if last(ps, "avsync.mode") != "off" || last(ps, "normalize.mode") != "copyOnly" {
+		t.Fatalf("Zwang fehlt: %v", ps)
+	}
+	// Converter ohne Strict: Normalizer bleibt Sicherheitsnetz.
+	sl.Converter.Strict = false
+	if v := last(NodeParams(l, HouseFormat{}, sl), "normalize.mode"); v != nil {
+		t.Fatalf("ohne Strict kein copyOnly: %v", v)
+	}
+	// Start-Umgebung folgt demselben Schalter.
+	if env, _ := normalizerEnv(l, HouseFormat{}, Slots{Converter: Slot{NodeType: "x", Video: true, Strict: true}}); env["OMP_NORMALIZE_MODE"] != "copyOnly" {
+		t.Fatalf("env: %v", env)
+	}
+	if env, _ := normalizerEnv(l, HouseFormat{}, DefaultSlots()); env["OMP_NORMALIZE_MODE"] != "" {
+		t.Fatalf("Standard-env: %v", env)
+	}
+}
+
+func TestStagePortsOverride(t *testing.T) {
+	cc := ChainConfig{Slots: Slots{AVDelay: Slot{NodeType: "omp-audio-delay", Audio: true, Ports: Ports{AudioIn: "Programm", AudioOut: "Programm verzögert"}}}}
+	e := Event{ID: "ev", Name: "K", Lines: []Line{{ID: "l1", Name: "A", Kind: KindSRT, Transport: raw(`{"uri":"srt://:9000"}`)}}}
+	def, _, _, err := Materialize(e, nil, "", cc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, c := range def.Connections {
+		got[c.FromRole+":"+c.FromSender+">"+c.ToRole+":"+c.ToReceiver] = true
+	}
+	if !got["a-norm:Sender 2>a-post-avdelay:Programm"] {
+		t.Fatalf("Ton in den Fremdnode fehlt: %v", got)
+	}
+	if got["a-norm:Sender 1>a-post-avdelay:Receiver 1"] {
+		t.Fatalf("Bild darf nicht an den Ton-Node: %v", got)
+	}
+	m := def.Interface.Outputs[0].Members
+	if m[0].Role != "a-norm" || m[0].Port != "Sender 1" || m[1].Role != "a-post-avdelay" || m[1].Port != "Programm verzögert" {
+		t.Fatalf("Schnittstelle: %+v", m)
+	}
+}
