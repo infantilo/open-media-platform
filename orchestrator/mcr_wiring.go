@@ -207,13 +207,19 @@ func (f mcrFabric) Link(ctx context.Context, src mcrmod.Existing, videoInstance,
 		return first
 	}
 	recv := func(format string) string {
-		norm := normV // Bild und Daten: erstes Glied der Kette, das Bild annimmt
+		// Bild: erstes Glied der Kette, das Bild annimmt; Ton: erstes, das Ton annimmt. Daten gehen an das erste dieser beiden
+		// Glieder, das einen Daten-Empfänger hat (ein reiner Bild-Skalierer davor hat keinen: dann nimmt der Normalizer sie).
+		cands := []registry.NodeView{normV}
 		if format == mcrFormatAudio {
-			norm = normA
+			cands = []registry.NodeView{normA}
+		} else if format == mcrFormatData {
+			cands = []registry.NodeView{normV, normA}
 		}
-		for _, r := range norm.Receivers {
-			if r.Format == format {
-				return r.ID
+		for _, norm := range cands {
+			for _, r := range norm.Receivers {
+				if r.Format == format {
+					return r.ID
+				}
 			}
 		}
 		return ""

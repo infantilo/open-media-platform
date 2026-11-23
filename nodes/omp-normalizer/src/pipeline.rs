@@ -57,6 +57,8 @@ pub struct Config {
     pub domain: String,
     pub video_flow_id: String,
     pub audio_flow_id: String,
+    /// Ausgangs-Flow der Datenspur (ANC/Zeitcode/Untertitel): wird unverändert, mit gleichem Grain-Index, durchgereicht.
+    pub data_flow_id: String,
     pub label: String,
     pub house: HouseFormat,
     pub mode: Mode,
@@ -120,6 +122,10 @@ pub struct Shared {
     pub audio: Mutex<BranchInfo>,
     pub video_flowed: AtomicBool,
     pub audio_flowed: AtomicBool,
+    /// Datenspur: ein Grain wurde durchgereicht.
+    pub data_flowed: AtomicBool,
+    /// Datenspur: Anzeige („verbunden: …“, „wartet auf Quelle“, leer = nicht verbunden).
+    pub data_mode: Mutex<String>,
     pub format_changes: AtomicU64,
     pub last_error: Mutex<String>,
 }
@@ -132,6 +138,8 @@ enum Command {
     DisconnectVideo,
     ConnectAudio(String),
     DisconnectAudio,
+    ConnectData(String),
+    DisconnectData,
     /// Hausformat oder Modus geändert: beide Zweige neu bewerten und aufbauen.
     Reconfigure,
 }
@@ -159,12 +167,47 @@ impl PipelineHandle {
         self.shared.audio_flowed.store(false, Ordering::Relaxed);
         let _ = self.commands.send(Command::DisconnectAudio);
     }
+    pub fn connect_data(&self, id: String) {
+        self.shared.data_flowed.store(false, Ordering::Relaxed);
+        let _ = self.commands.send(Command::ConnectData(id));
+    }
+    pub fn disconnect_data(&self) {
+        self.shared.data_flowed.store(false, Ordering::Relaxed);
+        let _ = self.commands.send(Command::DisconnectData);
+    }
     pub fn reconfigure(&self) {
         let _ = self.commands.send(Command::Reconfigure);
     }
     pub fn media_ready(&self) -> bool {
         self.shared.video_flowed.load(Ordering::Relaxed)
     }
+}
+
+/// Datenspur (ANC, Zeitcode, Untertitel): ein Daten-Flow wird Grain für Grain unverändert in den eigenen Ausgangs-Flow kopiert,
+/// mit **demselben Grain-Index** (gemeinsame TAI-Zeit) — Bild, Ton und Daten bleiben zueinander ausgerichtet. Der Normalizer
+/// wandelt Daten nicht; sie laufen am Format-Abgleich vorbei (die Verzögerung eines A/V-Ausgleichs gilt hier nicht).
+struct DataLane {
+    _input: omp_mediaio::mxl::MxlDataInput,
+}
+
+/// Baut die Datenspur. `on_grain` wird nach jedem durchgereichten Grain gerufen. Rückgabe: Spur und Grain-Rate der Quelle.
+fn build_data_lane(ctx: &Arc<MxlContext>, source_flow_id: &str, out_flow_id: &str, label: &str, on_grain: Arc<dyn Fn() + Send + Sync>) -> Result<(DataLane, (i64, i64)), String> {
+    let def = ctx.flow_def(source_flow_id).map_err(|e| format!("Quelle {source_flow_id}: {e}"))?;
+    let (num, den) = omp_mediaio::mxl::grain_rate_of(&def);
+    let out = Arc::new(omp_mediaio::mxl::MxlDataOutput::new(ctx.clone(), out_flow_id, &format!("{label} Daten"), label, num as u32, den as u32)?);
+    let input = omp_mediaio::mxl::MxlDataInput::new_indexed(ctx.clone(), source_flow_id, move |index, payload| {
+        if out.write_grain(index, payload).is_ok() {
+            on_grain();
+        }
+    })?;
+    Ok((DataLane { _input: input }, (num, den)))
+}
+
+fn connect_data(ctx: &Arc<MxlContext>, source_flow_id: &str, config: &Config, shared: &Arc<Shared>) -> Result<DataLane, String> {
+    let sh = shared.clone();
+    let (lane, (num, den)) = build_data_lane(ctx, source_flow_id, &config.data_flow_id, &config.label, Arc::new(move || sh.data_flowed.store(true, Ordering::Relaxed)))?;
+    *shared.data_mode.lock().expect("lock poisoned") = format!("durchgereicht ({num}/{den})");
+    Ok(lane)
 }
 
 struct ActiveVideo {
@@ -659,6 +702,8 @@ pub fn run(
         audio: Mutex::new(BranchInfo::default()),
         video_flowed: AtomicBool::new(false),
         audio_flowed: AtomicBool::new(false),
+        data_flowed: AtomicBool::new(false),
+        data_mode: Mutex::new(String::new()),
         format_changes: AtomicU64::new(0),
         last_error: Mutex::new(String::new()),
     });
@@ -698,6 +743,9 @@ pub fn run(
     let mut seen_audio: Option<serde_json::Value> = None;
     let mut retry_video = false;
     let mut retry_audio = false;
+    let mut data: Option<DataLane> = None;
+    let mut last_data: Option<String> = None;
+    let mut retry_data = false;
 
     // Baut den Videozweig (neu) auf. Vorher den alten abbauen, damit die Ausgangs-Flow-Datei frei wird; verwaiste Flows mit
     // anderem Format räumt `garbage_collect_flows` weg (nur Flows ohne lebenden Schreiber/Leser).
@@ -803,6 +851,28 @@ pub fn run(
                 retry_audio = false;
                 *shared.audio.lock().expect("lock poisoned") = BranchInfo::default();
             }
+            Command::ConnectData(id) => {
+                last_data = Some(id.clone());
+                data = None;
+                match connect_data(&ctx, &id, &config, &shared) {
+                    Ok(d) => {
+                        data = Some(d);
+                        retry_data = false;
+                    }
+                    Err(e) => {
+                        // Die Quelle erscheint evtl. erst später in der Domain: bei der nächsten Änderung erneut versuchen.
+                        retry_data = true;
+                        *shared.data_mode.lock().expect("lock poisoned") = "wartet auf Quelle".to_string();
+                        eprintln!("omp-normalizer: Daten: {e}");
+                    }
+                }
+            }
+            Command::DisconnectData => {
+                data = None;
+                last_data = None;
+                retry_data = false;
+                shared.data_mode.lock().expect("lock poisoned").clear();
+            }
             Command::Reconfigure => {
                 rebuild_video!();
                 rebuild_audio!();
@@ -849,11 +919,16 @@ pub fn run(
                 if retry_audio && matches!(audio, AudioBranch::None) {
                     rebuild_audio!();
                 }
+                if retry_data && data.is_none() && let Some(id) = last_data.clone() && let Ok(d) = connect_data(&ctx, &id, &config, &shared) {
+                    data = Some(d);
+                    retry_data = false;
+                }
             }
         }
     }
     drop(video);
     drop(audio);
+    drop(data);
     if let Some(w) = watcher {
         let _ = w.join();
     }
@@ -915,6 +990,7 @@ mod live_tests {
             domain: dir.clone(),
             video_flow_id: OUT.into(),
             audio_flow_id: AUDIO_OUT.into(),
+            data_flow_id: "00000000-0000-4000-8000-0000000000d1".into(),
             label: "norm-test".into(),
             house: house(320, 180),
             mode: Mode::Auto,
@@ -1001,6 +1077,39 @@ mod live_stage_tests {
     const OUT_V: &str = "66666666-6666-4666-8666-666666666666";
     const OUT_A: &str = "77777777-7777-4777-8777-777777777777";
 
+    /// Die Datenspur kopiert Grains unverändert und mit demselben Index (Bild/Ton/Daten bleiben ausgerichtet).
+    #[test]
+    #[ignore = "braucht die MXL-Laufzeit (libmxl, siehe deploy/dev/mxl.env)"]
+    fn data_lane_copies_grains_with_the_same_index() {
+        let env = Env::new("data");
+        let (src_id, out_id) = ("00000000-0000-4000-8000-0000000000a1", "00000000-0000-4000-8000-0000000000a2");
+        let src = omp_mediaio::mxl::MxlDataOutput::new(env.ctx.clone(), src_id, "Quelle", "T", 25, 1).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::<(u64, Vec<u8>)>::new()));
+        let flowed = Arc::new(AtomicBool::new(false));
+        let fl = flowed.clone();
+        let (lane, rate) = build_data_lane(&env.ctx, src_id, out_id, "Test", Arc::new(move || fl.store(true, Ordering::Relaxed))).unwrap();
+        assert_eq!(rate, (25, 1));
+        // Leser am Ausgang der Spur.
+        let sink = seen.clone();
+        let _reader = omp_mediaio::mxl::MxlDataInput::new_indexed(env.ctx.clone(), out_id, move |i, p| sink.lock().unwrap().push((i, p.to_vec()))).unwrap();
+        let mut written = Vec::new();
+        for n in 0..25u8 {
+            let idx = src.current_index();
+            let mut payload = vec![0u8; omp_mediaio::anc::HEADER_LEN + 8];
+            payload[omp_mediaio::anc::HEADER_LEN..].copy_from_slice(&[n, n ^ 0x5a, 1, 2, 3, 4, 5, 6]);
+            payload[0] = 0x01; // nicht leer, damit der Leser den Grain als Nutzlast sieht
+            src.write_grain(idx, &payload).unwrap();
+            written.push((idx, payload));
+            src.sleep_until_index(idx + 1);
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        drop(lane);
+        assert!(flowed.load(Ordering::Relaxed), "kein Grain durchgereicht");
+        let got = seen.lock().unwrap().clone();
+        let matched = written.iter().filter(|(i, p)| got.iter().any(|(gi, gp)| gi == i && gp[..p.len()] == p[..])).count();
+        assert!(matched >= 18, "nur {matched} von {} Grains mit gleichem Index und gleicher Nutzlast angekommen (gelesen: {})", written.len(), got.len());
+    }
+
     struct Env {
         dir: String,
         ctx: Arc<MxlContext>,
@@ -1035,6 +1144,7 @@ mod live_stage_tests {
                 domain: env.dir.clone(),
                 video_flow_id: OUT_V.into(),
                 audio_flow_id: OUT_A.into(),
+                data_flow_id: "00000000-0000-4000-8000-0000000000d2".into(),
                 label: "norm-test".into(),
                 house,
                 mode: Mode::Auto,

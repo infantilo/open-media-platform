@@ -25,6 +25,7 @@ use serde_json::Value;
 enum Kind {
     Video,
     Audio,
+    Data,
 }
 
 struct NormControl {
@@ -44,6 +45,7 @@ impl ReceiverControl for NormControl {
                         match self.kind {
                             Kind::Video => self.pipeline.connect_video(flow_id),
                             Kind::Audio => self.pipeline.connect_audio(flow_id),
+                            Kind::Data => self.pipeline.connect_data(flow_id),
                         }
                     }
                     None => eprintln!("omp-normalizer: sender {sender_id} has no flow_id"),
@@ -55,6 +57,7 @@ impl ReceiverControl for NormControl {
                 match self.kind {
                     Kind::Video => self.pipeline.disconnect_video(),
                     Kind::Audio => self.pipeline.disconnect_audio(),
+                    Kind::Data => self.pipeline.disconnect_data(),
                 }
             }
         }
@@ -76,10 +79,13 @@ struct NormStore {
     avsync: Arc<Mutex<AvState>>,
     video_connected: Arc<Mutex<String>>,
     audio_connected: Arc<Mutex<String>>,
+    data_connected: Arc<Mutex<String>>,
+    data_flow_id: String,
     video_flow_id: String,
     audio_flow_id: String,
     video_conn: Arc<ReceiverConnection<NormControl>>,
     audio_conn: Arc<ReceiverConnection<NormControl>>,
+    data_conn: Arc<ReceiverConnection<NormControl>>,
     pipeline: pipeline::PipelineHandle,
 }
 
@@ -148,6 +154,10 @@ impl ParamStore for NormStore {
                 spec("avsync.running", ParamType::String, true),
                 spec("connectedVideoFlowId", ParamType::String, true),
                 spec("connectedAudioFlowId", ParamType::String, true),
+                spec("connectedDataFlowId", ParamType::String, true),
+                spec("targetDataFlowId", ParamType::String, true),
+                spec("normalize.dataState", ParamType::String, true),
+                spec("normalize.dataFlowing", ParamType::Boolean, true),
                 spec("targetVideoFlowId", ParamType::String, true),
                 spec("targetAudioFlowId", ParamType::String, true),
             ],
@@ -202,6 +212,10 @@ impl ParamStore for NormStore {
             "normalize.lastError" => Some(serde_json::json!(sh.last_error.lock().expect("lock poisoned").clone())),
             "connectedVideoFlowId" => Some(serde_json::json!(self.video_connected.lock().expect("lock poisoned").clone())),
             "connectedAudioFlowId" => Some(serde_json::json!(self.audio_connected.lock().expect("lock poisoned").clone())),
+            "connectedDataFlowId" => Some(serde_json::json!(self.data_connected.lock().expect("lock poisoned").clone())),
+            "targetDataFlowId" => Some(serde_json::json!(self.data_flow_id)),
+            "normalize.dataState" => Some(serde_json::json!(self.pipeline.shared.data_mode.lock().expect("lock poisoned").clone())),
+            "normalize.dataFlowing" => Some(serde_json::json!(self.pipeline.shared.data_flowed.load(std::sync::atomic::Ordering::Relaxed))),
             "targetVideoFlowId" => Some(serde_json::json!(self.video_flow_id)),
             "targetAudioFlowId" => Some(serde_json::json!(self.audio_flow_id)),
             _ => None,
@@ -380,9 +394,9 @@ impl ParamStore for NormStore {
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
         let to_raw = |(status, content_type, body)| RawResponse { status, content_type, body };
-        let (vid, aid) = (self.video_conn.id(), self.audio_conn.id());
+        let (vid, aid, did) = (self.video_conn.id(), self.audio_conn.id(), self.data_conn.id());
         root_discovery(method, path)
-            .or_else(|| list_ids(method, path, "receivers", &[vid, aid]))
+            .or_else(|| list_ids(method, path, "receivers", &[vid, aid, did]))
             .or_else(|| bulk_discovery(method, path))
             .or_else(|| {
                 bulk_patch(method, path, "receivers", body, |id, params| {
@@ -390,6 +404,8 @@ impl ParamStore for NormStore {
                         Some(self.video_conn.patch_staged(params).0)
                     } else if id == aid {
                         Some(self.audio_conn.patch_staged(params).0)
+                    } else if id == did {
+                        Some(self.data_conn.patch_staged(params).0)
                     } else {
                         None
                     }
@@ -398,6 +414,7 @@ impl ParamStore for NormStore {
             .or_else(|| bulk_patch(method, path, "senders", body, |_, _| None))
             .or_else(|| self.video_conn.handle(method, path, body))
             .or_else(|| self.audio_conn.handle(method, path, body))
+            .or_else(|| self.data_conn.handle(method, path, body))
             .map(to_raw)
     }
 
@@ -405,6 +422,7 @@ impl ParamStore for NormStore {
         self.video_conn
             .cors_methods(path)
             .or_else(|| self.audio_conn.cors_methods(path))
+            .or_else(|| self.data_conn.cors_methods(path))
             .or_else(|| bulk_cors_methods(path, "senders"))
             .or_else(|| bulk_cors_methods(path, "receivers"))
     }
@@ -435,8 +453,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let video_receiver_id = omp_node_sdk::idgen::new_v4();
     let audio_receiver_id = omp_node_sdk::idgen::new_v4();
+    let data_receiver_id = omp_node_sdk::idgen::new_v4();
     let video_flow_id = std::env::var("OMP_VIDEO_FLOW_ID").unwrap_or_else(|_| omp_node_sdk::idgen::new_v4());
     let audio_flow_id = std::env::var("OMP_AUDIO_FLOW_ID").unwrap_or_else(|_| omp_node_sdk::idgen::new_v4());
+    let data_flow_id = std::env::var("OMP_DATA_FLOW_ID").unwrap_or_else(|_| omp_node_sdk::idgen::new_v4());
 
     // Für die Anmeldung im Register (IS-04) nennt der Node das Hausformat beim Start; spätere Änderungen wirken im MXL-Flow.
     let (decl_w, decl_h, decl_n, decl_d) = match &house.video {
@@ -455,6 +475,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         domain,
         video_flow_id: video_flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
+        data_flow_id: data_flow_id.clone(),
         label: label.clone(),
         house,
         mode,
@@ -479,6 +500,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let video_connected = Arc::new(Mutex::new(String::new()));
     let audio_connected = Arc::new(Mutex::new(String::new()));
+    let data_connected = Arc::new(Mutex::new(String::new()));
     let make = |id: &str, kind: Kind, connected: &Arc<Mutex<String>>| {
         Arc::new(ReceiverConnection::new(
             id.to_string(),
@@ -492,16 +514,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     let video_conn = make(&video_receiver_id, Kind::Video, &video_connected);
     let audio_conn = make(&audio_receiver_id, Kind::Audio, &audio_connected);
+    let data_conn = make(&data_receiver_id, Kind::Data, &data_connected);
     let media_ready = pipeline_handle.clone();
     let store: Arc<dyn ParamStore> = Arc::new(NormStore {
         domain: env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl"),
         avsync: Arc::new(Mutex::new(AvState { method: "none", ..Default::default() })),
         video_connected,
         audio_connected,
+        data_connected,
+        data_flow_id: data_flow_id.clone(),
         video_flow_id: video_flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
         video_conn,
         audio_conn,
+        data_conn,
         pipeline: pipeline_handle,
     });
 
@@ -536,6 +562,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }),
                     ..Default::default()
                 },
+                SenderSpec {
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    flow: Some(FlowSpec::Data { id: Some(data_flow_id), grain_rate_numerator: decl_n, grain_rate_denominator: decl_d, did_sdid: vec![] }),
+                    label: Some("Daten".to_string()),
+                    ..Default::default()
+                },
             ],
             receivers: vec![
                 ReceiverSpec {
@@ -548,6 +580,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     id: Some(audio_receiver_id),
                     transport: Some(TRANSPORT_MXL.to_string()),
                     media_types: Some(vec!["audio/float32".to_string()]),
+                    ..Default::default()
+                },
+                ReceiverSpec {
+                    id: Some(data_receiver_id),
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    media_types: Some(vec!["video/smpte291".to_string()]),
+                    label: Some("Daten".to_string()),
                     ..Default::default()
                 },
             ],

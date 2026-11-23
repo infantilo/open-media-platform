@@ -3984,7 +3984,7 @@ pub struct MxlDataInput {
     heartbeat: Arc<AtomicU64>,
 }
 
-fn grain_rate_of(def: &str) -> (i64, i64) {
+pub fn grain_rate_of(def: &str) -> (i64, i64) {
     serde_json::from_str::<serde_json::Value>(def)
         .ok()
         .and_then(|v| Some((v.get("grain_rate")?.get("numerator")?.as_i64()?, v.get("grain_rate")?.get("denominator").and_then(|d| d.as_i64()).unwrap_or(1))))
