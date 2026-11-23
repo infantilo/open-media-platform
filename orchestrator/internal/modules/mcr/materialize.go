@@ -92,7 +92,7 @@ func SourceNames(e Event, chain ...ChainConfig) map[string]string {
 		for _, l := range e.Lines {
 			lr := roles[l.ID]
 			name := "MCR/" + e.Name + "/" + l.Name
-			for _, r := range []string{lr.Normalizer, lr.OutVideo, lr.OutAudio} {
+			for _, r := range []string{lr.Normalizer, lr.OutVideo, lr.OutAudio, lr.OutData} {
 				if r != "" {
 					out[r] = name
 				}

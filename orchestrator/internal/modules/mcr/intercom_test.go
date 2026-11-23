@@ -40,8 +40,12 @@ func (f *fakeFabric) AudioSender(inst, hint string) (string, bool) {
 	return "snd(" + inst + "," + hint + ")", true
 }
 func (f *fakeFabric) AudioReceiver(inst string) (string, bool) { return "rcv(" + inst + ")", true }
-func (f *fakeFabric) IntercomReceiver(slot int) (string, bool) { return fmt.Sprintf("icin%d", slot), true }
-func (f *fakeFabric) IntercomSender(slot int) (string, bool)   { return fmt.Sprintf("icout%d", slot), true }
+func (f *fakeFabric) IntercomReceiver(slot int) (string, bool) {
+	return fmt.Sprintf("icin%d", slot), true
+}
+func (f *fakeFabric) IntercomSender(slot int) (string, bool) {
+	return fmt.Sprintf("icout%d", slot), true
+}
 func (f *fakeFabric) Connect(_ context.Context, a, b string) error {
 	f.connects = append(f.connects, a+"->"+b)
 	return nil

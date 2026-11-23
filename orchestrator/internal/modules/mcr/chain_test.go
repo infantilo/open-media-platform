@@ -409,3 +409,12 @@ func TestDataTrackIsPartOfTheChain(t *testing.T) {
 		t.Fatalf("Daten-Ports: %v %v", o["A"], c)
 	}
 }
+
+func TestSourceNameCoversDataOutput(t *testing.T) {
+	e := Event{ID: "ev", Name: "K", Lines: []Line{{ID: "l1", Name: "A", Kind: KindMXL, Transport: raw(`{"existing":{"videoNodeId":"v","audioNodeId":"v","dataNodeId":"d"}}`)}}}
+	cc := ChainConfig{Slots: Slots{AVDelay: Slot{NodeType: "omp-avdelay-d", Video: true, Audio: true, Data: true}}}
+	n := SourceNames(e, cc)
+	if n["a-post-avdelay"] != "MCR/K/A" || n["a-norm"] != "MCR/K/A" {
+		t.Fatalf("Quellname: %v", n)
+	}
+}

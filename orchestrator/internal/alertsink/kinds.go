@@ -132,6 +132,7 @@ func init() {
 		{Kind: "signal-loudness", Severity: SevWarning, Group: "signal", Label: "Signal: Lautheit zu hoch", LabelEN: "Signal: loudness too high"},
 		{Kind: "signal-phase", Severity: SevWarning, Group: "signal", Label: "Signal: Phasenfehler", LabelEN: "Signal: phase error"},
 		{Kind: "signal-monoDropout", Severity: SevWarning, Group: "signal", Label: "Signal: Mono-Ausfall", LabelEN: "Signal: mono dropout"},
+		{Kind: "signal-dataLoss", Severity: SevWarning, Group: "signal", Label: "Signal: Datenspur fehlt (ANC, Zeitcode, Untertitel)", LabelEN: "Signal: data track missing (ANC, timecode, subtitles)"},
 		{Kind: "signal-signalLoss", Severity: SevCritical, Group: "signal", Label: "Signal: Signalverlust", LabelEN: "Signal: signal loss"},
 		{Kind: "signal-formatMismatch", Severity: SevWarning, Group: "signal", Label: "Signal: Format weicht ab", LabelEN: "Signal: format mismatch"},
 		{Kind: "user-action", Severity: SevInfo, Group: "user", Label: "Manuelle Benutzeraktion", OptIn: true},

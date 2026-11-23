@@ -290,7 +290,7 @@ func TestBindingsFollowMembersAndEndWithEvent(t *testing.T) {
 		_, _ = rt.Reconcile(ctx, svc, full)
 	}
 	rec()
-	rec() // nicht doppelt
+	rec()                  // nicht doppelt
 	if len(fb.live) != 3 { // Verantwortlicher (Ersteller) gilt als lead, dazu tom und die Gruppe; keine für den Kommentator
 		t.Fatalf("drei Bindungen (admin/tom operate, Gruppe view), keine für den Kommentator: %v", fb.live)
 	}

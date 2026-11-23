@@ -54,7 +54,14 @@ pub const DEFAULT_HEIGHT: u32 = 480;
 pub const FRAMERATE_NUMERATOR: u32 = 25;
 pub const FRAMERATE_DENOMINATOR: u32 = 1;
 pub const SAMPLE_RATE: u32 = 48000;
-pub const CHANNELS: u32 = 2;
+/// Standard-Kanalzahl des Tons.
+pub const DEFAULT_CHANNELS: u32 = 2;
+
+/// Kanalzahl des Tons: `OMP_AUDIO_CHANNELS` (1…64, Standard 2). Bei mehr (oder weniger) als 2 Kanälen erzeugt jeder Kanal einen eigenen
+/// Sinuston (Kanal k = 220·k Hz) — Testquelle für Mehrkanalton und Tonteiler: aus der Frequenz erkennt man, welcher Kanal wo ankommt.
+pub fn channels() -> u32 {
+    std::env::var("OMP_AUDIO_CHANNELS").ok().and_then(|v| v.trim().parse::<u32>().ok()).filter(|c| (1..=64).contains(c)).unwrap_or(DEFAULT_CHANNELS)
+}
 /// Fixer Begleitton — akustisch unterscheidbar von den 220 Hz-Vielfachen,
 /// die C11/C12s dynamisch angelegte Kanäle/Items verwenden, damit ein
 /// Source-Testton im Mix erkennbar bleibt.
@@ -295,12 +302,34 @@ impl Pipeline {
         let audioconvert = gst::ElementFactory::make("audioconvert")
             .build()
             .map_err(|e| PipelineError(format!("audioconvert: {e}")))?;
-        pipeline
-            .add(&audiotestsrc)
-            .and_then(|()| pipeline.add(&audioconvert))
-            .map_err(|e| PipelineError(format!("add audio elements: {e}")))?;
-        gst::Element::link_many([&audiotestsrc, &audioconvert])
-            .map_err(|e| PipelineError(format!("link audio chain: {e}")))?;
+        let audio_channels = channels();
+        pipeline.add(&audioconvert).map_err(|e| PipelineError(format!("add audio elements: {e}")))?;
+        if audio_channels == DEFAULT_CHANNELS {
+            pipeline.add(&audiotestsrc).map_err(|e| PipelineError(format!("add audio elements: {e}")))?;
+            gst::Element::link_many([&audiotestsrc, &audioconvert]).map_err(|e| PipelineError(format!("link audio chain: {e}")))?;
+        } else {
+            // Mehrkanal: je Kanal ein Mono-Sinuston (220·k Hz), zusammengeführt mit `interleave`.
+            let interleave = gst::ElementFactory::make("interleave").build().map_err(|e| PipelineError(format!("interleave: {e}")))?;
+            pipeline.add(&interleave).map_err(|e| PipelineError(format!("add interleave: {e}")))?;
+            for k in 0..audio_channels {
+                let src = gst::ElementFactory::make("audiotestsrc")
+                    .property("is-live", true)
+                    .property("freq", 220.0f64 * (k + 1) as f64)
+                    .property("volume", 0.3f64)
+                    .build()
+                    .map_err(|e| PipelineError(format!("audiotestsrc: {e}")))?;
+                src.set_property_from_str("wave", &wave);
+                let caps = gst::ElementFactory::make("capsfilter")
+                    .property("caps", gst::Caps::builder("audio/x-raw").field("channels", 1i32).field("rate", SAMPLE_RATE as i32).build())
+                    .build()
+                    .map_err(|e| PipelineError(format!("capsfilter: {e}")))?;
+                pipeline.add_many([&src, &caps]).map_err(|e| PipelineError(format!("add audio elements: {e}")))?;
+                src.link(&caps).map_err(|e| PipelineError(format!("link audio chain: {e}")))?;
+                let pad = interleave.request_pad_simple("sink_%u").ok_or_else(|| PipelineError("interleave: kein Eingang".into()))?;
+                caps.static_pad("src").ok_or_else(|| PipelineError("capsfilter ohne src".into()))?.link(&pad).map_err(|e| PipelineError(format!("link interleave: {e}")))?;
+            }
+            interleave.link(&audioconvert).map_err(|e| PipelineError(format!("link audio chain: {e}")))?;
+        }
 
         let mxl_audio_output = MxlAudioOutput::new(
             &pipeline,
@@ -309,7 +338,7 @@ impl Pipeline {
             &config.audio_flow_id,
             &config.label,
             SAMPLE_RATE,
-            CHANNELS,
+            audio_channels,
         )
         .map_err(PipelineError)?;
         mxl_audio_output.set_active(true);

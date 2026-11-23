@@ -1255,7 +1255,7 @@ func main() {
 	ingestMod.S = ingestmod.Services{Assets: assetStore, Launcher: launcherSvc, Nodes: store, Graph: graphSvc, FFmpeg: ingestFFmpeg,
 		Jobs: &jobrun.Runner{D: jobDisp, Caller: "convert", Class: jobrun.ClassScheduled}}
 	workflowSvc.RegisterRoleEnvHook(mcrMod.RoleEnvHook)
-	mcrMod.SetRuntime(&mcrmod.Runtime{Wf: workflowSvc, Nodes: mcrNodes{nodes: store, http: nodeHTTPClient}, SecretsDir: mcrSecretsDir,
+	mcrMod.SetRuntime(&mcrmod.Runtime{Alerter: func(a alertsink.Alert) { alertSink.Send(a) }, Wf: workflowSvc, Nodes: mcrNodes{nodes: store, http: nodeHTTPClient}, SecretsDir: mcrSecretsDir,
 		Sources: mcrFabric{nodes: store, graph: graphSvc},
 		Monitor: mcrFabric{nodes: store, graph: graphSvc},
 		Resolve: func(nodeID string) (string, string, bool) {

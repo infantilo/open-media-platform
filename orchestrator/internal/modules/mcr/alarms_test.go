@@ -325,3 +325,48 @@ func TestStaleAlarmsAreClosed(t *testing.T) {
 		t.Error("die Historie bleibt erhalten")
 	}
 }
+
+// Datenspur-Überwachung: Alarm erst nach dataHold Läufen ohne Daten, einmal gemeldet, Entwarnung beendet ihn.
+func TestDataLossAlarmHoldRaiseClear(t *testing.T) {
+	svc, rt, ev, line := alarmEnv(t)
+	ctx := context.Background()
+	var sent []alertsink.Alert
+	rt.Alerter = func(a alertsink.Alert) { sent = append(sent, a) }
+	open := func() int { o, _ := svc.St.EventAlarms(ctx, ev.ID, true); return len(o) }
+	bad := dataProblem(map[string]any{"connectedDataFlowId": "f", "normalize.dataFlowing": false})
+	if bad == "" || dataProblem(map[string]any{"connectedDataFlowId": "", "normalize.dataFlowing": true}) == "" {
+		t.Fatal("kein Problem erkannt")
+	}
+	if dataProblem(map[string]any{"connectedDataFlowId": "f", "normalize.dataFlowing": true}) != "" {
+		t.Fatal("Datenspur in Ordnung gilt als Problem")
+	}
+	for i := 1; i < dataHold; i++ {
+		rt.dataCheckStep(ctx, svc, ev, line, bad)
+		if open() != 0 {
+			t.Fatalf("Lauf %d: noch kein Alarm (Halten)", i)
+		}
+	}
+	rt.dataCheckStep(ctx, svc, ev, line, bad)
+	if open() != 1 || len(sent) != 1 {
+		t.Fatalf("nach %d Läufen genau ein Alarm: offen %d, gemeldet %d", dataHold, open(), len(sent))
+	}
+	a := sent[0]
+	if a.Kind != KindDataLoss || a.MCR == nil || a.MCR.Line != line.Name || a.Name != ev.Name+" / "+line.Name || a.Severity != alertsink.SevWarning {
+		t.Fatalf("globale Meldung: %+v", a)
+	}
+	rt.dataCheckStep(ctx, svc, ev, line, bad) // weiter ohne Daten: kein zweiter Alarm
+	if open() != 1 || len(sent) != 1 {
+		t.Fatalf("keine Doppelmeldung: offen %d, gemeldet %d", open(), len(sent))
+	}
+	rt.dataCheckStep(ctx, svc, ev, line, "") // Daten sind wieder da
+	if open() != 0 || len(sent) != 2 || sent[1].Severity != alertsink.SevInfo {
+		t.Fatalf("Entwarnung: offen %d, gemeldet %d", open(), len(sent))
+	}
+	// Kurzes Stocken (weniger als dataHold Läufe) löst nie aus.
+	rt.dataCheckStep(ctx, svc, ev, line, bad)
+	rt.dataCheckStep(ctx, svc, ev, line, "")
+	rt.dataCheckStep(ctx, svc, ev, line, bad)
+	if open() != 0 || len(sent) != 2 {
+		t.Fatalf("Stocken: offen %d, gemeldet %d", open(), len(sent))
+	}
+}

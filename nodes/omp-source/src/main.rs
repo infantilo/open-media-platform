@@ -18,7 +18,7 @@ use omp_node_sdk::{
     Descriptor, InvokeError, LatencyInfo, LatencyRange, NodeConfig, ParamSpec,
     ParamStore, ParamType, Range, SenderSpec, SetError,
 };
-use pipeline::{CHANNELS, SAMPLE_RATE};
+use pipeline::SAMPLE_RATE;
 use serde_json::Value;
 
 /// Kuratierte Teilmenge von GStreamers `videotestsrc`-Pattern-Nicknames —
@@ -310,7 +310,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     flow: Some(FlowSpec::Audio {
                         id: Some(audio_flow_id),
                         sample_rate_numerator: SAMPLE_RATE,
-                        channel_count: CHANNELS,
+                        channel_count: pipeline::channels(),
                         media_type: "audio/float32".to_string(),
                         bit_depth: 32,
                         source_id: None,

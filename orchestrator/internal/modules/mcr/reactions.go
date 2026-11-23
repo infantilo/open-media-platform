@@ -53,7 +53,7 @@ type Reaction struct {
 	Trigger     ReactionTrigger  `json:"trigger"`
 	Actions     []string         `json:"actions"`
 	GPIO        *GPIOAction      `json:"gpio,omitempty"`
-	Panels      []int            `json:"panels,omitempty"` // Teilnehmer-IDs der Sprechstellen für „panel“; leer = alle
+	Panels      []int            `json:"panels,omitempty"`      // Teilnehmer-IDs der Sprechstellen für „panel“; leer = alle
 	HoldSeconds int              `json:"holdSeconds,omitempty"` // Haltezeit nach Alarmende
 	Select      string           `json:"select,omitempty"`      // highest (Standard) | latest
 	Fallback    ReactionFallback `json:"fallback,omitempty"`

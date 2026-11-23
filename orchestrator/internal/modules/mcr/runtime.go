@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -58,6 +59,8 @@ type Runtime struct {
 	GPIO GPIOSetter
 	// Monitor: Verbinden und Finden der Überwachungs-Instanzen (106.13); nil = keine Überwachung.
 	Monitor MonitorFabric
+	// Alerter meldet MCR-eigene Alarme (Datenspur) in den globalen Alarmweg; nil = nur Alarmliste.
+	Alerter func(alertsink.Alert)
 	// Poll/Timeout: Wartezeit auf Workflow-Zustände (Tests setzen kleine Werte).
 	Poll    time.Duration
 	Timeout time.Duration
@@ -73,6 +76,7 @@ type Runtime struct {
 	stationUsed time.Time            // letzte Nutzung der Abhör-/Messstation
 	watch       map[string]time.Time // eventID → letzte Ansicht der Überwachung
 	monSent     map[string]monSent   // eventID → zuletzt gesendeter Multiviewer-Zustand
+	dataBad     map[string]int       // "<eventID>/<Leitung>" → aufeinanderfolgende Läufe ohne Datenspur
 	linked      map[string]string    // "<eventID>/<Rolle>" → "<Normalizer-Instanz>|<Quelle>" der zuletzt verbundenen Quelle
 }
 
@@ -309,6 +313,13 @@ func (rt *Runtime) Reconcile(ctx context.Context, s *Service, e Event) (int, err
 	}
 	rt.ReconcileBindings(ctx, s, e)
 	rt.reconcileStages(ctx, e, wf, roles)
+	{
+		inst := map[string]string{}
+		for role, rr := range wf.Runtime {
+			inst[role] = rr.InstanceID
+		}
+		rt.checkData(ctx, s, e, inst, roles)
+	}
 	rt.reconcileRecordings(ctx, s, e, wf, roles)
 	rt.reconcileIntercom(ctx, s, e, wf, roles)
 	rt.reconcileMonitoring(ctx, s, e, wf, roles)
