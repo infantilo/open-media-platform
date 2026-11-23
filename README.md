@@ -510,6 +510,7 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   flows. Scales to the flow format, reconnects by itself after network errors,
   end of stream or stall; a stream without audio yields a silent audio flow.
 - **omp-mxl-bridge** — copies a flow from one MXL domain into another
+- **omp-avdelay** — real A/V delay: picture by whole frames, sound sample-accurate, adjustable at runtime
   (video or audio, no conversion by default; the only place where domains are
   joined on purpose).
 - **omp-capture-card** — SDI/IP capture card bridge for Blackmagic DeckLink,

@@ -325,3 +325,27 @@ func TestStageEnvFromHouseFormat(t *testing.T) {
 		t.Errorf("Benutzerkette: %v", envs["a-pre-sc"])
 	}
 }
+
+func TestAvdelayEnvAndSlotParams(t *testing.T) {
+	g := mustHouse(t, `{"video":{"width":1920,"height":1080,"rate":"25/1","scan":"progressive"},"audio":{"sampleRate":48000,"channels":8}}`)
+	e := Event{ID: "ev", Name: "K", Lines: []Line{{ID: "l1", Name: "A", Kind: KindSRT, Transport: raw(`{"uri":"srt://:9000"}`)}}}
+	cc := ChainConfig{Slots: Slots{AVDelay: Slot{NodeType: "omp-avdelay", Video: true, Audio: true, Params: map[string]any{"delay.audioMs": 120}}}}
+	def, roles, envs, err := Materialize(e, g, "", cc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := envs["a-post-avdelay"]
+	if env["OMP_WIDTH"] != "1920" || env["OMP_AUDIO_CHANNELS"] != "8" || env["OMP_FRAMERATE_NUM"] != "25" {
+		t.Fatalf("env: %v", env)
+	}
+	if p := roles["l1"].Post[0].Stage.Params["delay.audioMs"]; p != 120 {
+		t.Fatalf("Slot-Parameter fehlen: %v", roles["l1"].Post[0].Stage.Params)
+	}
+	_ = def
+	// Hausformat nur mit Bild: Kanalzahl entfällt, der Node behält seinen Standard.
+	g2 := mustHouse(t, `{"video":{"width":640,"height":360,"rate":"25/1","scan":"progressive"}}`)
+	_, _, envs, _ = Materialize(e, g2, "", cc)
+	if _, ok := envs["a-post-avdelay"]["OMP_AUDIO_CHANNELS"]; ok || envs["a-post-avdelay"]["OMP_WIDTH"] != "640" {
+		t.Fatalf("env ohne Ton: %v", envs["a-post-avdelay"])
+	}
+}

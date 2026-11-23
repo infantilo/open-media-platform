@@ -78,6 +78,17 @@
     "latency": { "video": { "minLatencyFrames": 1, "maxLatencyFrames": 1 } }
   },
   {
+    "type": "omp-avdelay",
+    "label": "A/V-Delay",
+    "runner": "process",
+    "command": ["../nodes/target/release/omp-avdelay"],
+    "env": {},
+    "description": "Echter A/V-Delay für Bild und Ton: liest je einen Video- und einen Audio-Flow aus der MXL-Domain des Nodes und schreibt sie zeitlich verschoben als eigene Flows zurück. Das Bild wird um ganze Bilder verzögert (delay.videoFrames), der Ton auf das Sample genau (delay.audioMs, gleitet ohne Sprung); beides jederzeit änderbar. Der Node ändert nur die Zeit, nie das Format (Grains/Samples werden direkt kopiert, kaum CPU); passt die Quelle nicht zum Format des Nodes, wird sie mit Meldung abgelehnt. Format beim Start über OMP_WIDTH/OMP_HEIGHT/OMP_FRAMERATE_NUM/OMP_FRAMERATE_DEN/OMP_AUDIO_CHANNELS (der MCR setzt es aus dem Hausformat), Startverzögerung über OMP_AVDELAY_VIDEO_FRAMES/OMP_AVDELAY_AUDIO_MS, Obergrenze Bilder über OMP_AVDELAY_MAX_VIDEO_FRAMES (Standard 25). Eignet sich als Funktion „A/V-Delay“ im MCR.",
+    "i18n": { "en": {"description": "A real A/V delay for picture and sound: reads one video and one audio flow from the node's MXL domain and writes them time-shifted as its own flows. Picture is delayed by whole frames (delay.videoFrames), sound sample-accurately (delay.audioMs, slews without a jump); both can be changed at any time. The node only changes time, never the format (grains/samples are copied directly, almost no CPU); a source that does not match the node's format is rejected with a message. Format at start via OMP_WIDTH/OMP_HEIGHT/OMP_FRAMERATE_NUM/OMP_FRAMERATE_DEN/OMP_AUDIO_CHANNELS (the MCR sets it from the house format), start delay via OMP_AVDELAY_VIDEO_FRAMES/OMP_AVDELAY_AUDIO_MS, frame limit via OMP_AVDELAY_MAX_VIDEO_FRAMES (default 25). Suitable as the “A/V delay” function in the MCR.", "expectedResources": "very low (memory copy); the picture ring holds up to the set number of frames"} },
+    "expectedResources": "sehr gering (Speicherkopie); der Bildring hält so viele Bilder wie eingestellt",
+    "latency": { "video": { "minLatencyFrames": 1, "maxLatencyFrames": 26 }, "supportsDelayCompensation": true }
+  },
+  {
     "type": "omp-capture-card",
     "hostBound": true,
     "label": "Capture Card",

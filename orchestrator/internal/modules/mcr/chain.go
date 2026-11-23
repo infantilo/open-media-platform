@@ -87,6 +87,8 @@ type Slot struct {
 	Ports Ports `json:"ports,omitempty"`
 	// Env: Vorlage der Start-Umgebung aus dem Hausformat (leer = Standard des Typs, z. B. Skalierer).
 	Env map[string]string `json:"env,omitempty"`
+	// Params: Parameter, die nach dem Start an den Node gehen (z. B. Startverzögerung des A/V-Delays).
+	Params map[string]any `json:"params,omitempty"`
 }
 
 // Slots: austauschbare Funktionen des MCR.
@@ -144,10 +146,10 @@ func (c ChainConfig) autoStages() []Stage {
 	sl := c.Slots.normalized()
 	var out []Stage
 	if t := strings.TrimSpace(sl.Converter.NodeType); t != "" {
-		out = append(out, Stage{ID: "conv", NodeType: t, Where: WherePre, Label: "Converter"})
+		out = append(out, Stage{ID: "conv", NodeType: t, Where: WherePre, Label: "Converter", Params: sl.Converter.Params})
 	}
 	if t := strings.TrimSpace(sl.AVDelay.NodeType); t != "" {
-		out = append(out, Stage{ID: "avdelay", NodeType: t, Where: WherePost, Label: "A/V-Delay"})
+		out = append(out, Stage{ID: "avdelay", NodeType: t, Where: WherePost, Label: "A/V-Delay", Params: sl.AVDelay.Params})
 	}
 	return out
 }
@@ -329,24 +331,38 @@ func (sl Slots) normalizerOverrides() (avsyncOff, copyOnly bool) {
 // defaultStageEnv: Start-Umgebung bekannter Stufen-Typen aus dem Hausformat. Der Skalierer bekommt sein Ziel nur beim Start
 // (Parameter sind schreibgeschützt); ohne Vorlage fiele er auf 640×480@25 zurück und der Normalizer müsste nachwandeln.
 var defaultStageEnv = map[string]map[string]string{
-	"omp-scaler": {"OMP_WIDTH": "{width}", "OMP_HEIGHT": "{height}", "OMP_FRAMERATE_NUM": "{rateNum}", "OMP_FRAMERATE_DEN": "{rateDen}"},
+	"omp-avdelay": {"OMP_WIDTH": "{width}", "OMP_HEIGHT": "{height}", "OMP_FRAMERATE_NUM": "{rateNum}", "OMP_FRAMERATE_DEN": "{rateDen}", "OMP_AUDIO_CHANNELS": "{channels}"},
+	"omp-scaler":  {"OMP_WIDTH": "{width}", "OMP_HEIGHT": "{height}", "OMP_FRAMERATE_NUM": "{rateNum}", "OMP_FRAMERATE_DEN": "{rateDen}"},
 }
 
-// houseEnv setzt eine Vorlage mit dem Bildformat des Hausformats ein. Platzhalter: {width} {height} {rate} (25/1) {rateNum} {rateDen}
-// {scan}. Ohne Bildformat entfällt die ganze Vorlage (der Node behält seinen eigenen Standard).
-func houseEnv(tpl map[string]string, v *VideoHouse) map[string]string {
-	if len(tpl) == 0 || v == nil {
+// houseEnv setzt eine Vorlage mit dem Hausformat ein. Bild-Platzhalter: {width} {height} {rate} (25/1) {rateNum} {rateDen} {scan};
+// Ton-Platzhalter: {channels} {sampleRate}. Ein Eintrag, dessen Platzhalter fehlen (Hausformat ohne Bild bzw. Ton), entfällt;
+// der Node behält dann seinen eigenen Standard.
+func houseEnv(tpl map[string]string, h HouseFormat) map[string]string {
+	if len(tpl) == 0 {
 		return nil
 	}
-	num, den, err := parseRate(v.Rate)
-	if err != nil {
-		return nil
+	var pairs []string
+	if v := h.Video; v != nil {
+		if num, den, err := parseRate(v.Rate); err == nil {
+			pairs = append(pairs, "{width}", strconv.Itoa(v.Width), "{height}", strconv.Itoa(v.Height), "{rate}", v.Rate,
+				"{rateNum}", strconv.Itoa(num), "{rateDen}", strconv.Itoa(den), "{scan}", v.Scan)
+		}
 	}
-	r := strings.NewReplacer("{width}", strconv.Itoa(v.Width), "{height}", strconv.Itoa(v.Height), "{rate}", v.Rate,
-		"{rateNum}", strconv.Itoa(num), "{rateDen}", strconv.Itoa(den), "{scan}", v.Scan)
-	out := map[string]string{}
+	if a := h.Audio; a != nil {
+		pairs = append(pairs, "{channels}", strconv.Itoa(a.Channels), "{sampleRate}", strconv.Itoa(a.SampleRate))
+	}
+	r := strings.NewReplacer(pairs...)
+	var out map[string]string
 	for k, val := range tpl {
-		out[k] = r.Replace(val)
+		res := r.Replace(val)
+		if strings.Contains(res, "{") {
+			continue // Platzhalter ohne Wert
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[k] = res
 	}
 	return out
 }
@@ -357,5 +373,5 @@ func (c ChainConfig) stageEnv(nodeType string, eff HouseFormat) map[string]strin
 	if t, ok := c.typeOf(nodeType); ok && len(t.Env) > 0 {
 		tpl = t.Env
 	}
-	return houseEnv(tpl, eff.Video)
+	return houseEnv(tpl, eff)
 }
