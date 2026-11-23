@@ -762,6 +762,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/workflows/{id}", g.requireAuth(handleGetWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows", g.requireVerbGlobal(authz.VerbConfigure, handleCreateWorkflow(workflowSvc)))
 	mux.HandleFunc("PUT /api/v1/workflows/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleUpdateWorkflow(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/rename-roles", g.requireVerbGlobal(authz.VerbConfigure, handleRenameWorkflowRoles(workflowSvc)))
 	mux.HandleFunc("DELETE /api/v1/workflows/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/start", g.requireVerbGlobal(authz.VerbAdmin, handleStartWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/stop", g.requireVerbGlobal(authz.VerbAdmin, handleStopWorkflow(workflowSvc)))

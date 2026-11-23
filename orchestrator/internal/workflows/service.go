@@ -225,6 +225,8 @@ type workflowStore interface {
 	// ClearRoleState (Bugfix 2026-07-26, s. Update()): ein Definitions-
 	// Wechsel invalidiert zuvor erfasste Rollen-Zustände.
 	ClearRoleState(id string) error
+	// RenameRoleState: Rollen im gesicherten Zustand umbenennen (rename.go).
+	RenameRoleState(id string, m map[string]string) error
 }
 
 // ResourcePrecheck ist die von *placement.Engine implementierte

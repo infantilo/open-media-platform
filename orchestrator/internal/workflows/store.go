@@ -322,3 +322,33 @@ func (s *Store) GetRoleState(id string) (map[string]json.RawMessage, error) {
 	}
 	return out, nil
 }
+
+// RenameRoleState benennt die Rollen im gesicherten Zustand (und in dessen Sicherung) um und schreibt die Alias-Platzhalter
+// in den Blobs um (RenameRoleStateMap). Ohne Zustand ist es ein No-op.
+func (s *Store) RenameRoleState(id string, m map[string]string) error {
+	var cur, bak []byte
+	err := s.db.QueryRow(`SELECT COALESCE(role_state, '{}'::jsonb), COALESCE(role_state_backup, '{}'::jsonb) FROM workflows WHERE id = $1`, id).Scan(&cur, &bak)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	conv := func(raw []byte) ([]byte, error) {
+		var states map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &states); err != nil || len(states) == 0 {
+			return raw, nil
+		}
+		return json.Marshal(RenameRoleStateMap(states, m))
+	}
+	nc, err := conv(cur)
+	if err != nil {
+		return err
+	}
+	nb, err := conv(bak)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE workflows SET role_state = $2::jsonb, role_state_backup = $3::jsonb WHERE id = $1`, id, nc, nb)
+	return err
+}

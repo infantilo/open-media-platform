@@ -163,6 +163,13 @@ func (f *fakeStore) ClearRoleState(id string) error {
 	return nil
 }
 
+func (f *fakeStore) RenameRoleState(id string, m map[string]string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.roleStates[id] = RenameRoleStateMap(f.roleStates[id], m)
+	return nil
+}
+
 type fakeNodeLister struct {
 	mu    sync.Mutex
 	nodes []registry.NodeView

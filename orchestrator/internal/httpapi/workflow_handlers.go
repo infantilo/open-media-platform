@@ -597,3 +597,37 @@ func handleImportPreview(svc WorkflowService) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, report)
 	}
 }
+
+// roleRenamer: optionale Fähigkeit des Workflow-Dienstes (kein Teil von WorkflowService, damit Test-Doubles unberührt bleiben).
+type roleRenamer interface {
+	RenameRoles(id string, m map[string]string) (workflows.Workflow, error)
+}
+
+// handleRenameWorkflowRoles liefert POST /api/v1/workflows/{id}/rename-roles `{"roles":{"alt":"neu"}}` — benennt Rollen eines
+// gestoppten Workflows um und migriert Verbindungen, Schnittstelle, Umgebungswerte und den gesicherten Zustand (workflows/rename.go).
+func handleRenameWorkflowRoles(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rn, ok := svc.(roleRenamer)
+		if !ok {
+			http.Error(w, "rename not supported", http.StatusNotImplemented)
+			return
+		}
+		var body struct {
+			Roles map[string]string `json:"roles"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		wf, err := rn.RenameRoles(id, body.Roles)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
