@@ -55,7 +55,7 @@ interface CardRefs {
   sig: string;
 }
 
-interface Slot { nodeType?: string; video?: boolean; audio?: boolean; strict?: boolean; ports?: Record<string, string> }
+interface Slot { nodeType?: string; video?: boolean; audio?: boolean; strict?: boolean; ports?: Record<string, string>; env?: Record<string, string>; params?: Record<string, unknown>; maxFrames?: number }
 interface Slots { normalizer?: Slot; converter?: Slot; avdelay?: Slot }
 
 class McrView extends HTMLElement {
@@ -879,6 +879,7 @@ class McrView extends HTMLElement {
   #slotsEditor(): HTMLElement {
     const cur: Slots = JSON.parse(JSON.stringify(this.#slots));
     const out = h("div", { class: "mcr-hint", "aria-live": "polite", style: "min-height:18px" });
+    const slotErrors = new Set<HTMLElement>(); // Felder mit ungültiger Eingabe: Speichern bleibt gesperrt
     const row = (key: keyof Slots, label: string, withKinds: boolean) => {
       const s = (cur[key] ??= { nodeType: "" });
       const nt = input(s.nodeType ?? "", { placeholder: withKinds ? t("mcr.slots.internal") : t("mcr.slots.typePh") });
@@ -903,10 +904,58 @@ class McrView extends HTMLElement {
         return i;
       };
       const ports = withKinds ? h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px", class: "mcr-hint" }, t("mcr.slots.ports")), port("videoIn", "Receiver 1"), port("videoOut", "Sender 1"), port("audioIn", "Receiver 2"), port("audioOut", "Sender 2")) : null;
-      return h("div", {}, h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px" }, label), nt, ...(withKinds ? [cb("video", t("mcr.chain.typeVideo")), cb("audio", t("mcr.chain.typeAudio")), ...(key === "converter" ? [cb("strict", t("mcr.slots.strict"), t("mcr.slots.strictHint"))] : [])] : [])), ports);
+      // Erweitert: Start-Umgebung-Vorlage (env), Start-Parameter (params) als JSON-Objekt, Bildobergrenze des Delay-Nodes.
+      const json = (k: "env" | "params", ph: string) => {
+        const i = input(s[k] && Object.keys(s[k]!).length ? JSON.stringify(s[k]) : "", { placeholder: ph });
+        i.disabled = !this.#isAdmin;
+        i.title = t(`mcr.slots.${k}Hint`);
+        i.addEventListener("input", () => {
+          const txt = i.value.trim();
+          if (!txt) {
+            delete s[k];
+            slotErrors.delete(i);
+            i.removeAttribute("aria-invalid");
+            return;
+          }
+          try {
+            const v = JSON.parse(txt);
+            if (v === null || typeof v !== "object" || Array.isArray(v)) throw new Error("object");
+            (s as Record<string, unknown>)[k] = v;
+            slotErrors.delete(i);
+            i.removeAttribute("aria-invalid");
+          } catch {
+            slotErrors.add(i);
+            i.setAttribute("aria-invalid", "true");
+          }
+        });
+        return i;
+      };
+      const maxF = key === "avdelay" ? input(s.maxFrames ?? "", { placeholder: "25", inputmode: "numeric" }) : null;
+      if (maxF) {
+        maxF.disabled = !this.#isAdmin;
+        maxF.title = t("mcr.slots.maxFramesHint");
+        maxF.addEventListener("input", () => {
+          const n = Number(maxF.value);
+          if (!maxF.value.trim()) delete s.maxFrames;
+          else if (Number.isInteger(n) && n >= 1 && n <= 250) s.maxFrames = n;
+          else return void (slotErrors.add(maxF), maxF.setAttribute("aria-invalid", "true"));
+          slotErrors.delete(maxF);
+          maxF.removeAttribute("aria-invalid");
+        });
+      }
+      const adv = withKinds ? h("details", { class: "mcr-adv" }, h("summary", {}, t("mcr.slots.advanced")),
+        h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px", class: "mcr-hint" }, t("mcr.slots.env")), json("env", '{"OMP_WIDTH":"{width}"}')),
+        h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px", class: "mcr-hint" }, t("mcr.slots.params")), json("params", '{"delay.slewPermille":5}')),
+        ...(maxF ? [h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px", class: "mcr-hint" }, t("mcr.slots.maxFrames")), maxF)] : [])) : null;
+      return h("div", {}, h("div", { class: "mcr-chain-head" }, h("span", { style: "min-width:260px" }, label), nt, ...(withKinds ? [cb("video", t("mcr.chain.typeVideo")), cb("audio", t("mcr.chain.typeAudio")), ...(key === "converter" ? [cb("strict", t("mcr.slots.strict"), t("mcr.slots.strictHint"))] : [])] : [])), ports, adv);
     };
     const save = h("button", { type: "button", class: "mcr-btn mcr-btn-primary", disabled: !this.#isAdmin }, t("mcr.save"));
     save.addEventListener("click", async () => {
+      if (slotErrors.size) {
+        out.style.color = "var(--omp-error)";
+        out.textContent = t("mcr.slots.invalid");
+        return;
+      }
       const r = await api("PUT", "/settings", { slots: cur });
       out.style.color = r.ok ? "var(--omp-preset)" : "var(--omp-error)";
       out.textContent = r.ok ? t("mcr.slots.saved") : errText(r.data);

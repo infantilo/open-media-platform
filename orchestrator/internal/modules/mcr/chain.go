@@ -130,9 +130,24 @@ func (sl Slots) Validate() error {
 		if name != "Normalizer" && !s.Video && !s.Audio {
 			return bad("Funktion %s: Node trägt weder Bild noch Ton", name)
 		}
+		if s.MaxFrames < 0 || s.MaxFrames > 250 {
+			return bad("Funktion %s: Bildobergrenze muss 1…250 sein", name)
+		}
+		for k := range s.Env {
+			if !envNameRe.MatchString(k) {
+				return bad("Funktion %s: Umgebungsvariable „%s“ ungültig (A–Z, 0–9, _)", name, k)
+			}
+		}
+		if b, err := json.Marshal(s.Params); err == nil && len(s.Params) > 0 {
+			if err := checkNoSecrets("Funktion "+name, b); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
+
+var envNameRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
 
 var nodeTypeRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 

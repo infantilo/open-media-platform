@@ -349,3 +349,20 @@ func TestAvdelayEnvAndSlotParams(t *testing.T) {
 		t.Fatalf("env ohne Ton: %v", envs["a-post-avdelay"])
 	}
 }
+
+func TestSlotsValidateAdvancedFields(t *testing.T) {
+	ok := Slots{AVDelay: Slot{NodeType: "omp-avdelay", Video: true, Audio: true, MaxFrames: 50, Env: map[string]string{"OMP_WIDTH": "{width}"}, Params: map[string]any{"delay.slewPermille": 5}}}
+	if err := ok.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for name, sl := range map[string]Slots{
+		"zu viele Bilder": {AVDelay: Slot{NodeType: "x", Audio: true, MaxFrames: 251}},
+		"negative Bilder": {AVDelay: Slot{NodeType: "x", Audio: true, MaxFrames: -1}},
+		"schlechter Name": {Converter: Slot{NodeType: "x", Video: true, Env: map[string]string{"bad name": "1"}}},
+		"Geheimnis":       {Converter: Slot{NodeType: "x", Video: true, Params: map[string]any{"passphrase": "geheim"}}},
+	} {
+		if err := sl.Validate(); err == nil {
+			t.Errorf("%s: muss abgelehnt werden", name)
+		}
+	}
+}

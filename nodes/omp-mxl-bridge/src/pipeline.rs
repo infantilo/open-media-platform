@@ -147,7 +147,10 @@ fn connect_video(
         rate_den: config.framerate_denominator,
     };
     let set_mode = |m: String| *mode.lock().expect("lock poisoned") = m;
-    let why = match in_ctx.flow_def(source_flow_id).map_err(|e| e.to_string()).and_then(|d| check_passthrough(&d, target)) {
+    // Fehlt der Quell-Flow noch (Start-Reihenfolge), ist das kein Formatfehler: Fehler ohne `FORMAT_ERR` wird bei der nächsten
+    // Änderung der Domain erneut versucht (ein Formatfehler dagegen nicht).
+    let source_def = in_ctx.flow_def(source_flow_id).map_err(|e| format!("Quelle {source_flow_id}: {e}"))?;
+    let why = match check_passthrough(&source_def, target) {
         Ok(def) => match RawVideoCopy::start(
             in_ctx.clone(),
             out_ctx.clone(),
@@ -214,7 +217,8 @@ fn connect_audio(
 ) -> Result<AudioBranch, String> {
     let target = AudioFormat { sample_rate: SAMPLE_RATE, channels: config.audio_channels };
     let set_mode = |m: String| *mode.lock().expect("lock poisoned") = m;
-    let why = match in_ctx.flow_def(source_flow_id).map_err(|e| e.to_string()).and_then(|d| check_audio_passthrough(&d, target)) {
+    let source_def = in_ctx.flow_def(source_flow_id).map_err(|e| format!("Quelle {source_flow_id}: {e}"))?;
+    let why = match check_audio_passthrough(&source_def, target) {
         Ok(def) => match RawAudioCopy::start(
             in_ctx.clone(),
             out_ctx.clone(),
