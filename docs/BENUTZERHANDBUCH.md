@@ -1367,6 +1367,17 @@ untereinander):
 
   ![Flow Editor, Domain-Ansicht: Zonen je Domain, Domain- und Host-Reiter, Brücke „studio → test“](screenshots/domain-ansicht.png)
 
+  **Demo „Zone Separation Demo“:** Der mitgelieferte Beispiel-Workflow zeigt die Zonentrennung. Er braucht die Domains
+  `demo-studio` (Studio-Zone) und `demo-external` (**abgeschottet**, 🔒) — beide sind angelegt (Administration → MXL-Domains).
+  In `demo-studio` laufen *Studio Source* und *Studio Monitor*, in `demo-external` der *External Monitor*; die *Zone Bridge*
+  ist der einzige Weg dazwischen und kopiert Bild und Ton bitgleich. Zum Vorführen: Workflow starten, im Flow Editor die
+  **Domain-Ansicht** einschalten (die Demo steht in der Spur „Gruppen über mehrere …“, ein Doppelklick öffnet sie und zeigt
+  die Nodes mit ihren Domain-Reitern). Drei Dinge lassen sich zeigen: (1) Eine **direkte Verbindung** von der Studio Source
+  zum External Monitor wird abgelehnt („sender and receiver are in different MXL domains … a bridge between the domains is
+  needed“). (2) Der *External Monitor* sieht in seinem Dateisystem (`/proc/<pid>/root/dev/shm`) **nur** `omp-mxl-demo-external`,
+  die Brücke sieht beide Zonen, Nodes ohne Abschottung sehen alle Domains. (3) Die Brücke zeigt „direkt kopiert“ für Bild und
+  Ton. Die Demo startet mit „Start“ im Workflow-Kachel-Menü und lässt sich jederzeit stoppen; sie hängt nicht an Hardware.
+
   **Domain-Brücke:** Der Node **„MXL Domain Bridge“** verbindet zwei Domains auf dem
   Orchestrator-Rechner. Er läuft in der Domain seiner Eingänge, die **Zieldomain** wählen
   Sie beim Start (Start-Dialog bzw. in der Workflow-Rolle neben der Domain: „→ Ziel“).
