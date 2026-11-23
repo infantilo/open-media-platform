@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { applyAcks, buildAlarms } from "./alarms.ts";
+import { applyAcks, buildAlarms, isAlarmRefreshEvent } from "./alarms.ts";
 import type { AlarmAck } from "./alarms.ts";
 
 const NOW = Date.parse("2026-09-21T12:00:00Z");
@@ -67,4 +67,28 @@ Deno.test("Trend-Vorwarnung wird als eigener Alarm mit Restzeit gebaut", () => {
   assertEquals(a.fingerprint.startsWith("predicted|"), true);
   const real = buildAlarms([], [{ ...adv, predicted: false }], [])[0];
   assertEquals(real.fingerprint.startsWith("predicted|"), false);
+});
+
+Deno.test("MCR-Alarme erscheinen als eigene Quelle mit Event und Leitung", () => {
+  const mcr = [
+    { id: "a1", eventId: "e1234567890", eventName: "Fußball A gegen B", lineName: "PGM", kind: "signal-black", severity: "error", text: "Schwarzbild seit 3 s", startedAt: "2026-11-23T12:00:00Z" },
+    { id: "a2", eventId: "e9999999999", lineName: "Kam 2", kind: "signal-freeze", severity: "warning", text: "Standbild", startedAt: "2026-11-23T12:01:00Z" },
+  ];
+  const alarms = buildAlarms([], [], [], [], mcr);
+  assertEquals(alarms.length, 2);
+  const [black, freeze] = alarms; // kritisch zuerst
+  assertEquals([black.key, black.severity, black.source], ["mcr:a1", "critical", "MCR"]);
+  assertEquals(black.title, "Fußball A gegen B / PGM");
+  assertEquals(black.detail, "black: Schwarzbild seit 3 s");
+  assertEquals([freeze.severity, freeze.title], ["warning", "e9999999 / Kam 2"]); // ohne Namen: Anfang der Event-ID
+  // Ein Wiederauftreten (neue Alarm-ID und Zeit) ist ein anderer Alarm und damit nicht durch eine alte Quittierung gedeckt.
+  const again = buildAlarms([], [], [], [], [{ ...mcr[0], id: "a3", startedAt: "2026-11-23T12:30:00Z" }])[0];
+  assertEquals(again.key === black.key || again.fingerprint === black.fingerprint, false);
+  assertEquals(buildAlarms([], [], [], [], []).length, 0);
+});
+
+Deno.test("Aktualisierung nach Node-Alarmen (MCR-Signalalarme)", () => {
+  assertEquals(isAlarmRefreshEvent("omp.alert.abc"), true);
+  assertEquals(isAlarmRefreshEvent("instance.crashed"), true);
+  assertEquals(isAlarmRefreshEvent("workflow.created"), false);
 });

@@ -98,6 +98,12 @@ func (m *Module) Start(ctx context.Context, d module.Deps) error {
 	if m.rt == nil || m.svc == nil {
 		return nil
 	}
+	// Altbestand: offene Alarme von gelöschten oder nicht mehr laufenden Events schließen (sonst stehen sie ewig in der Alarmliste).
+	if n, err := m.svc.St.SweepStaleAlarms(ctx); err != nil {
+		slog.Warn("mcr: veraltete Alarme nicht bereinigt", "error", err)
+	} else if n > 0 {
+		slog.Info("mcr: veraltete offene Alarme geschlossen", "anzahl", n)
+	}
 	go m.rt.ReconcileLoop(ctx, m.svc, 3*time.Second)
 	return nil
 }

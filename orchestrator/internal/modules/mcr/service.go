@@ -381,6 +381,7 @@ func (s *Service) DeleteEvent(ctx context.Context, id, actor string) error {
 	if !deletable(cur.State) {
 		return ErrState
 	}
+	_, _ = s.St.CloseEventAlarms(ctx, id) // die Historie bleibt, aber nichts bleibt „offen“
 	if err := s.St.DeleteEvent(ctx, id); err != nil {
 		return err
 	}

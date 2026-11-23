@@ -56,6 +56,18 @@ export interface Workflow {
 
 export type Severity = "critical" | "warning";
 
+/** Offener Alarm des Hauptkontrollraums (`GET /api/v1/mcr/alarms/history?state=open`). */
+export interface McrAlarm {
+  id: string;
+  eventId: string;
+  eventName?: string;
+  lineName: string;
+  kind: string;
+  severity: string;
+  text: string;
+  startedAt: string;
+}
+
 export interface Alarm {
   // Nachtrag 243: `key` identifiziert das Alarm-OBJEKT stabil (Quelle +
   // ID), `fingerprint` den konkreten ZUSTAND/das Ereignis. Eine
@@ -81,6 +93,11 @@ export const SEVERITY_LABEL: Record<Severity, string> = {
   warning: t("alarms.d00803"),
 };
 
+
+/** Ereignisse, nach denen die Alarmliste neu geladen wird; Node-Alarme (`omp.alert.<id>`, u. a. MCR-Signalalarme) gehören dazu. */
+export function isAlarmRefreshEvent(type: string): boolean {
+  return REFRESH_EVENT_TYPES.has(type) || type.startsWith("omp.alert.");
+}
 
 export const REFRESH_EVENT_TYPES = new Set([
   "instance.crashed",
@@ -111,8 +128,22 @@ export function buildAlarms(
   advice: PlacementAdvice[],
   workflows: Workflow[],
   hosts: HostInfo[] = [],
+  mcr: McrAlarm[] = [],
 ): Alarm[] {
   const alarms: Alarm[] = [];
+
+  // Hauptkontrollraum: offene Signalalarme (Schwarzbild, Standbild, Stille, …) je Event und Leitung. Jedes Auftreten ist ein eigener
+  // Alarm (Schlüssel = Alarm-ID), so gilt eine Quittierung nie für ein späteres Wiederauftreten.
+  for (const a of mcr) {
+    alarms.push({
+      key: `mcr:${a.id}`,
+      fingerprint: `${a.startedAt}|${a.text}`,
+      severity: a.severity === "error" || a.severity === "critical" ? "critical" : "warning",
+      source: "MCR",
+      title: `${a.eventName || a.eventId.slice(0, 8)} / ${a.lineName}`,
+      detail: `${a.kind.replace(/^signal-/, "")}: ${a.text}`,
+    });
+  }
 
   for (const inst of instances) {
     if (inst.crashed) {
@@ -210,17 +241,20 @@ export function buildAlarms(
 // fetchAlarms sammelt alle Alarmquellen (gemeinsam für den Alarme-Tab und
 // die globale Alarmleiste im Footer). Wirft bei Netzwerkfehler.
 async function fetchRawAlarms(): Promise<Alarm[]> {
-  const [instancesRes, adviceRes, workflowsRes, hostsRes] = await Promise.all([
+  const [instancesRes, adviceRes, workflowsRes, hostsRes, mcrRes] = await Promise.all([
     apiFetch("/api/v1/instances"),
     apiFetch("/api/v1/placement/advice"),
     apiFetch("/api/v1/workflows"),
     apiFetch("/api/v1/hosts"),
+    // ohne MCR-Modul oder ohne Recht: keine Einträge (kein Fehler für die übrigen Quellen)
+    apiFetch("/api/v1/mcr/alarms/history?days=30&state=open").catch(() => null),
   ]);
   const instances = instancesRes.ok ? ((await instancesRes.json()) as LauncherInstance[]) : [];
   const advice = adviceRes.ok ? ((await adviceRes.json()) as PlacementAdvice[]) : [];
   const workflows = workflowsRes.ok ? ((await workflowsRes.json()) as Workflow[]) : [];
   const hosts = hostsRes.ok ? ((await hostsRes.json()) as HostInfo[]) : [];
-  return buildAlarms(instances, advice, workflows, hosts);
+  const mcr = mcrRes && mcrRes.ok ? (((await mcrRes.json()) as { alarms?: McrAlarm[] }).alarms ?? []) : [];
+  return buildAlarms(instances, advice, workflows, hosts, mcr);
 }
 
 // --- Quittieren / Maskieren (Nachtrag 243) ---

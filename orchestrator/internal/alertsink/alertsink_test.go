@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -148,5 +149,40 @@ func TestFromEventSignalAlarmKeepsKindLineAndClears(t *testing.T) {
 	u, _ := FromEvent(sse.Event{Type: "omp.alert.n1", Data: []byte(`{"node_id":"n1","message":"x","kind":"signal-unbekannt"}`)})
 	if u.Kind != "node-alert" {
 		t.Fatalf("unbekannte Art fällt auf node-alert zurück: %+v", u)
+	}
+}
+
+func TestSinkEnrichAddsContextWithoutSecondAlert(t *testing.T) {
+	s := New("http://127.0.0.1:1/x", "")
+	var seen []Alert
+	s.OnAlert = func(a Alert) { seen = append(seen, a) }
+	s.Enrich = func(a Alert) Alert {
+		a.Name = "Event / Leitung"
+		a.Subject = "ev/line"
+		a.Workflows = []WorkflowRef{{ID: "wf1", Name: "Event"}}
+		a.MCR = &MCRRef{EventID: "ev", Event: "Event", LineID: "line", Line: "Leitung"}
+		return a
+	}
+	resolved := false
+	s.Resolve = func(Alert) []WorkflowRef { resolved = true; return nil }
+	s.Send(Alert{Kind: "signal-black", Subject: "node-1", Name: "Leitung", Message: "Schwarzbild"})
+	if len(seen) != 1 {
+		t.Fatalf("genau ein Alarm erwartet, %d", len(seen))
+	}
+	a := seen[0]
+	if a.Name != "Event / Leitung" || a.Subject != "ev/line" || len(a.Workflows) != 1 || a.Workflows[0].ID != "wf1" || a.MCR == nil || a.MCR.Line != "Leitung" {
+		t.Fatalf("Anreicherung: %+v", a)
+	}
+	if !strings.Contains(a.Text, "Event / Leitung") {
+		t.Errorf("Kurztext nennt Event und Leitung: %q", a.Text)
+	}
+	if resolved {
+		t.Error("ist der Workflow schon gesetzt, wird Resolve nicht gebraucht")
+	}
+	// Die Anreicherung greift auch für das Entprellen: gleiche Meldung an anderer Leitung ist ein eigener Alarm.
+	s.Enrich = func(a Alert) Alert { a.Subject = "ev/other"; return a }
+	s.Send(Alert{Kind: "signal-black", Subject: "node-2", Message: "Schwarzbild"})
+	if len(seen) != 2 {
+		t.Fatalf("zweite Leitung ist ein eigener Alarm: %d", len(seen))
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
@@ -18,8 +19,10 @@ import (
 
 // Alarm ist ein Eintrag der Historie.
 type Alarm struct {
-	ID        string     `json:"id"`
-	EventID   string     `json:"eventId"`
+	ID      string `json:"id"`
+	EventID string `json:"eventId"`
+	// EventName: nur in der Historie-Antwort gefüllt (Anzeige in der globalen Alarmliste), nicht gespeichert.
+	EventName string     `json:"eventName,omitempty"`
 	LineID    string     `json:"lineId"`
 	LineName  string     `json:"lineName"`
 	Kind      string     `json:"kind"`
@@ -209,6 +212,17 @@ func (s *Store) CloseEventAlarms(ctx context.Context, eventID string) (int64, er
 	return res.RowsAffected()
 }
 
+// SweepStaleAlarms schließt offene Alarme, deren Event nicht mehr existiert oder weder testet noch sendet. Solche Alarme blieben sonst
+// dauerhaft „offen“ und stünden ewig in der globalen Alarmliste (Altbestand, gelöschtes Event, Meldung eines noch auslaufenden Scopes).
+func (s *Store) SweepStaleAlarms(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE mcr_alarms a SET ended_at=now() WHERE a.ended_at IS NULL
+		AND NOT EXISTS (SELECT 1 FROM mcr_events e WHERE e.id=a.event_id AND e.state IN ('testing','live'))`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // ---- Eingang vom Alarmbus ----
 
 // AlarmIn ist ein Bus-Alarm einer Scope-/Normalizer-Instanz.
@@ -330,6 +344,10 @@ func (rt *Runtime) IngestAlarm(ctx context.Context, s *Service, in AlarmIn) erro
 	if EffectiveMon(e.Monitoring, l.Monitoring).Off() {
 		return nil
 	}
+	// Ein Event, das nicht (mehr) testet oder sendet, hat keine offenen Alarme: ein auslaufender Scope darf keinen neuen eröffnen.
+	if in.State != "cleared" && e.State != StateTesting && e.State != StateLive {
+		return nil
+	}
 	name := l.Name
 	switch in.State {
 	case "cleared":
@@ -407,22 +425,27 @@ func (a *api) alarmHistory() http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
-		if vis := a.visibleTo(r); vis != nil {
-			cache := map[string]bool{}
-			kept := out[:0]
-			for _, al := range out {
-				ok, seen := cache[al.EventID]
-				if !seen {
-					e, err := a.svc.St.GetEvent(r.Context(), al.EventID)
-					ok = err == nil && vis(e) // gelöschte Events: nur mit Recht auf alles sichtbar
-					cache[al.EventID] = ok
-				}
-				if ok {
-					kept = append(kept, al)
+		// Event-Namen für die Anzeige (eine Abfrage je Event); mit Sichtfilter nur sichtbare Events.
+		vis := a.visibleTo(r)
+		names := map[string]string{}
+		known := map[string]bool{}
+		kept := out[:0]
+		for _, al := range out {
+			ok, seen := known[al.EventID]
+			if !seen {
+				e, err := a.svc.St.GetEvent(r.Context(), al.EventID)
+				ok = vis == nil || (err == nil && vis(e)) // gelöschte Events: nur mit Recht auf alles sichtbar
+				known[al.EventID] = ok
+				if err == nil {
+					names[al.EventID] = e.Name
 				}
 			}
-			out = kept
+			if ok {
+				al.EventName = names[al.EventID]
+				kept = append(kept, al)
+			}
 		}
+		out = kept
 		writeJSON(w, 200, map[string]any{"alarms": out})
 	}
 }
@@ -450,4 +473,35 @@ func (rt *Runtime) purgeAlarms(ctx context.Context, s *Service) {
 	} else if n > 0 {
 		slog.Info("mcr: Alarmhistorie aufgeräumt", "gelöscht", n)
 	}
+}
+
+// EnrichAlert ergänzt einen Signalalarm des globalen Alarmwegs (Webhook, E-Mail-Regeln, Bus-Ereignis `omp.alarm.<Art>`, Prozess-Auslöser)
+// um den MCR-Bezug: Anzeigename „Event / Leitung“, Event und Leitung als Felder, Event-Workflow (damit Regeln „nur für dieses Event“
+// greifen) und ein Gegenstand je Leitung (damit gleiche Meldungen an zwei Leitungen nicht zusammengefasst werden). Alarme fremder
+// Nodes bleiben unverändert. Es entsteht kein zweiter Alarm — `alertsink.Sink.Enrich` verändert den vorhandenen.
+func (rt *Runtime) EnrichAlert(ctx context.Context, s *Service, a alertsink.Alert) alertsink.Alert {
+	if !strings.HasPrefix(a.Kind, "signal-") {
+		return a
+	}
+	e, l, ok := rt.LocateAlarm(ctx, s, a.Subject)
+	if !ok {
+		return a
+	}
+	a.MCR = &alertsink.MCRRef{EventID: e.ID, Event: e.Name, LineID: l.ID, Line: l.Name}
+	a.Name = e.Name + " / " + l.Name
+	a.Subject = e.ID + "/" + l.ID
+	if e.WorkflowID != "" {
+		a.Workflows = []alertsink.WorkflowRef{{ID: e.WorkflowID, Name: e.Name}}
+	}
+	return a
+}
+
+// EnrichAlert für `alertsink.Sink.Enrich`.
+func (m *Module) EnrichAlert(a alertsink.Alert) alertsink.Alert {
+	if m.rt == nil || m.svc == nil || !strings.HasPrefix(a.Kind, "signal-") {
+		return a
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.rt.EnrichAlert(ctx, m.svc, a)
 }

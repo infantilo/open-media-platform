@@ -3,6 +3,7 @@ package mcr
 import (
 	"context"
 	"encoding/json"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"testing"
 	"time"
 
@@ -23,6 +24,11 @@ func alarmEnv(t *testing.T) (*Service, *Runtime, Event, Line) {
 		t.Fatal(err)
 	}
 	line := ev.Lines[0]
+	// Alarme gibt es nur, solange das Event testet oder sendet (IngestAlarm eröffnet sonst keinen).
+	if err := svc.St.SetState(ctx, ev.ID, ev.State, StateTesting); err != nil {
+		t.Fatal(err)
+	}
+	ev.State = StateTesting
 	// Überwachungs-Workflow dieser Leitung mit Rolle „scope“; der Resolver ordnet Node „n-scope“ ihm zu
 	mon, _ := wf.Create("m", workflows.Definition{Description: monDesc(ev.ID, line.ID)}, nil, "")
 	rt.Resolve = func(node string) (string, string, bool) {
@@ -236,5 +242,86 @@ func TestAlarmHistoryFilters(t *testing.T) {
 	}
 	if n := count(AlarmFilter{State: "unacked"}); n != 2 {
 		t.Errorf("nicht quittiert: %d", n)
+	}
+}
+
+// MCR-Signalalarme im globalen Alarmweg: Bezug zu Event, Leitung und Event-Workflow (Nutzerwunsch 2026-11-23).
+func TestEnrichAlertAddsEventAndLine(t *testing.T) {
+	svc, rt, ev, line := alarmEnv(t)
+	ctx := context.Background()
+	in := alertsink.Alert{Kind: "signal-black", Subject: "n-scope", Name: "A", Message: "Schwarzbild", Severity: "critical"}
+	out := rt.EnrichAlert(ctx, svc, in)
+	if out.MCR == nil || out.MCR.EventID != ev.ID || out.MCR.Event != ev.Name || out.MCR.LineID != line.ID || out.MCR.Line != line.Name {
+		t.Fatalf("MCR-Bezug: %+v", out.MCR)
+	}
+	if out.Name != ev.Name+" / "+line.Name || out.Subject != ev.ID+"/"+line.ID {
+		t.Errorf("Name/Gegenstand: %q / %q", out.Name, out.Subject)
+	}
+	if out.Kind != in.Kind || out.Message != in.Message || out.Severity != in.Severity {
+		t.Errorf("Art, Meldung und Schweregrad bleiben: %+v", out)
+	}
+	// Fremder Node und andere Arten bleiben unverändert.
+	if got := rt.EnrichAlert(ctx, svc, alertsink.Alert{Kind: "signal-black", Subject: "fremd", Message: "x"}); got.MCR != nil || got.Subject != "fremd" {
+		t.Errorf("fremder Node: %+v", got)
+	}
+	if got := rt.EnrichAlert(ctx, svc, alertsink.Alert{Kind: "node-alert", Subject: "n-scope", Message: "x"}); got.MCR != nil {
+		t.Errorf("Node-Alarm bleibt: %+v", got)
+	}
+}
+
+// Offene Alarme bleiben nicht hängen: Bereinigung beim Start, Meldungen eines nicht mehr laufenden Events werden nicht eröffnet,
+// Löschen schließt (Nutzerfund 2026-11-23: Alarme gelöschter Events standen ewig in der globalen Alarmliste).
+func TestStaleAlarmsAreClosed(t *testing.T) {
+	svc, rt, ev, _ := alarmEnv(t)
+	ctx := context.Background()
+	raise := AlarmIn{NodeID: "n-scope", Kind: "signal-black", State: "raised", Severity: "error", Line: "A", Message: "Schwarzbild"}
+	if err := rt.IngestAlarm(ctx, svc, raise); err != nil {
+		t.Fatal(err)
+	}
+	if open, _ := svc.St.EventAlarms(ctx, ev.ID, true); len(open) != 1 {
+		t.Fatalf("Ausgang: ein offener Alarm erwartet, %d", len(open))
+	}
+	// Läuft das Event (testing/live), bleibt der Alarm offen.
+	if _, err := svc.St.SweepStaleAlarms(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if open, _ := svc.St.EventAlarms(ctx, ev.ID, true); len(open) != 1 {
+		t.Fatalf("laufendes Event behält seinen offenen Alarm: %d", len(open))
+	}
+	// Event nicht mehr testend → Bereinigung schließt, ein auslaufender Scope eröffnet keinen neuen.
+	if err := svc.St.SetState(ctx, ev.ID, StateTesting, StatePlanned); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := svc.St.SweepStaleAlarms(ctx); err != nil || n < 1 {
+		t.Fatalf("Bereinigung: n=%d err=%v", n, err)
+	}
+	if open, _ := svc.St.EventAlarms(ctx, ev.ID, true); len(open) != 0 {
+		t.Fatalf("nach der Bereinigung nichts offen: %d", len(open))
+	}
+	raise.Kind, raise.Message = "signal-signalLoss", "Signalverlust"
+	if err := rt.IngestAlarm(ctx, svc, raise); err != nil {
+		t.Fatal(err)
+	}
+	if open, _ := svc.St.EventAlarms(ctx, ev.ID, true); len(open) != 0 {
+		t.Fatalf("Event ohne Test/Sendung eröffnet keinen Alarm: %d", len(open))
+	}
+	// Löschen: offene Alarme sind geschlossen, die Historie bleibt.
+	if err := svc.St.SetState(ctx, ev.ID, StatePlanned, StateTesting); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.IngestAlarm(ctx, svc, raise); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.St.SetState(ctx, ev.ID, StateTesting, StatePlanned); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteEvent(ctx, ev.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if open, _ := svc.St.EventAlarms(ctx, ev.ID, true); len(open) != 0 {
+		t.Fatalf("nach dem Löschen nichts offen: %d", len(open))
+	}
+	if hist, _ := svc.St.EventAlarms(ctx, ev.ID, false); len(hist) == 0 {
+		t.Error("die Historie bleibt erhalten")
 	}
 }

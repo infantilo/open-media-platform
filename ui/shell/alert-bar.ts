@@ -8,7 +8,7 @@
 // (kein SSE-Event beim Ausbleiben von Telemetrie).
 import { t } from "./i18n.ts";
 import { connectionMonitor } from "./connection.ts";
-import { fetchAlarms, REFRESH_EVENT_TYPES, SEVERITY_COLOR } from "./alarms.ts";
+import { fetchAlarms, isAlarmRefreshEvent, SEVERITY_COLOR } from "./alarms.ts";
 import type { AlarmState } from "./alarms.ts";
 
 const POLL_INTERVAL_MS = 5000;
@@ -39,7 +39,7 @@ class AlertBar extends HTMLElement {
   #onSseMessage = (ev: Event) => {
     try {
       const parsed = JSON.parse((ev as CustomEvent<string>).detail) as { type: string };
-      if (REFRESH_EVENT_TYPES.has(parsed.type)) this.#poll();
+      if (isAlarmRefreshEvent(parsed.type)) this.#poll();
     } catch {
       // ignorieren — der 5-s-Poll holt es ohnehin auf
     }

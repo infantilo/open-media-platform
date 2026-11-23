@@ -28,7 +28,7 @@
 // bleibt, und ist serverseitig geteilt (/api/v1/alarms/acks).
 import { t, t as tt } from "./i18n.ts";
 import { connectionMonitor } from "./connection.ts";
-import { clearAlarmAck, fetchAlarms, REFRESH_EVENT_TYPES, setAlarmAck, SEVERITY_COLOR, SEVERITY_LABEL } from "./alarms.ts";
+import { clearAlarmAck, fetchAlarms, isAlarmRefreshEvent, setAlarmAck, SEVERITY_COLOR, SEVERITY_LABEL } from "./alarms.ts";
 import type { AlarmState, AckMode } from "./alarms.ts";
 
 const POLL_FALLBACK_INTERVAL_MS = 30000;
@@ -70,7 +70,7 @@ class AlarmView extends HTMLElement {
     } catch {
       return;
     }
-    if (REFRESH_EVENT_TYPES.has(parsed.type)) this.#poll();
+    if (isAlarmRefreshEvent(parsed.type)) this.#poll();
   };
 
   #onToggle = (ev: Event) => {

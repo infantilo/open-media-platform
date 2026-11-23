@@ -1074,6 +1074,8 @@ func main() {
 	if sink := alertSink; sink != nil {
 		// Jeder Alarm ist zugleich ein Bus-Ereignis „omp.alarm.<Art>“ und damit als Auslöser für Prozesse wählbar.
 		sink.OnAlert = func(a alertsink.Alert) { events.Emit("omp.alarm."+a.Kind, a) }
+		// 106.13d: MCR-Signalalarme tragen Event, Leitung und Event-Workflow (Regeln je Event, Texte, Webhook-Felder).
+		sink.Enrich = mcrMod.EnrichAlert
 		if alertMailStore != nil {
 			sink.MailProvider = alertMailStore.Current
 		}

@@ -32,8 +32,10 @@ type Alert struct {
 	Workflows []WorkflowRef `json:"workflows,omitempty"`
 	// Processes: der Prozess (Definition), aus dem der Alarm stammt (nur Prozess-Alarme).
 	Processes []ProcessRef `json:"processes,omitempty"`
-	Time      time.Time    `json:"time"`
-	Text      string       `json:"text"` // Kurztext für Chat-Webhooks
+	// MCR: Event und Leitung des Hauptkontrollraums, aus denen ein Signalalarm stammt (nur MCR-Alarme).
+	MCR  *MCRRef   `json:"mcr,omitempty"`
+	Time time.Time `json:"time"`
+	Text string    `json:"text"` // Kurztext für Chat-Webhooks
 	// Status/StatusMode: Statusbeilage der Mail (nur E-Mail, nie im Webhook); wird erst bei der Zustellung gefüllt.
 	Status     *StatusReport `json:"-"`
 	StatusMode string        `json:"-"`
@@ -43,6 +45,14 @@ type Alert struct {
 type WorkflowRef struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+// MCRRef nennt Event und Leitung eines MCR-Alarms (für Regeln, Webhook-Empfänger und Texte).
+type MCRRef struct {
+	EventID string `json:"eventId"`
+	Event   string `json:"event"`
+	LineID  string `json:"lineId"`
+	Line    string `json:"line"`
 }
 
 // ProcessRef nennt einen Prozess (Definition).
@@ -57,6 +67,9 @@ type Sink struct {
 	Client     *http.Client
 	// Mail: optionaler zweiter Kanal (SMTP); unabhängig vom Webhook, jeder mit eigenen Wiederholungen.
 	Mail *Mailer
+	// Enrich (optional) ergänzt einen Alarm vor Entprellen und Zustellung um Bezug (z. B. MCR: Event, Leitung, Event-Workflow, Anzeigename).
+	// Es entsteht dabei **kein zweiter** Alarm: der Alarm bleibt derselbe, nur mit mehr Angaben.
+	Enrich func(Alert) Alert
 	// Resolve (optional) ordnet einen Alarm Workflows zu; wird beim Senden einmal aufgerufen.
 	Resolve func(Alert) []WorkflowRef
 	// StatusProvider (optional) liefert die Statusbeilage zu einem Alarm; wird nur aufgerufen, wenn eine passende Regel sie wünscht.
@@ -101,6 +114,9 @@ func (s *Sink) Send(a Alert) {
 	a.Time = s.now()
 	if !validSeverity(a.Severity) {
 		a.Severity = DefaultSeverity(a.Kind)
+	}
+	if s.Enrich != nil {
+		a = s.Enrich(a)
 	}
 	if a.Text == "" {
 		a.Text = fmt.Sprintf("[OpenMediaPlatform] %s %s: %s", a.Kind, firstNonEmpty(a.Name, a.Subject), a.Message)
