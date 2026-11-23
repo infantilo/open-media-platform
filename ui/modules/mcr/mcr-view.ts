@@ -3,7 +3,7 @@
 import { apiFetch, confirmDialog, dateLocale, features, getLang, showToast, t, whoami } from "../host.ts";
 import { hasFeature } from "../../kit/features.ts";
 import { promptDialog } from "../../kit/omp-prompt.ts";
-import { dateTime, ensureStyle, field, h, input, modal, nextFullHour, note, quickTimes, segmented, toLocalValue } from "./mcr-dom.ts";
+import { dateTime, ensureStyle, field, h, input, modal, nextFullHour, note, quickTimes, segmented, select, toLocalValue } from "./mcr-dom.ts";
 import { houseFields, openLineForm } from "./line-form.ts";
 import { openMatrix } from "./matrix-view.ts";
 import { chainEditor } from "./chain-editor.ts";
@@ -74,6 +74,8 @@ class McrView extends HTMLElement {
   #globalChain: Stage[] = [];
   #stageTypes: StageType[] = [];
   #slots: Slots = {};
+  /** Node-Typen des Katalogs (Auswahllisten der Einstellungen). */
+  #catalog: { type: string; label: string }[] = [];
   #isAdmin = false;
   #canManage = true;
   #canLive = true;
@@ -127,7 +129,7 @@ class McrView extends HTMLElement {
     }
     this.replaceChildren(this.#root);
     this.#root.replaceChildren(this.#tabsBar(), this.#body);
-    await Promise.all([this.#loadEvents(), this.#loadTemplates(), this.#loadGlobal()]);
+    await Promise.all([this.#loadEvents(), this.#loadTemplates(), this.#loadGlobal(), this.#loadCatalog()]);
     const ref = this.getAttribute("focus-ref");
     if (ref) this.#sel = ref;
     this.#paint();
@@ -171,6 +173,28 @@ class McrView extends HTMLElement {
       this.#slots = r.data.slots ?? {};
     }
   }
+  async #loadCatalog() {
+    try {
+      const r = await apiFetch("/api/v1/catalog");
+      if (r.ok) {
+        const list = (await r.json()) as { type: string; label?: string }[];
+        this.#catalog = (Array.isArray(list) ? list : []).map((x) => ({ type: x.type, label: x.label || x.type })).sort((a, b) => a.label.localeCompare(b.label));
+      }
+    } catch { /* ohne Katalog bleibt nur der eingetragene Typ wählbar */ }
+  }
+
+  /** Auswahl eines Node-Typs aus dem Katalog; ein eingetragener Typ, der nicht (mehr) im Katalog steht, bleibt mit Hinweis wählbar. */
+  #typeSelect(value: string, opts: { emptyLabel?: string } = {}): HTMLSelectElement {
+    const options: { value: string; label: string }[] = [];
+    if (opts.emptyLabel) options.push({ value: "", label: opts.emptyLabel });
+    for (const c of this.#catalog) options.push({ value: c.type, label: c.label === c.type ? c.type : `${c.label} (${c.type})` });
+    if (value && !this.#catalog.some((c) => c.type === value)) options.push({ value, label: `${value} — ${t("mcr.slots.notInCatalog")}` });
+    const sel = select(options, value);
+    sel.disabled = !this.#isAdmin;
+    sel.style.cssText = "flex:1 1 150px;min-width:0;max-width:100%"; // gleich breit in jeder Zeile
+    return sel;
+  }
+
   async #loadEvent() {
     if (!this.#sel) {
       this.#ev = null;
@@ -848,10 +872,18 @@ class McrView extends HTMLElement {
     const out = h("div", { class: "mcr-hint", "aria-live": "polite", style: "min-height:18px" });
     const draw = () => {
       list.replaceChildren(...rows.map((r, i) => {
-        const nt = input(r.nodeType, { placeholder: t("mcr.chain.typeNode") });
-        nt.addEventListener("input", () => (r.nodeType = nt.value.trim()));
         const lb = input(r.label ?? "", { placeholder: t("mcr.chain.label") });
         lb.addEventListener("input", () => (r.label = lb.value || undefined));
+        const nt = this.#typeSelect(r.nodeType, { emptyLabel: t("mcr.chain.typeNode") });
+        nt.addEventListener("change", () => {
+          r.nodeType = nt.value;
+          // Bezeichnung aus dem Katalog vorbelegen, solange keine eigene steht
+          const c = this.#catalog.find((x) => x.type === nt.value);
+          if (c && !lb.value.trim()) {
+            lb.value = c.label;
+            r.label = c.label;
+          }
+        });
         const cb = (k: "video" | "audio", label: string) => {
           const c = h("input", { type: "checkbox" }) as HTMLInputElement;
           c.checked = r[k];
@@ -890,9 +922,8 @@ class McrView extends HTMLElement {
     const slotErrors = new Set<HTMLElement>(); // Felder mit ungültiger Eingabe: Speichern bleibt gesperrt
     const row = (key: keyof Slots, label: string, withKinds: boolean) => {
       const s = (cur[key] ??= { nodeType: "" });
-      const nt = input(s.nodeType ?? "", { placeholder: withKinds ? t("mcr.slots.internal") : t("mcr.slots.typePh") });
-      nt.disabled = !this.#isAdmin;
-      nt.addEventListener("input", () => (s.nodeType = nt.value.trim()));
+      const nt = this.#typeSelect(s.nodeType ?? "", withKinds && key !== "splitter" ? { emptyLabel: t("mcr.slots.internal") } : {});
+      nt.addEventListener("change", () => (s.nodeType = nt.value));
       const cb = (k: "video" | "audio" | "data" | "strict", lbl: string, title?: string) => {
         const c = h("input", { type: "checkbox" }) as HTMLInputElement;
         c.checked = !!s[k];
@@ -911,7 +942,7 @@ class McrView extends HTMLElement {
         });
         return i;
       };
-      const ports = withKinds ? h("div", { class: "mcr-chain-head", style: "display:grid;grid-template-columns:260px repeat(6,minmax(0,1fr));gap:6px;align-items:center" }, h("span", { class: "mcr-hint" }, t("mcr.slots.ports")), port("videoIn", "Receiver 1"), port("videoOut", "Sender 1"), port("audioIn", "Receiver 2"), port("audioOut", "Sender 2"), port("dataIn", "Daten"), port("dataOut", "Daten")) : null;
+      const ports = withKinds ? h("div", { class: "mcr-chain-head", style: "display:grid;grid-template-columns:200px repeat(6,minmax(0,1fr));gap:6px;align-items:center" }, h("span", { class: "mcr-hint" }, t("mcr.slots.ports")), port("videoIn", "Receiver 1"), port("videoOut", "Sender 1"), port("audioIn", "Receiver 2"), port("audioOut", "Sender 2"), port("dataIn", "Daten"), port("dataOut", "Daten")) : null;
       // Erweitert: Start-Umgebung-Vorlage (env), Start-Parameter (params) als JSON-Objekt, Bildobergrenze des Delay-Nodes.
       const json = (k: "env" | "params", ph: string) => {
         const i = input(s[k] && Object.keys(s[k]!).length ? JSON.stringify(s[k]) : "", { placeholder: ph });
