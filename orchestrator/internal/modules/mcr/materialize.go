@@ -298,11 +298,17 @@ func Materialize(e Event, global *HouseFormat, secretsDir string, chain ...Chain
 		}
 		for _, sr := range lr.Pre {
 			def.Roles = append(def.Roles, workflows.Role{Name: sr.Role, NodeType: sr.Stage.NodeType})
+			if env := cc.stageEnv(sr.Stage.NodeType, eff); env != nil {
+				envs[sr.Role] = env
+			}
 		}
 		def.Roles = append(def.Roles, workflows.Role{Name: lr.Normalizer, NodeType: cc.normalizerType()})
 		envs[lr.Normalizer] = nenv
 		for _, sr := range lr.Post {
 			def.Roles = append(def.Roles, workflows.Role{Name: sr.Role, NodeType: sr.Stage.NodeType})
+			if env := cc.stageEnv(sr.Stage.NodeType, eff); env != nil {
+				envs[sr.Role] = env
+			}
 		}
 		w := wire(lr.Input, lr.Pre, lr.Normalizer, lr.Post, cc)
 		lr.EntryVideo, lr.EntryAudio, lr.OutVideo, lr.OutAudio = w.entryVideo, w.entryAudio, w.outVideo, w.outAudio

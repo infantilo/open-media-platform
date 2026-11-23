@@ -290,3 +290,38 @@ func TestStagePortsOverride(t *testing.T) {
 		t.Fatalf("Schnittstelle: %+v", m)
 	}
 }
+
+func TestStageEnvFromHouseFormat(t *testing.T) {
+	g := mustHouse(t, `{"video":{"width":1280,"height":720,"rate":"30000/1001","scan":"progressive"}}`)
+	e := Event{ID: "ev", Name: "K", Lines: []Line{{ID: "l1", Name: "A", Kind: KindSRT, Transport: raw(`{"uri":"srt://:9000"}`)}}}
+	// Skalierer-Standard: Ziel = Hausformat.
+	cc := ChainConfig{Slots: Slots{Converter: Slot{NodeType: "omp-scaler", Video: true}}}
+	_, _, envs, err := Materialize(e, g, "", cc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"OMP_WIDTH": "1280", "OMP_HEIGHT": "720", "OMP_FRAMERATE_NUM": "30000", "OMP_FRAMERATE_DEN": "1001"}
+	for k, v := range want {
+		if envs["a-pre-conv"][k] != v {
+			t.Errorf("%s = %q, erwartet %q (env %v)", k, envs["a-pre-conv"][k], v, envs["a-pre-conv"])
+		}
+	}
+	// Fremder Converter mit eigener Vorlage.
+	cc = ChainConfig{Slots: Slots{Converter: Slot{NodeType: "omp-udc-pro", Video: true, Env: map[string]string{"UDC_TARGET": "{width}x{height}@{rate}"}}}}
+	_, _, envs, _ = Materialize(e, g, "", cc)
+	if envs["a-pre-conv"]["UDC_TARGET"] != "1280x720@30000/1001" {
+		t.Errorf("Vorlage: %v", envs["a-pre-conv"])
+	}
+	// Ohne Hausformat: keine Umgebung, der Node behält seinen Standard.
+	_, _, envs, _ = Materialize(e, nil, "", ChainConfig{Slots: Slots{Converter: Slot{NodeType: "omp-scaler", Video: true}}})
+	if _, ok := envs["a-pre-conv"]; ok {
+		t.Errorf("ohne Hausformat darf nichts gesetzt werden: %v", envs["a-pre-conv"])
+	}
+	// Stufe aus der Benutzerkette (Typ zugelassen): derselbe Standard.
+	cc = ChainConfig{Types: []StageType{{NodeType: "omp-scaler", Video: true}}}
+	e.Chain = raw(`[{"id":"sc","nodeType":"omp-scaler","where":"pre"}]`)
+	_, _, envs, _ = Materialize(e, g, "", cc)
+	if envs["a-pre-sc"]["OMP_WIDTH"] != "1280" {
+		t.Errorf("Benutzerkette: %v", envs["a-pre-sc"])
+	}
+}

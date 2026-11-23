@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -42,6 +43,8 @@ type StageType struct {
 	Video    bool   `json:"video"`
 	Audio    bool   `json:"audio"`
 	Ports    Ports  `json:"ports,omitempty"`
+	// Env: Vorlage der Start-Umgebung aus dem wirksamen Hausformat der Leitung (Platzhalter siehe houseEnv). Leer = Standard des Typs.
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // DefaultStageTypes: was ohne Einstellung zulässig ist (der Skalierer trägt nur Bild).
@@ -82,6 +85,8 @@ type Slot struct {
 	Strict bool `json:"strict,omitempty"`
 	// Ports: abweichende Port-Bezeichnungen des Nodes (leer = MCR-Standard).
 	Ports Ports `json:"ports,omitempty"`
+	// Env: Vorlage der Start-Umgebung aus dem Hausformat (leer = Standard des Typs, z. B. Skalierer).
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // Slots: austauschbare Funktionen des MCR.
@@ -161,7 +166,7 @@ func (c ChainConfig) typeOf(nodeType string) (StageType, bool) {
 	sl := c.Slots.normalized()
 	for _, x := range []Slot{sl.Converter, sl.AVDelay} {
 		if x.NodeType != "" && x.NodeType == nodeType {
-			return StageType{NodeType: nodeType, Video: x.Video, Audio: x.Audio, Ports: x.Ports}, true
+			return StageType{NodeType: nodeType, Video: x.Video, Audio: x.Audio, Ports: x.Ports, Env: x.Env}, true
 		}
 	}
 	for _, t := range c.types() {
@@ -319,4 +324,38 @@ func wire(input string, pre []StageRole, norm string, post []StageRole, cfg Chai
 func (sl Slots) normalizerOverrides() (avsyncOff, copyOnly bool) {
 	sl = sl.normalized()
 	return strings.TrimSpace(sl.AVDelay.NodeType) != "", strings.TrimSpace(sl.Converter.NodeType) != "" && sl.Converter.Strict
+}
+
+// defaultStageEnv: Start-Umgebung bekannter Stufen-Typen aus dem Hausformat. Der Skalierer bekommt sein Ziel nur beim Start
+// (Parameter sind schreibgeschützt); ohne Vorlage fiele er auf 640×480@25 zurück und der Normalizer müsste nachwandeln.
+var defaultStageEnv = map[string]map[string]string{
+	"omp-scaler": {"OMP_WIDTH": "{width}", "OMP_HEIGHT": "{height}", "OMP_FRAMERATE_NUM": "{rateNum}", "OMP_FRAMERATE_DEN": "{rateDen}"},
+}
+
+// houseEnv setzt eine Vorlage mit dem Bildformat des Hausformats ein. Platzhalter: {width} {height} {rate} (25/1) {rateNum} {rateDen}
+// {scan}. Ohne Bildformat entfällt die ganze Vorlage (der Node behält seinen eigenen Standard).
+func houseEnv(tpl map[string]string, v *VideoHouse) map[string]string {
+	if len(tpl) == 0 || v == nil {
+		return nil
+	}
+	num, den, err := parseRate(v.Rate)
+	if err != nil {
+		return nil
+	}
+	r := strings.NewReplacer("{width}", strconv.Itoa(v.Width), "{height}", strconv.Itoa(v.Height), "{rate}", v.Rate,
+		"{rateNum}", strconv.Itoa(num), "{rateDen}", strconv.Itoa(den), "{scan}", v.Scan)
+	out := map[string]string{}
+	for k, val := range tpl {
+		out[k] = r.Replace(val)
+	}
+	return out
+}
+
+// stageEnv: Start-Umgebung einer Stufe (Vorlage des Typs oder Standard des Node-Typs) für das wirksame Hausformat.
+func (c ChainConfig) stageEnv(nodeType string, eff HouseFormat) map[string]string {
+	tpl := defaultStageEnv[nodeType]
+	if t, ok := c.typeOf(nodeType); ok && len(t.Env) > 0 {
+		tpl = t.Env
+	}
+	return houseEnv(tpl, eff.Video)
 }
