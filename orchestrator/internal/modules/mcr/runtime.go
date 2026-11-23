@@ -411,6 +411,9 @@ var inputParams = []string{"contrib.state", "contrib.inputFormat", "contrib.bitr
 var normParams = []string{"normalize.state", "normalize.videoState", "normalize.audioState", "normalize.inputFormat", "normalize.stages", "normalize.warnings", "normalize.lastError",
 	"avsync.mode", "avsync.manualMs", "avsync.heldMs", "avsync.measuredMs", "avsync.confidence", "avsync.method", "avsync.appliedMs", "avsync.videoDelayFrames", "avsync.running"}
 
+// delayParams: was Status vom getrennten A/V-Delay-Node liest.
+var delayParams = []string{ParamDelayVideoFrames, ParamDelayAudioMs, "delay.offsetMs"}
+
 func (rt *Runtime) readParams(ctx context.Context, instanceID string, names []string) (map[string]any, error) {
 	base, ok := rt.Nodes.BaseURL(instanceID)
 	if !ok {
@@ -463,6 +466,31 @@ func (rt *Runtime) Status(ctx context.Context, s *Service, e Event) (map[string]
 				ls.Error = err.Error()
 			}
 			ls.Normaliz = m
+		}
+		// Getrennter A/V-Delay (Slot „avdelay“): der wirksame Ausgleich steht an diesem Node, nicht am Normalizer.
+		for _, sr := range lr.Post {
+			if sr.Stage.ID != "avdelay" {
+				continue
+			}
+			rr, ok := wf.Runtime[sr.Role]
+			if !ok || rr.InstanceID == "" {
+				continue
+			}
+			if d, err := rt.readParams(ctx, rr.InstanceID, delayParams); err == nil && len(d) > 0 {
+				if ls.Normaliz == nil {
+					ls.Normaliz = map[string]any{}
+				}
+				ls.Normaliz["avsync.external"] = true
+				if v, ok := d["delay.offsetMs"]; ok {
+					ls.Normaliz["avsync.appliedMs"] = v
+				}
+				if v, ok := d[ParamDelayVideoFrames]; ok {
+					ls.Normaliz["avsync.videoDelayFrames"] = v
+				}
+				if v, ok := d[ParamDelayAudioMs]; ok {
+					ls.Normaliz["delay.audioMs"] = v
+				}
+			}
 		}
 		lines = append(lines, ls)
 	}

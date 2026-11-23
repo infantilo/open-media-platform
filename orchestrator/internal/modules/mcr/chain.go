@@ -89,6 +89,8 @@ type Slot struct {
 	Env map[string]string `json:"env,omitempty"`
 	// Params: Parameter, die nach dem Start an den Node gehen (z. B. Startverzögerung des A/V-Delays).
 	Params map[string]any `json:"params,omitempty"`
+	// MaxFrames (nur A/V-Delay): Obergrenze der Bildverzögerung des Nodes für die Umrechnung des Messwerts (Standard 25).
+	MaxFrames int `json:"maxFrames,omitempty"`
 }
 
 // Slots: austauschbare Funktionen des MCR.

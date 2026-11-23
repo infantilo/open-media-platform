@@ -304,6 +304,24 @@ func Materialize(e Event, global *HouseFormat, secretsDir string, chain ...Chain
 		}
 		def.Roles = append(def.Roles, workflows.Role{Name: lr.Normalizer, NodeType: cc.normalizerType()})
 		envs[lr.Normalizer] = nenv
+		// Gemessener/vorgegebener A/V-Versatz geht an den getrennten Delay-Node (statt an den Normalizer, dessen Ausgleich dann aus ist).
+		for i := range lr.Post {
+			if lr.Post[i].Stage.ID != "avdelay" || strings.TrimSpace(cc.Slots.AVDelay.NodeType) == "" {
+				continue
+			}
+			// Der Node bekommt immer ausdrückliche Werte, damit er nach „Zurücksetzen“ oder Moduswechsel wieder auf 0 geht:
+			// Grundwert 0, darüber die Startwerte des Slots, darüber der Plan aus Modus und Messwert der Leitung.
+			merged := map[string]any{ParamDelayVideoFrames: 0, ParamDelayAudioMs: 0.0}
+			for k, v := range lr.Post[i].Stage.Params {
+				merged[k] = v
+			}
+			if plan, ok := PlanDelay(l.Avsync, frameDuration(eff), cc.Slots.AVDelay.MaxFrames); ok {
+				for k, v := range plan.Params() {
+					merged[k] = v
+				}
+			}
+			lr.Post[i].Stage.Params = merged
+		}
 		for _, sr := range lr.Post {
 			def.Roles = append(def.Roles, workflows.Role{Name: sr.Role, NodeType: sr.Stage.NodeType})
 			if env := cc.stageEnv(sr.Stage.NodeType, eff); env != nil {

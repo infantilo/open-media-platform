@@ -102,6 +102,22 @@ func (m *Module) Start(ctx context.Context, d module.Deps) error {
 	return nil
 }
 
+// pushDelay gibt einen geänderten Messwert an den getrennten A/V-Delay-Node weiter (nur wenn der Slot belegt ist).
+func (m *Module) pushDelay(ctx context.Context, eventID string) {
+	if strings.TrimSpace(m.svc.FunctionSlots().AVDelay.NodeType) == "" {
+		return
+	}
+	e, err := m.svc.GetEvent(ctx, eventID)
+	if err != nil {
+		return
+	}
+	if err := m.rt.Refresh(ctx, m.svc, e); err != nil {
+		slog.Warn("mcr: A/V-Delay: Aktualisierung", "event", eventID, "error", err)
+		return
+	}
+	_, _ = m.rt.Reconcile(ctx, m.svc, e)
+}
+
 func (m *Module) onAvsyncMethod(c module.MethodCall) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -130,12 +146,15 @@ func (m *Module) onAvsyncMethod(c module.MethodCall) {
 				delete(mm, "heldMs")
 				b, _ := json.Marshal(mm)
 				_ = m.svc.St.SetLineAvsync(ctx, e.ID, l.ID, b)
+				m.pushDelay(ctx, e.ID)
 				return
 			}
 			v, err := m.rt.ReadParam(ctx, c.InstanceID, "avsync.heldMs")
 			if f, ok := v.(float64); ok && err == nil {
 				if err := m.svc.StoreAppliedAvsync(ctx, e.ID, l.ID, f); err != nil {
 					slog.Warn("mcr: übernommenen Messwert nicht gespeichert", "event", e.ID, "error", err)
+				} else {
+					m.pushDelay(ctx, e.ID)
 				}
 			}
 			return
