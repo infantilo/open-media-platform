@@ -302,6 +302,22 @@
       "placeholder": "z. B. 2-3",
       "description": "Diese Instanz auf diese CPU-Kerne festlegen (taskset-Liste, z. B. 2-3 oder 0,2,4). Leer = keine Bindung (Standard). Auf Produktions-Hosts nützlich, um zeitkritische Nodes vor Batch-Arbeit zu schützen; eine falsche Liste kostet nur Leistung. Ungültige oder nicht vorhandene Kerne werden mit Warnung ignoriert.",
       "group": "Leistung"
+    },
+    {
+      "key": "OMP_AUDIO_CHANNELS",
+      "i18n": {
+        "en": {
+          "label": "Audio channels",
+          "description": "Number of audio channels (default 2). With more than 2, every channel gets its own tone (channel k = 220·k Hz) — a test source for multichannel sound and the audio splitter.",
+          "group": "Audio"
+        }
+      },
+      "label": "Tonkanäle",
+      "type": "int",
+      "description": "Zahl der Tonkanäle (Standard 2). Bei mehr als 2 erzeugt jeder Kanal einen eigenen Ton (Kanal k = 220·k Hz) — Testquelle für Mehrkanalton und Ton-Teiler.",
+      "group": "Ton",
+      "min": 1,
+      "max": 64
     }
   ],
   "omp-capture-card": [
@@ -3286,6 +3302,168 @@
       "default": "100",
       "min": 0,
       "max": 2000
+    }
+  ],
+  "omp-audio-split": [
+    {
+      "key": "OMP_SPLIT_OUTPUTS",
+      "i18n": {
+        "en": {
+          "label": "Outputs (JSON)",
+          "description": "List of the outputs with name and input channels (1-based), e.g. [{\"name\":\"Programme\",\"channels\":[1,2]},{\"name\":\"IT\",\"channels\":[3,4]}]. Empty = every two channels one output. The outputs are fixed at start.",
+          "group": "Outputs"
+        }
+      },
+      "label": "Ausgänge (JSON)",
+      "type": "string",
+      "description": "Liste der Ausgänge mit Name und Eingangskanälen (1-basiert), z. B. [{\"name\":\"Programm\",\"channels\":[1,2]},{\"name\":\"IT\",\"channels\":[3,4]}]. Leer = je zwei Kanäle ein Ausgang. Die Ausgänge stehen beim Start fest.",
+      "group": "Ausgänge"
+    },
+    {
+      "key": "OMP_SPLIT_INPUT_CHANNELS",
+      "i18n": {
+        "en": {
+          "label": "Expected input channels",
+          "description": "Only without an output list: pairs are formed from this channel count (default 16).",
+          "group": "Outputs"
+        }
+      },
+      "label": "Erwartete Eingangskanäle",
+      "type": "int",
+      "description": "Nur ohne Ausgangsliste: aus dieser Kanalzahl werden Paare gebildet (Standard 16).",
+      "group": "Ausgänge",
+      "min": 1,
+      "max": 64
+    }
+  ],
+  "omp-avdelay": [
+    {
+      "key": "OMP_WIDTH",
+      "i18n": {
+        "en": {
+          "label": "Width",
+          "description": "Picture width in pixels. Empty = from the workflow format or the node default.",
+          "group": "Format (empty = workflow format or node default)"
+        }
+      },
+      "label": "Breite",
+      "type": "int",
+      "description": "Bildbreite in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_HEIGHT",
+      "i18n": {
+        "en": {
+          "label": "Height",
+          "description": "Picture height in pixels. Empty = from the workflow format or the node default.",
+          "group": "Format (empty = workflow format or node default)"
+        }
+      },
+      "label": "Höhe",
+      "type": "int",
+      "description": "Bildhöhe in Pixeln. Leer = vom Workflow-Format bzw. Standard des Nodes.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 16,
+      "max": 8192
+    },
+    {
+      "key": "OMP_FRAMERATE_NUM",
+      "i18n": {
+        "en": {
+          "label": "Frame rate (numerator)",
+          "description": "e.g. 25 or 30000.",
+          "group": "Format (empty = workflow format or node default)"
+        }
+      },
+      "label": "Bildrate (Zähler)",
+      "type": "int",
+      "description": "z. B. 25 oder 30000.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 240000
+    },
+    {
+      "key": "OMP_FRAMERATE_DEN",
+      "i18n": {
+        "en": {
+          "label": "Frame rate (denominator)",
+          "description": "e.g. 1 or 1001.",
+          "group": "Format (empty = workflow format or node default)"
+        }
+      },
+      "label": "Bildrate (Nenner)",
+      "type": "int",
+      "description": "z. B. 1 oder 1001.",
+      "group": "Format (leer = Workflow-Format bzw. Standard des Nodes)",
+      "min": 1,
+      "max": 100000
+    },
+    {
+      "key": "OMP_AUDIO_CHANNELS",
+      "i18n": {
+        "en": {
+          "label": "Audio channels",
+          "description": "Audio channel count; must match the source (default 2).",
+          "group": "Format"
+        }
+      },
+      "label": "Tonkanäle",
+      "type": "int",
+      "description": "Kanalzahl des Tons; muss zur Quelle passen (Standard 2).",
+      "group": "Format",
+      "min": 1,
+      "max": 64
+    },
+    {
+      "key": "OMP_AVDELAY_VIDEO_FRAMES",
+      "i18n": {
+        "en": {
+          "label": "Picture delay at start (frames)",
+          "description": "Whole frames the picture is delayed at start (at runtime: parameter delay.videoFrames).",
+          "group": "Delay"
+        }
+      },
+      "label": "Bildverzögerung beim Start (Bilder)",
+      "type": "int",
+      "description": "Ganze Bilder, um die das Bild beim Start verzögert wird (zur Laufzeit: Parameter delay.videoFrames).",
+      "group": "Verzögerung",
+      "min": 0,
+      "max": 250
+    },
+    {
+      "key": "OMP_AVDELAY_AUDIO_MS",
+      "i18n": {
+        "en": {
+          "label": "Sound delay at start (ms)",
+          "description": "Delay of the sound in milliseconds at start (at runtime: parameter delay.audioMs).",
+          "group": "Delay"
+        }
+      },
+      "label": "Tonverzögerung beim Start (ms)",
+      "type": "int",
+      "description": "Verzögerung des Tons in Millisekunden beim Start (zur Laufzeit: Parameter delay.audioMs).",
+      "group": "Verzögerung",
+      "min": 0,
+      "max": 10000
+    },
+    {
+      "key": "OMP_AVDELAY_MAX_VIDEO_FRAMES",
+      "i18n": {
+        "en": {
+          "label": "Picture delay limit (frames)",
+          "description": "Largest adjustable picture delay (default 25). The picture ring holds that many frames in memory.",
+          "group": "Delay"
+        }
+      },
+      "label": "Obergrenze Bildverzögerung (Bilder)",
+      "type": "int",
+      "description": "Größte einstellbare Bildverzögerung (Standard 25). Der Bildring hält so viele Bilder im Speicher.",
+      "group": "Verzögerung",
+      "min": 1,
+      "max": 250
     }
   ]
 }

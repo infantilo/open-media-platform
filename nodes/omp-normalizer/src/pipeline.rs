@@ -124,6 +124,9 @@ pub struct Shared {
     pub audio_flowed: AtomicBool,
     /// Datenspur: ein Grain wurde durchgereicht.
     pub data_flowed: AtomicBool,
+    /// Zeitpunkt des letzten durchgereichten Daten-Grains (ms seit Prozessstart, 0 = noch keiner). `normalize.dataFlowing` gilt nur
+    /// für frische Daten: bleibt die Datenquelle aus, wird es wieder `false` (Grundlage des MCR-Alarms `signal-dataLoss`).
+    pub data_last_ms: AtomicU64,
     /// Datenspur: Anzeige („verbunden: …“, „wartet auf Quelle“, leer = nicht verbunden).
     pub data_mode: Mutex<String>,
     pub format_changes: AtomicU64,
@@ -169,10 +172,12 @@ impl PipelineHandle {
     }
     pub fn connect_data(&self, id: String) {
         self.shared.data_flowed.store(false, Ordering::Relaxed);
+        self.shared.data_last_ms.store(0, Ordering::Relaxed);
         let _ = self.commands.send(Command::ConnectData(id));
     }
     pub fn disconnect_data(&self) {
         self.shared.data_flowed.store(false, Ordering::Relaxed);
+        self.shared.data_last_ms.store(0, Ordering::Relaxed);
         let _ = self.commands.send(Command::DisconnectData);
     }
     pub fn reconfigure(&self) {
@@ -186,6 +191,23 @@ impl PipelineHandle {
 /// Datenspur (ANC, Zeitcode, Untertitel): ein Daten-Flow wird Grain für Grain unverändert in den eigenen Ausgangs-Flow kopiert,
 /// mit **demselben Grain-Index** (gemeinsame TAI-Zeit) — Bild, Ton und Daten bleiben zueinander ausgerichtet. Der Normalizer
 /// wandelt Daten nicht; sie laufen am Format-Abgleich vorbei (die Verzögerung eines A/V-Ausgleichs gilt hier nicht).
+/// Millisekunden seit dem ersten Aufruf (monoton), für die Aktualität der Datenspur.
+pub fn now_ms() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+}
+
+/// Daten gelten als „fließend“, wenn der letzte Grain höchstens so lange her ist.
+pub const DATA_FRESH_MS: u64 = 3000;
+
+impl Shared {
+    /// Liefert die Datenspur frische Daten? (letzter Grain höchstens `DATA_FRESH_MS` her)
+    pub fn data_fresh(&self) -> bool {
+        let last = self.data_last_ms.load(Ordering::Relaxed);
+        last != 0 && now_ms().saturating_sub(last) <= DATA_FRESH_MS
+    }
+}
+
 struct DataLane {
     _input: omp_mediaio::mxl::MxlDataInput,
 }
@@ -205,7 +227,10 @@ fn build_data_lane(ctx: &Arc<MxlContext>, source_flow_id: &str, out_flow_id: &st
 
 fn connect_data(ctx: &Arc<MxlContext>, source_flow_id: &str, config: &Config, shared: &Arc<Shared>) -> Result<DataLane, String> {
     let sh = shared.clone();
-    let (lane, (num, den)) = build_data_lane(ctx, source_flow_id, &config.data_flow_id, &config.label, Arc::new(move || sh.data_flowed.store(true, Ordering::Relaxed)))?;
+    let (lane, (num, den)) = build_data_lane(ctx, source_flow_id, &config.data_flow_id, &config.label, Arc::new(move || {
+        sh.data_flowed.store(true, Ordering::Relaxed);
+        sh.data_last_ms.store(now_ms().max(1), Ordering::Relaxed);
+    }))?;
     *shared.data_mode.lock().expect("lock poisoned") = format!("durchgereicht ({num}/{den})");
     Ok(lane)
 }
@@ -703,6 +728,7 @@ pub fn run(
         video_flowed: AtomicBool::new(false),
         audio_flowed: AtomicBool::new(false),
         data_flowed: AtomicBool::new(false),
+        data_last_ms: AtomicU64::new(0),
         data_mode: Mutex::new(String::new()),
         format_changes: AtomicU64::new(0),
         last_error: Mutex::new(String::new()),

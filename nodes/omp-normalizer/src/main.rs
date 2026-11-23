@@ -215,7 +215,7 @@ impl ParamStore for NormStore {
             "connectedDataFlowId" => Some(serde_json::json!(self.data_connected.lock().expect("lock poisoned").clone())),
             "targetDataFlowId" => Some(serde_json::json!(self.data_flow_id)),
             "normalize.dataState" => Some(serde_json::json!(self.pipeline.shared.data_mode.lock().expect("lock poisoned").clone())),
-            "normalize.dataFlowing" => Some(serde_json::json!(self.pipeline.shared.data_flowed.load(std::sync::atomic::Ordering::Relaxed))),
+            "normalize.dataFlowing" => Some(serde_json::json!(self.pipeline.shared.data_fresh())),
             "targetVideoFlowId" => Some(serde_json::json!(self.video_flow_id)),
             "targetAudioFlowId" => Some(serde_json::json!(self.audio_flow_id)),
             _ => None,
