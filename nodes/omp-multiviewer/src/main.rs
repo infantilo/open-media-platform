@@ -378,7 +378,9 @@ fn discover(registry: &RegistryClient, scope: Option<&HashSet<String>>) -> Resul
     // gestartet (keine Workflow-ID) bleibt es beim bisherigen "alle
     // MXL-Video-Sender".
     let own_workflow = std::env::var("OMP_WORKFLOW_ID").ok().filter(|w| !w.is_empty());
-    let node_workflow: HashMap<String, String> = if own_workflow.is_some() {
+    // Ebenen-Filter: als Workflow-Rolle gilt allein der Workflow-Tag (der Gruppenbaum kann veraltete Node-IDs halten).
+    let scope = if own_workflow.is_some() { None } else { scope };
+    let node_workflow: HashMap<String, String> = if own_workflow.is_some() || scope.is_some() {
         registry
             .list_nodes()
             .map_err(|e| e.to_string())?
@@ -402,7 +404,8 @@ fn discover(registry: &RegistryClient, scope: Option<&HashSet<String>>) -> Resul
                 .entry(s.device_id.clone())
                 .or_insert_with(|| registry.get_device(&s.device_id).ok().map(|d| d.node_id))
                 .clone();
-            if !node_id.is_some_and(|n| allowed.contains(&n)) {
+            // Nodes eines Workflows gehören nie zur Root-/Gruppen-Ebene (auch nicht, wenn der Gruppenbaum sie nicht kennt)
+            if !node_id.as_ref().is_some_and(|n| allowed.contains(n) && !node_workflow.contains_key(n)) {
                 continue;
             }
         }
