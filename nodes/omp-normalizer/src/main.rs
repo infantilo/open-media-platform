@@ -3,6 +3,7 @@
 //! einstellbar (`normalize.houseFormat`). Details: `pipeline.rs`, Entwurf `ARCHITECTURE.md` §33.
 
 mod pipeline;
+mod uibundle;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -395,6 +396,9 @@ impl ParamStore for NormStore {
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
         let to_raw = |(status, content_type, body)| RawResponse { status, content_type, body };
         let (vid, aid, did) = (self.video_conn.id(), self.audio_conn.id(), self.data_conn.id());
+        if let Some(r) = uibundle::route(method, path) {
+            return Some(r);
+        }
         root_discovery(method, path)
             .or_else(|| list_ids(method, path, "receivers", &[vid, aid, did]))
             .or_else(|| bulk_discovery(method, path))
