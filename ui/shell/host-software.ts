@@ -10,12 +10,15 @@ export class HostSoftware extends HTMLElement {
   #report: SwReport | null = null;
   #error = "";
   #loading = false;
+  #loadedAt = 0;
   #timer: number | undefined;
   #open = new Set<string>();
   #stale = new Map<string, HostStale>();
 
   connectedCallback() {
-    void this.load(false);
+    // Die Hosts-Ansicht zeichnet sich neu (Countdown, SSE) und hängt dieses Element dabei jedes Mal neu an; ein Neuladen samt
+    // Neuaufbau des Knopfes bei jedem Anhängen würde Klicks verschlucken (mousedown/mouseup auf verschiedenen Knöpfen).
+    if (!this.#report || Date.now() - this.#loadedAt > REFRESH_MS) void this.load(false);
     this.#timer = window.setInterval(() => void this.load(false), REFRESH_MS);
   }
 
@@ -31,6 +34,7 @@ export class HostSoftware extends HTMLElement {
   async load(force: boolean) {
     this.#loading = true;
     this.#paint();
+    const started = Date.now();
     try {
       const res = await apiFetch(`/api/v1/hosts/software${force ? "?refresh=1" : ""}`);
       if (res.ok) {
@@ -42,7 +46,10 @@ export class HostSoftware extends HTMLElement {
     } catch (e) {
       this.#error = String(e);
     }
+    // Die Abfrage dauert oft nur Millisekunden; „lädt …“ mindestens kurz zeigen, damit der Klick sichtbar ankommt.
+    if (force) await new Promise((r) => setTimeout(r, Math.max(0, 600 - (Date.now() - started))));
     this.#loading = false;
+    this.#loadedAt = Date.now();
     this.#paint();
   }
 
@@ -59,8 +66,15 @@ export class HostSoftware extends HTMLElement {
     refresh.textContent = this.#loading ? t("hostsw.loading") : t("hostsw.refresh");
     refresh.disabled = this.#loading;
     refresh.dataset.role = "hostsw-refresh";
-    refresh.addEventListener("click", () => void this.load(true));
-    head.append(title, refresh);
+    // Die Hosts-Ansicht hängt dieses Element beim Neuzeichnen (Countdown jede Sekunde) kurz ab; ein Klick, dessen Knopf zwischen
+    // mousedown und mouseup abgehängt wird, entfällt. Darum schon beim Drücken auslösen; „click“ nur für die Tastatur (detail 0).
+    refresh.addEventListener("pointerdown", (e) => { if (e.button === 0) void this.load(true); });
+    refresh.addEventListener("click", (e) => { if (e.detail === 0) void this.load(true); });
+    const stand = document.createElement("span");
+    stand.dataset.role = "hostsw-stand";
+    stand.style.cssText = "color:var(--omp-text-dim,#888);font-size:var(--omp-font-size-xs);";
+    stand.textContent = this.#loadedAt ? t("hostsw.asOf", { p0: new Date(this.#loadedAt).toLocaleTimeString() }) : "";
+    head.append(title, refresh, stand);
     root.appendChild(head);
 
     if (this.#error) {

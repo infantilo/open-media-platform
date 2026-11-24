@@ -3245,6 +3245,7 @@ export const de = {
   "hostsw.title": "Software-Stand der Hosts",
   "hostsw.refresh": "Aktualisieren",
   "hostsw.loading": "lädt …",
+  "hostsw.asOf": "Stand: {p0}",
   "hostsw.mixed": "Unterschiedliche Stände desselben Node-Typs auf verschiedenen Hosts: {p0}",
   "hostsw.localName": "{p0} (Orchestrator-Rechner)",
   "hostsw.orch": "Orchestrator",

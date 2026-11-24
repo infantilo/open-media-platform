@@ -3246,6 +3246,7 @@ export const en: Record<keyof typeof de, string> = {
   "hostsw.title": "Software versions by host",
   "hostsw.refresh": "Refresh",
   "hostsw.loading": "loading …",
+  "hostsw.asOf": "As of {p0}",
   "hostsw.mixed": "Different builds of the same node type on different hosts: {p0}",
   "hostsw.localName": "{p0} (orchestrator machine)",
   "hostsw.orch": "Orchestrator",
