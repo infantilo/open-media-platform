@@ -341,7 +341,7 @@ fn build_tally_border(pipeline: &gst::Pipeline, comp: &gst::Element, pip: &Resol
 /// Compositor-Sink-Pad darunter). Nimmt höchstens ein Drittel der
 /// Kachelhöhe ein (`build_tile`), damit auch sehr kleine Kacheln noch
 /// überwiegend Bild statt Label zeigen.
-const LABEL_STRIP_PX: u32 = 30;
+const LABEL_STRIP_PX: u32 = 44;
 /// Hintergrund der Label-Leiste — dunkles, fast schwarzes Grau (kein
 /// reines Schwarz, damit die Leiste sich sichtbar vom `compositor`s
 /// eigenem Schwarz-Hintergrund zwischen Kacheln abhebt).
@@ -455,9 +455,9 @@ fn build_tile(
     // vertikal innerhalb der Leiste zentriert.
     let source_label_text = pip.source_label.as_deref().unwrap_or("— kein Signal —");
     let (label_text, font_desc) = if pip.umd.trim().is_empty() {
-        (source_label_text.to_string(), "Sans 9")
+        (source_label_text.to_string(), "Sans Bold 14")
     } else {
-        (format!("{source_label_text}\n{}", pip.umd), "Sans 7")
+        (format!("{source_label_text}\n{}", pip.umd), "Sans Bold 11")
     };
 
     let label_bg = gst::ElementFactory::make("videotestsrc")

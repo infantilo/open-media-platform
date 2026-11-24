@@ -318,10 +318,33 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     window.addEventListener("pointermove", this._onPointerMove);
     window.addEventListener("pointerup", this._onPointerUp);
 
+    // Leinwand füllt die verfügbare Panelbreite (Rahmen 2×(2+4) px abgezogen)
+    this._availWidth = 0;
+    this._resizeObs = new ResizeObserver(() => {
+      const w = Math.floor(this.getBoundingClientRect().width) - 2 * 12 - 12;
+      if (w > 200 && Math.abs(w - this._availWidth) > 4) {
+        this._availWidth = w;
+        if (this._layout && !this._drag) this._render();
+      }
+    });
+    this._resizeObs.observe(this);
+
+    // Live-Vorschau als Leinwand-Hintergrund (Einzelbild-Polling wie beim Viewer)
+    this._token = localStorage.getItem("omp-auth-token");
+    this._previewTimer = setInterval(() => {
+      const img = this._liveImg;
+      if (!img || !img.isConnected || !img.complete) return;
+      const base = `/api/v1/nodes/${this._nodeId}/stream/previewUrl`;
+      const q = this._token ? `?access_token=${encodeURIComponent(this._token)}&` : "?";
+      img.src = `${base}${q}_=${Date.now()}`;
+    }, 700);
+
     await this._reload();
   }
 
   disconnectedCallback() {
+    if (this._resizeObs) this._resizeObs.disconnect();
+    clearInterval(this._previewTimer);
     window.removeEventListener("keydown", this._onKey);
     window.removeEventListener("pointermove", this._onPointerMove);
     window.removeEventListener("pointerup", this._onPointerUp);
@@ -352,7 +375,8 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       .status.dirty { color: var(--omp-cue, #fb8c00); }
       .status.error { color: var(--omp-error, #ef5350); }
       .status.ok { color: var(--omp-preset, #43a047); }
-      .body { display:flex; gap: var(--omp-space-4, 16px); align-items:flex-start; flex-wrap:wrap; }
+      .body { display:flex; flex-direction:column; gap: var(--omp-space-3, 12px); align-items:stretch; }
+      .canvas-outer { align-self:flex-start; max-width:100%; box-sizing:border-box; }
       /* Nutzerfund 2026-08-20: "im ui editor sind die leinwand grenzen
          nicht sichtbar" — ein einzelner 1px-Rand in Border-Farbe ging
          gegen den fast gleich dunklen Seitenhintergrund unter, vor allem
@@ -365,14 +389,16 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       .canvas { position:relative; outline:1px solid var(--omp-info, #4285f4); background:
         repeating-conic-gradient(#1c1f23 0% 25%, #16181b 0% 50%) 0 0 / 20px 20px;
         overflow:hidden; }
-      .pip { position:absolute; box-sizing:border-box; border:2px solid var(--omp-border, #2e3338); background: rgba(30,33,37,0.9); cursor:move; display:flex; flex-direction:column; }
+      .pip { position:absolute; box-sizing:border-box; border:2px solid var(--omp-border, #2e3338); background: rgba(30,33,37,0.25); cursor:move; display:flex; flex-direction:column; }
       .pip.selected { border-color: var(--omp-info, #4285f4); box-shadow: 0 0 0 1px var(--omp-info, #4285f4); }
-      .pip .label { font-size:10px; color: var(--omp-text-dim, #9aa0a6); padding:2px 4px; pointer-events:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .pip .umd { margin-top:auto; font-size:10px; color: var(--omp-text, #e8eaed); background:rgba(0,0,0,0.55); padding:2px 4px; text-align:center; pointer-events:none; }
-      .pip .no-source { flex:1; display:flex; align-items:center; justify-content:center; font-size:10px; color: var(--omp-text-disabled, #5f6368); pointer-events:none; }
+      .pip .label { position:relative; align-self:flex-start; max-width:100%; box-sizing:border-box; font-size:13px; line-height:1.3; color:#fff; background:rgba(0,0,0,0.65); padding:1px 5px; pointer-events:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .pip .umd { margin-top:auto; font-size:13px; line-height:1.3; font-weight:600; color:#fff; background:rgba(0,0,0,0.65); padding:2px 5px; text-align:center; pointer-events:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .pip .no-source { flex:1; display:flex; align-items:center; justify-content:center; font-size:12px; color: var(--omp-text-disabled, #5f6368); pointer-events:none; }
       .pip .remove { position:absolute; top:1px; right:1px; width:14px; height:14px; line-height:12px; text-align:center; font-size:11px; background: var(--omp-error, #ef5350); color:#fff; border-radius:2px; cursor:pointer; }
       .pip .resize { position:absolute; right:0; bottom:0; width:${RESIZE_HANDLE_PX}px; height:${RESIZE_HANDLE_PX}px; cursor:nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--omp-text-dim, #9aa0a6) 50%); }
-      .inspector { min-width:220px; display:flex; flex-direction:column; gap: var(--omp-space-2, 8px); }
+      .inspector { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap: var(--omp-space-2, 8px); align-items:end; }
+      .inspector .empty-hint, .inspector > :not(.field):not(.row) { grid-column:1 / -1; }
+      .canvas .live { position:absolute; inset:0; width:100%; height:100%; object-fit:fill; pointer-events:none; }
       .inspector .field { display:flex; flex-direction:column; gap:2px; font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6); }
       .inspector .row { display:flex; gap:6px; }
       .inspector .row .field { flex:1; }
@@ -626,7 +652,8 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
   }
 
   _scale() {
-    return EDITOR_WIDTH / Math.max(1, this._layout.canvasWidth);
+    const avail = this._availWidth > 0 ? this._availWidth : EDITOR_WIDTH;
+    return Math.min(avail, 1600) / Math.max(1, this._layout.canvasWidth);
   }
 
   // --- Drag/Resize: ändert nur das In-Memory-Modell + die Box-Inline-
@@ -740,6 +767,14 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     }
 
     this._el.canvas.innerHTML = "";
+    const live = document.createElement("img");
+    live.className = "live";
+    live.alt = "";
+    live.style.display = "none";
+    live.addEventListener("load", () => { live.style.display = ""; });
+    live.addEventListener("error", () => { live.style.display = "none"; });
+    this._liveImg = live;
+    this._el.canvas.appendChild(live);
     for (const pip of this._layout.pips) {
       const box = document.createElement("div");
       box.className = "pip" + (pip.id === this._selectedPipId ? " selected" : "");

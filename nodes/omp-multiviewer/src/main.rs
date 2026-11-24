@@ -15,8 +15,9 @@
 //! Programmsignal.
 
 mod pipeline;
+mod uibundle;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -66,7 +67,12 @@ impl ReceiverControl for SubtitleControl {
     }
 }
 
+/// Ebenen-Filter (Nutzerwunsch 2026-11-24): NMOS-Node-IDs, deren Quellen angezeigt werden dürfen.
+/// `None` = (noch) kein Filter gesetzt; die Oberfläche setzt ihn je nach Ebene (Root/Gruppe) des Multiviewers.
+type Scope = Arc<Mutex<Option<HashSet<String>>>>;
+
 struct MultiviewerStore {
+    scope: Scope,
     inputs: Arc<Mutex<Vec<DiscoveredInput>>>,
     preview_url: String,
     subtitle: Arc<omp_mediaio::mxl::SubtitleInput>,
@@ -99,6 +105,8 @@ impl ParamStore for MultiviewerStore {
                     range: None,
                     readonly: true,
                 },
+                // JSON-Array von NMOS-Node-IDs: nur deren Quellen werden gekachelt (Ebene des Multiviewers); leer = kein Filter
+                ParamSpec { name: "scopeNodeIds".to_string(), kind: ParamType::String, unit: None, range: None, readonly: false },
                 // Aux-Eingang „Untertitel“: aktueller Text (leer = nichts), als HTML-Overlay in der Vorschau
                 ParamSpec { name: "subtitle".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ],
@@ -118,12 +126,33 @@ impl ParamStore for MultiviewerStore {
                 ))
             }
             "previewUrl" => Some(serde_json::json!(self.preview_url)),
+            "scopeNodeIds" => {
+                let scope = self.scope.lock().expect("lock poisoned");
+                Some(serde_json::json!(match &*scope {
+                    Some(ids) => {
+                        let mut v: Vec<&String> = ids.iter().collect();
+                        v.sort();
+                        serde_json::to_string(&v).unwrap_or_default()
+                    }
+                    None => String::new(),
+                }))
+            }
             "subtitle" => Some(serde_json::json!(self.subtitle.text())),
             _ => None,
         }
     }
 
-    fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
+    fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        if name == "scopeNodeIds" {
+            let text = value.as_str().ok_or(SetError::Unknown)?.trim();
+            let parsed = if text.is_empty() {
+                None
+            } else {
+                Some(serde_json::from_str::<Vec<String>>(text).map_err(|_| SetError::Unknown)?.into_iter().collect())
+            };
+            *self.scope.lock().expect("lock poisoned") = parsed;
+            return Ok(());
+        }
         Err(SetError::ReadOnly)
     }
 
@@ -136,6 +165,9 @@ impl ParamStore for MultiviewerStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if let Some(r) = uibundle::route(method, path) {
+            return Some(r);
+        }
         self.subtitle_connection.handle(method, path, body).map(|(status, content_type, body)| RawResponse { status, content_type, body })
     }
 }
@@ -214,7 +246,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         SubtitleControl { registry: RegistryClient::new(registry_url.clone()), context: subtitle_context, input: subtitle.clone() },
     ));
     let subtitle_label = format!("{label} Untertitel");
+    let scope: Scope = Arc::new(Mutex::new(None));
     let store: Arc<dyn ParamStore> = Arc::new(MultiviewerStore {
+        scope: scope.clone(),
         inputs: inputs.clone(),
         preview_url,
         subtitle,
@@ -252,7 +286,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     handle.register_worker("pipeline", pipeline_heartbeat);
     handle.register_worker("preview-accept", preview_heartbeat);
 
-    let discovery = discovery_loop(registry_url, pipeline_handle, inputs);
+    let discovery = discovery_loop(registry_url, pipeline_handle, inputs, scope);
 
     let events = async {
         while let Some(event) = rx.recv().await {
@@ -332,7 +366,7 @@ fn is_lowres_companion(s: &Sender) -> bool {
 /// zusätzlich Kapitel 15 Teil 3: pro Kachel den Lowres-Begleit-Sender
 /// (falls vorhanden) verlinken, Lowres-Sender selbst nicht als eigene
 /// Kachel führen.
-fn discover(registry: &RegistryClient) -> Result<Vec<DiscoveredInput>, String> {
+fn discover(registry: &RegistryClient, scope: Option<&HashSet<String>>) -> Result<Vec<DiscoveredInput>, String> {
     let senders = registry.list_senders().map_err(|e| e.to_string())?;
     let lowres_map = lowres_by_group(&senders);
 
@@ -355,11 +389,22 @@ fn discover(registry: &RegistryClient) -> Result<Vec<DiscoveredInput>, String> {
         HashMap::new()
     };
     let mut device_workflow: HashMap<String, Option<String>> = HashMap::new();
+    let mut device_node: HashMap<String, Option<String>> = HashMap::new();
 
     let mut discovered = Vec::new();
     for s in &senders {
         if s.transport != TRANSPORT_MXL || is_lowres_companion(s) {
             continue;
+        }
+        // Ebenen-Filter: nur Quellen von Nodes der eigenen Ebene (Root bzw. Gruppe des Multiviewers)
+        if let Some(allowed) = scope {
+            let node_id = device_node
+                .entry(s.device_id.clone())
+                .or_insert_with(|| registry.get_device(&s.device_id).ok().map(|d| d.node_id))
+                .clone();
+            if !node_id.is_some_and(|n| allowed.contains(&n)) {
+                continue;
+            }
         }
         if let Some(own) = &own_workflow {
             let sender_workflow = device_workflow
@@ -418,6 +463,7 @@ async fn discovery_loop(
     registry_url: String,
     pipeline: pipeline::PipelineHandle,
     inputs: Arc<Mutex<Vec<DiscoveredInput>>>,
+    scope: Scope,
 ) {
     let registry = RegistryClient::new(registry_url);
     let mut interval = tokio::time::interval(Duration::from_secs(2));
@@ -426,7 +472,8 @@ async fn discovery_loop(
     loop {
         interval.tick().await;
         let registry_for_poll = registry.clone();
-        let result = tokio::task::spawn_blocking(move || discover(&registry_for_poll)).await;
+        let scope_now = scope.lock().expect("lock poisoned").clone();
+        let result = tokio::task::spawn_blocking(move || discover(&registry_for_poll, scope_now.as_ref())).await;
 
         let mut discovered = match result {
             Ok(Ok(discovered)) => discovered,

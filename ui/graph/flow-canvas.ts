@@ -545,6 +545,10 @@ export class FlowCanvas extends HTMLElement {
   #viewport: Viewport = { ...IDENTITY_VIEWPORT };
   #positions: Record<string, Point> = {};
   #groupTree: GroupTree = emptyTree();
+  // Ebenen-Filter der Automatic Multiviewer: erst nach geladenem Gruppenbaum berechnen; je Node zuletzt gesendeter Wert.
+  #groupTreeLoaded = false;
+  #multiviewerScopeSent: Map<string, string> = new Map();
+  #multiviewerScopeBusy = false;
   #scope: string | null = null;
   #selectedIds: Set<string> = new Set();
   #graph: Graph = { nodes: [], edges: [] };
@@ -827,6 +831,7 @@ export class FlowCanvas extends HTMLElement {
         const blob = (await response.json()) as Partial<LayoutBlob>;
         this.#positions = blob.positions ?? {};
         this.#groupTree = blob.groups ?? emptyTree();
+        this.#groupTreeLoaded = true;
         this.#zoneMode = blob.zoneMode === "domain" ? "domain" : "host";
         this.#hostViewPositions = (this.#zoneMode === "domain" ? blob.domainViewPositions : blob.hostViewPositions) ?? {};
         this.#inactiveLanePositions = (this.#zoneMode === "domain" ? blob.hostViewPositions : blob.domainViewPositions) ?? {};
@@ -864,6 +869,37 @@ export class FlowCanvas extends HTMLElement {
   // aktuellen #positions synchronisiert (deckt auch ein Verschieben
   // einer Kachel INNERHALB der Host-Ansicht ab, nicht nur den
   // Ein-/Ausschalt-Übergang selbst).
+  // Automatic Multiviewer zeigt nur Quellen seiner eigenen Ebene (Root bzw. direkte Mitglieder seiner Gruppe):
+  // der Node kennt den Gruppenbaum nicht, deshalb schickt der Flow-Editor die erlaubten Node-IDs als Parameter.
+  async #syncMultiviewerScopes() {
+    if (!this.#groupTreeLoaded || this.#multiviewerScopeBusy) return;
+    this.#multiviewerScopeBusy = true;
+    try {
+      const res = await apiFetch("/api/v1/instances");
+      if (!res.ok) return;
+      const instances = (await res.json()) as LauncherInstance[];
+      const mvTypes = new Set(instances.filter((i) => i.type === "omp-multiviewer").map((i) => i.id));
+      const allIds = this.#graph.nodes.map((n) => n.id);
+      for (const node of this.#graph.nodes) {
+        if (!node.instanceId || !mvTypes.has(node.instanceId)) continue;
+        const group = Object.values(this.#groupTree.groups).find((g) => g.nodeIds.includes(node.id));
+        const ids = (group ? [...group.nodeIds] : topLevelItems(this.#groupTree, null, allIds).nodeIds).sort();
+        const value = JSON.stringify(ids);
+        if (this.#multiviewerScopeSent.get(node.id) === value) continue;
+        const r = await apiFetch(`/api/v1/nodes/${node.id}/params/scopeNodeIds`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value }),
+        });
+        if (r.ok) this.#multiviewerScopeSent.set(node.id, value);
+      }
+    } catch {
+      // best effort; nächster Abruf versucht es erneut
+    } finally {
+      this.#multiviewerScopeBusy = false;
+    }
+  }
+
   async #saveLayout() {
     let positionsToPersist = this.#positions;
     let hostViewPositionsToPersist = this.#hostViewPositions;
@@ -909,6 +945,8 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!response.ok) {
         this.#showToast(tt("flow.616b70", { p0: response.status }));
+      } else {
+        void this.#syncMultiviewerScopes();
       }
     } catch (err) {
       this.#showToast(tt("flow.616b70", { p0: err }));
@@ -1173,6 +1211,7 @@ export class FlowCanvas extends HTMLElement {
   async #fetchAndRender() {
     const response = await apiFetch("/api/v1/graph");
     this.#graph = await response.json();
+    void this.#syncMultiviewerScopes();
     // Node beendet, während sein Parameter-Tab offen ist: Tab schließen, sonst pollt das Panel-Bundle (Mischer-Monitor
     // 25×/s, Graph-Abruf alle 2 s) ins Leere und hängt die Seite auf.
     if (this.#panelNodeId !== null && !this.#graph.nodes.some((n) => n.id === this.#panelNodeId)) this.#closePanel();
