@@ -17,6 +17,7 @@
 // Ressourcen-Ansicht muss deshalb selbst im Sample-Takt pollen, SSE
 // deckt hier nur den Status-Sprung (Crash/Neustart) zusätzlich ab.
 import { t } from "./i18n.ts";
+import { confirmMigrate } from "./migrate-preview.ts";
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { showToast } from "../kit/omp-toast.ts";
@@ -189,7 +190,8 @@ class InstancesView extends HTMLElement {
     } else if (action === "save-migrate") {
       const target = field.value;
       const targetLabel = target ? this.#hosts.find((h) => h.id === target)?.label || target : t("inst.localHost");
-      if (!(await confirmDialog(t("inst.confirmMigrate", { p0: inst.label, p1: targetLabel }), { confirmLabel: t("inst.confirmMigrateLabel") }))) return;
+      const hostName = (hid: string) => (hid ? this.#hosts.find((h) => h.id === hid)?.label || hid : t("inst.localHost"));
+      if (!(await confirmMigrate(id, target, t("inst.confirmMigrate", { p0: inst.label, p1: targetLabel }), t("inst.confirmMigrateLabel"), hostName))) return;
       try {
         const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(id)}/migrate`, {
           method: "POST",

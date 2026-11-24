@@ -69,6 +69,7 @@ import { coreIO, xyPanelAdapter } from "../shell/streamdeck/adapters/xy-panel.ts
 import { STANDARD_FORMATS, uniqueRoleName } from "./roles.ts";
 import { isAnchorRole, renameRole } from "./role-designer-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import { confirmMigrate } from "../shell/migrate-preview.ts";
 import { openInterfaceDialog } from "./workflow-interface-dialog.ts";
 import { type InterfacePort, type InterfaceSide, portNameOf, renameRoleIn, type WorkflowInterface } from "./workflow-interface-logic.ts";
 import { openStartDialog } from "./start-dialog.ts";
@@ -5782,9 +5783,14 @@ export class FlowCanvas extends HTMLElement {
 
   async #confirmAndMigrateInstance(instanceId: string, nodeLabel: string, targetZoneId: string) {
     const targetLabel = this.#hostZones(this.#rootZoneTiles()).find((z) => z.id === targetZoneId)?.label ?? targetZoneId;
-    const confirmed = await confirmDialog(
+    const hostId = targetZoneId === "local" ? "" : targetZoneId;
+    const zones = this.#hostZones(this.#rootZoneTiles());
+    const confirmed = await confirmMigrate(
+      instanceId,
+      hostId,
       tt("flow.3d4180", { p0: nodeLabel, p1: targetLabel }),
-      { confirmLabel: tt("flow.cc0806") },
+      tt("flow.cc0806"),
+      (id) => zones.find((z) => z.id === (id === "" ? "local" : id))?.label ?? (id === "" ? tt("flow.b40ef3") : id),
     );
     if (!confirmed) return;
 

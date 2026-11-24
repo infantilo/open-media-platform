@@ -519,6 +519,19 @@ func handleMigrateInstance(svc InstanceMigrator) http.HandlerFunc {
 	}
 }
 
+// handleMigratePreview liefert GET /api/v1/instances/<id>/migrate-preview?targetHostId=… (Kap. 108): was der Umzug
+// täte (Brücken über Hostgrenzen mit Transport), ohne etwas zu verändern. Fehler wie beim Umzug selbst (409 mit Grund).
+func handleMigratePreview(svc InstanceMigrator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, err := svc.PreviewMigration(r.Context(), r.PathValue("id"), r.URL.Query().Get("targetHostId"))
+		if err != nil {
+			writeInstanceMigrateError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
+	}
+}
+
 func writeInstanceMigrateError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, instancemigrate.ErrUnknownInstance):

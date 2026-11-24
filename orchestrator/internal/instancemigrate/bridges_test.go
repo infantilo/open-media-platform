@@ -198,3 +198,34 @@ func TestUnwrapOwnBridgesGivesDirectEdges(t *testing.T) {
 		t.Fatalf("old bridges = %v", old)
 	}
 }
+
+func TestPreviewReportsBridgesWithoutChangingAnything(t *testing.T) {
+	fg := &fakeGraph{}
+	svc, l, fb := setupBridged(t, fg, fg, "urn:x-nmos:format:video")
+	p, err := svc.PreviewMigration(context.Background(), "old-1", "host-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Bridges) != 1 || p.Bridges[0].Transport != hostbridge.Fabrics || p.Bridges[0].FromHost != "host-b" || p.Bridges[0].ToHost != "host-a" ||
+		len(p.Bridges[0].Peers) != 1 || p.Bridges[0].Peers[0] != "Viewer" || len(p.Bridges[0].Candidates) != 3 {
+		t.Fatalf("preview = %+v", p)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.pinsUsed) != 0 || len(l.stopped) != 0 || len(fb.plans) != 0 || len(fg.calls) != 0 {
+		t.Fatal("preview must not change anything")
+	}
+}
+
+func TestPreviewWithoutBridgeIsEmptyAndReportsNoPath(t *testing.T) {
+	fg := &fakeGraph{}
+	svc, _, _ := setupBridged(t, fg, fg, "urn:x-nmos:format:video")
+	if _, err := svc.PreviewMigration(context.Background(), "old-1", "host-a"); !errors.Is(err, ErrSameHost) {
+		t.Fatalf("same host: %v", err)
+	}
+	fg2 := &fakeGraph{}
+	svc2, _, _ := setupBridged(t, fg2, fg2, "urn:x-nmos:format:data")
+	if _, err := svc2.PreviewMigration(context.Background(), "old-1", "host-b"); !errors.Is(err, hostbridge.ErrNoPath) {
+		t.Fatalf("no path: %v", err)
+	}
+}

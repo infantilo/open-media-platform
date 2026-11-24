@@ -153,6 +153,7 @@ type LauncherService interface {
 // implementiert von *instancemigrate.Service.
 type InstanceMigrator interface {
 	MigrateInstance(ctx context.Context, id, targetHostID string) error
+	PreviewMigration(ctx context.Context, id, targetHostID string) (instancemigrate.Preview, error)
 }
 
 // WorkflowService verwaltet Workflow-Definitionen und führt Bundle-
@@ -598,6 +599,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — Drag-Umzug
 	// im Flow-Editor für eigenständige (nicht Workflow-gebundene)
 	// Instanzen, s. instancemigrate.Service.MigrateInstance-Doku.
+	mux.HandleFunc("GET /api/v1/instances/{id}/migrate-preview", g.requireVerbGlobal(authz.VerbAdmin, handleMigratePreview(instanceMigrateSvc)))
 	mux.HandleFunc("POST /api/v1/instances/{id}/migrate", g.requireVerbGlobal(authz.VerbAdmin, blockMaintenanceHost(options.maintenance, "targetHostId", handleMigrateInstance(instanceMigrateSvc))))
 	mux.HandleFunc("GET /api/v1/me/upcoming", g.requireAuth(handleMeUpcoming(workflowSvc, authzStore, time.Now)))
 	mux.HandleFunc("GET /api/v1/features", g.requireAuth(handleListFeatures(options.modules)))

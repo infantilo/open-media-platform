@@ -405,3 +405,35 @@ func (s *Service) buildAndWire(ctx context.Context, newInst launcher.Instance, n
 	}
 	return nil
 }
+
+// BridgePreview beschreibt eine Brücke, die der Umzug bauen würde (Vorschau im Umzugsdialog).
+type BridgePreview struct {
+	Medium     hostbridge.Medium      `json:"medium"`
+	FromHost   string                 `json:"fromHost"`
+	ToHost     string                 `json:"toHost"`
+	Peers      []string               `json:"peers"`
+	Transport  hostbridge.Transport   `json:"transport"`
+	Candidates []hostbridge.Transport `json:"candidates"`
+}
+
+// Preview ist das Ergebnis von PreviewMigration.
+type Preview struct {
+	Bridges []BridgePreview `json:"bridges"`
+	// DissolvedBridges: Zahl der Brücken-Glieder der Instanz, die nach dem Umzug entfallen (neu gebaut oder unnötig).
+	DissolvedBridges int `json:"dissolvedBridges"`
+}
+
+// PreviewMigration prüft einen Umzug wie MigrateInstance, verändert aber nichts: sie meldet dieselben Fehler
+// (ErrSameHost, ErrMXLPeer mit Grund …) und liefert sonst die Brücken, die der Umzug bauen würde.
+func (s *Service) PreviewMigration(ctx context.Context, oldInstanceID, targetHostID string) (Preview, error) {
+	_, edges, carry, err := s.prepareMigration(ctx, oldInstanceID, targetHostID, false)
+	if err != nil {
+		return Preview{}, err
+	}
+	out := Preview{Bridges: []BridgePreview{}, DissolvedBridges: len(carry.oldBridges)}
+	for _, j := range uniqueJobs(edges) {
+		out.Bridges = append(out.Bridges, BridgePreview{Medium: j.plan.Medium, FromHost: j.plan.SenderHost, ToHost: j.plan.ReceiverHost,
+			Peers: j.plan.Peers, Transport: j.plan.Candidates[0], Candidates: j.plan.Candidates})
+	}
+	return out, nil
+}
