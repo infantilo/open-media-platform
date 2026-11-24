@@ -3336,6 +3336,22 @@
       "max": 64
     }
   ],
+  "omp-audio-matrix": [
+    {
+      "key": "OMP_MATRIX_CONFIG",
+      "i18n": {
+        "en": {
+          "label": "Matrix configuration (JSON)",
+          "description": "Start preset of the inputs and outputs with channel labels and crosspoints, e.g. {\"inputs\":[{\"id\":\"in1\",\"name\":\"Programme\",\"channels\":[\"L\",\"R\"]}],\"outputs\":[{\"id\":\"o1\",\"name\":\"Mono L\",\"channels\":[\"L\"]}],\"routes\":[{\"out\":\"o1\",\"ch\":1,\"in\":\"in1\",\"inCh\":1}]}. Empty = nothing. Changeable at runtime (parameter matrix.config); the state survives stop/start.",
+          "group": "Matrix"
+        }
+      },
+      "label": "Matrix-Konfiguration (JSON)",
+      "type": "string",
+      "description": "Startvorgabe der Ein- und Ausgänge mit Kanal-Labels und Kreuzpunkten, z. B. {\"inputs\":[{\"id\":\"in1\",\"name\":\"Programm\",\"channels\":[\"L\",\"R\"]}],\"outputs\":[{\"id\":\"o1\",\"name\":\"Mono L\",\"channels\":[\"L\"]}],\"routes\":[{\"out\":\"o1\",\"ch\":1,\"in\":\"in1\",\"inCh\":1}]}. Leer = nichts. Zur Laufzeit änderbar (Parameter matrix.config), der Zustand bleibt beim Stoppen erhalten.",
+      "group": "Matrix"
+    }
+  ],
   "omp-avdelay": [
     {
       "key": "OMP_WIDTH",

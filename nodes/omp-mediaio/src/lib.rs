@@ -37,6 +37,9 @@ pub mod group;
 pub mod mxl;
 #[cfg(feature = "mxl")]
 pub mod rawcopy;
+pub mod matrix;
+#[cfg(feature = "mxl")]
+pub mod rawmatrix;
 pub mod domainwatch;
 #[cfg(feature = "mxl")]
 pub mod diag;

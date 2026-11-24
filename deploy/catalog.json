@@ -88,6 +88,23 @@
     "expectedResources": "sehr gering (Speicherkopie)"
   },
   {
+    "type": "omp-audio-matrix",
+    "label": "Audio Matrix",
+    "runner": "process",
+    "command": [
+      "../nodes/target/release/omp-audio-matrix"
+    ],
+    "env": {},
+    "description": "Audio-Kreuzschiene mit frei konfigurierbaren Ein- und Ausgängen, die sich zur Laufzeit anlegen, umbenennen und löschen lassen. Jeder Eingang ist ein Empfänger (mit Kanal-Labels), jeder Ausgang ein eigener Flow (Mono, Stereo, bis 64 Kanäle) mit Namen und Kanal-Labels. Die Kreuzschiene ordnet Eingangskanäle Ausgangskanälen zu: ein Kreuzpunkt ohne Gain ist eine bitgleiche Kopie (kaum CPU), mehrere Quellen oder ein Gain werden summiert. So teilt sie Mehrkanalton in Einzelkanäle (Teiler) oder setzt aus mehreren Quellen einen 16-Kanal-Flow zusammen (Kombinierer). Konfiguration als JSON im Parameter matrix.config (Start: OMP_MATRIX_CONFIG); Quellen müssen audio/float32 mit 48 kHz sein. Ändert sich die Kanalzahl eines Ausgangs, entsteht ein neuer Flow. Alarm, wenn ein verbundener Eingang kein Signal liefert.",
+    "i18n": {
+      "en": {
+        "description": "Audio crosspoint matrix with freely configurable inputs and outputs that can be created, renamed and deleted at runtime. Every input is a receiver (with channel labels), every output its own flow (mono, stereo, up to 64 channels) with a name and channel labels. The matrix assigns input channels to output channels: a crosspoint without gain is a bit-exact copy (hardly any CPU), several sources or a gain are summed. It splits multichannel audio into single channels (splitter) or builds one 16-channel flow from several sources (combiner). Configuration as JSON in parameter matrix.config (start: OMP_MATRIX_CONFIG); sources must be audio/float32 at 48 kHz. If the channel count of an output changes, a new flow is created. Alarm if a connected input delivers no signal.",
+        "expectedResources": "very low (memory copy; mixing only where a gain or sum is used)"
+      }
+    },
+    "expectedResources": "sehr gering (Speicherkopie, Rechnen nur bei Gain/Summe)"
+  },
+  {
     "type": "omp-avdelay",
     "label": "A/V Delay",
     "runner": "process",

@@ -93,6 +93,9 @@ pub struct SenderSpec {
     /// Halbbild-Quelle (Top Field First): die IS-04-Flow-Ressource meldet `interlaced_tff` statt `progressive`
     /// (nur für `FlowSpec::Video` relevant). Default `false`.
     pub interlaced_tff: bool,
+    /// Echte Kanalbeschriftung der IS-04-Audio-Source (`source_audio.channels[]`, Kap. 107); `None` (oder falsche Länge) =
+    /// generische „Channel n“. Nur bei `FlowSpec::Audio` relevant.
+    pub audio_channels: Option<Vec<is04::SourceChannel>>,
 }
 
 /// Flow-Angaben für einen MXL-Sender (`SenderSpec::flow`), Video **oder**
@@ -442,12 +445,11 @@ fn build_sender_parts(
                         bit_depth,
                         ..
                     } => {
-                        source_out = Some(Source::new_audio(
-                            &source_id,
-                            &label,
-                            device_id,
-                            *channel_count,
-                        ));
+                        let mut audio_source = Source::new_audio(&source_id, &label, device_id, *channel_count);
+                        if let Some(ch) = spec.audio_channels.as_ref().filter(|c| c.len() == *channel_count as usize) {
+                            audio_source.channels = Some(ch.clone());
+                        }
+                        source_out = Some(audio_source);
                         flow_out = Some(FlowResource::Audio(AudioFlow::new(
                             &flow_id,
                             &label,

@@ -26,7 +26,8 @@ gstreamer-app = { version = "0.25", optional = true }
 # lebt in `libgstnet-1.0`/dem `gstreamer-net`-Crate, nicht in `gstreamer`
 # selbst.
 gstreamer-net = { version = "0.25", optional = true }
-serde_json = { version = "1", optional = true }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 mxl = { path = "../../third_party/mxl/rust/mxl", features = ["mxl-not-built"], optional = true }
 mxl-sys = { path = "../../third_party/mxl/rust/mxl-sys", features = ["mxl-not-built"], optional = true }
 tiny_http = { version = "0.12.0", optional = true }
@@ -52,7 +53,7 @@ bindgen = { version = "0.72", features = ["experimental"], optional = true }
 # Braucht dieselbe geklonte/gebaute MXL-Quelle wie `mxl` (Header-Pfade,
 # kein zusätzlicher Build-Schritt).
 [features]
-mxl = ["dep:mxl", "dep:mxl-sys", "dep:gstreamer-app", "dep:serde_json"]
+mxl = ["dep:mxl", "dep:mxl-sys", "dep:gstreamer-app"]
 preview = ["dep:tiny_http", "dep:gstreamer-app"]
 # Feature `audio-stream`: MP3-über-HTTP-Audio-Monitoring (Nutzerwunsch
 # 2026-07-29, "können wir audio abhören?"), `omp-audio-monitor` — eigenes

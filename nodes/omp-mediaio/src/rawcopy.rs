@@ -159,7 +159,7 @@ pub fn check_audio_passthrough(source_flow_def: &str, target: AudioFormat) -> Re
 }
 
 /// Kopiert die Bytes eines in zwei Fragmente (Ringpuffer-Umbruch) geteilten Quellbereichs in einen ebenso geteilten Zielbereich.
-fn copy_fragments(src: (&[u8], &[u8]), dst: (&mut [u8], &mut [u8])) {
+pub(crate) fn copy_fragments(src: (&[u8], &[u8]), dst: (&mut [u8], &mut [u8])) {
     let total = src.0.len() + src.1.len();
     let cap = dst.0.len() + dst.1.len();
     let n = total.min(cap);
