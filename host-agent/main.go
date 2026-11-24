@@ -206,6 +206,13 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("catalog loaded", "path", catalogPath, "entries", len(cat))
+	bridgeCaps := telemetry.DetectBridgeCaps(func(nodeType string) string {
+		if e, ok := catalog.Find(cat, nodeType); ok && len(e.Command) > 0 {
+			return e.Command[0]
+		}
+		return ""
+	}, telemetry.LibraryFound("libmxl-fabrics"))
+	slog.Info("bridge capabilities", "fabrics", bridgeCaps.Fabrics, "st2110", bridgeCaps.ST2110, "aes67", bridgeCaps.AES67, "srt", bridgeCaps.SRT)
 
 	// I/O-Karten-Inventar (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10,
 	// UMSETZUNG.md D13) — nur beim allerersten Registrieren gebraucht
@@ -485,6 +492,7 @@ func main() {
 			cancel()
 		}
 
+		sample.Bridges = &bridgeCaps
 		running := executor.Instances()
 		keepPIDs := make(map[int]bool, len(running))
 		sample.RunningInstanceIDs = make([]string, 0, len(running))

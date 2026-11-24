@@ -229,3 +229,31 @@ func TestPreviewWithoutBridgeIsEmptyAndReportsNoPath(t *testing.T) {
 		t.Fatalf("no path: %v", err)
 	}
 }
+
+func TestRemoveBridgesOfAndReapOrphans(t *testing.T) {
+	fg := &fakeGraph{}
+	svc, l, _ := setupBridged(t, fg, fg, "urn:x-nmos:format:video")
+	l.seed(launcher.Instance{ID: "b-exit", Type: "gw", ExtraEnv: map[string]string{hostbridge.EnvID: "b1", hostbridge.EnvOwner: "old-1", hostbridge.EnvRole: "exit"}})
+	l.seed(launcher.Instance{ID: "b-entry", Type: "gw", ExtraEnv: map[string]string{hostbridge.EnvID: "b1", hostbridge.EnvOwner: "old-1", hostbridge.EnvRole: "entry"}})
+	l.seed(launcher.Instance{ID: "orphan", Type: "gw", ExtraEnv: map[string]string{hostbridge.EnvID: "b2", hostbridge.EnvOwner: "gone-1", hostbridge.EnvRole: "entry"}})
+	// Ein Brücken-Glied löschen darf nichts mitreißen.
+	if n := svc.RemoveBridgesOf(context.Background(), "b-exit"); n != 0 {
+		t.Fatalf("bridge member removed %d", n)
+	}
+	if n := svc.ReapOrphanBridges(); n != 1 {
+		t.Fatalf("reaped = %d, want 1 (only the orphan)", n)
+	}
+	if n := svc.RemoveBridgesOf(context.Background(), "old-1"); n != 2 {
+		t.Fatalf("removed = %d, want 2", n)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, id := range []string{"b-exit", "b-entry", "orphan"} {
+		if _, ok := l.byID[id]; ok {
+			t.Fatalf("%s still running", id)
+		}
+	}
+	if _, ok := l.byID["old-1"]; !ok {
+		t.Fatal("owner must stay")
+	}
+}

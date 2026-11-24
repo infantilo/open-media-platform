@@ -415,9 +415,14 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 // Fehler hier verhindert nicht den eigentlichen Stop; `ReleasePort`
 // selbst ist ein No-Op, wenn diese Instanz nie einen Port geclaimt hatte
 // (kein passender Claim-Datensatz gefunden).
-func handleDeleteInstance(svc LauncherService, ioPortStore IOPortInventoryStore) http.HandlerFunc {
+func handleDeleteInstance(svc LauncherService, ioPortStore IOPortInventoryStore, bridges BridgeCleaner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if bridges != nil {
+			if n := bridges.RemoveBridgesOf(r.Context(), id); n > 0 {
+				slog.Info("launcher: Host-Brücken der Instanz entfernt", "instance", id, "members", n)
+			}
+		}
 		if err := svc.Stop(id); errors.Is(err, launcher.ErrStopDeferred) {
 			// Host nicht erreichbar: der Stop ist vorgemerkt und wird nachgeholt (Instance.stopPending). Der I/O-Port
 			// bleibt bis dahin belegt — die Instanz kann dort noch laufen.

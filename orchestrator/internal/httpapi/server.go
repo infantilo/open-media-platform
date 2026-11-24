@@ -151,6 +151,11 @@ type LauncherService interface {
 // InstanceMigrator (Kapitel 13 Teil 3, docs/END-GOAL-FEATURES.md §13.4)
 // ist die von handleMigrateInstance genutzte Schnittstelle —
 // implementiert von *instancemigrate.Service.
+// BridgeCleaner entfernt die Host-Brücken einer Instanz beim Löschen (Kapitel 108, *instancemigrate.Service).
+type BridgeCleaner interface {
+	RemoveBridgesOf(ctx context.Context, instanceID string) int
+}
+
 type InstanceMigrator interface {
 	MigrateInstance(ctx context.Context, id, targetHostID string) error
 	PreviewMigration(ctx context.Context, id, targetHostID string) (instancemigrate.Preview, error)
@@ -384,7 +389,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Interfaces von instancemigrate.
 	instanceMigrateSvc := instancemigrate.NewService(nodes, launcherSvc, graphSvc)
 	// Kap. 108: Umzug über Hostgrenzen mit Gateway-Brücken statt Sperre (Transport je Host, hostbridge).
-	instanceMigrateSvc.SetBridges(&hostbridge.Runner{Launcher: launcherSvc, Nodes: nodes, Ready: hostbridge.FabricsReady(nodeClient)}, hostBridgeCaps(hostRegistry))
+	instanceMigrateSvc.SetBridges(&hostbridge.Runner{Launcher: launcherSvc, Nodes: nodes, Ready: hostbridge.FabricsReady(nodeClient)}, hostBridgeCaps(hostRegistry, hostMetrics))
+	instanceMigrateSvc.StartBridgeReaper(90*time.Second, 2*time.Minute)
 	if mover, ok := options.nodeValues.(instancemigrate.OptionMover); ok {
 		instanceMigrateSvc.SetOptionMover(mover)
 	}
@@ -595,7 +601,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("POST /api/v1/instances/{id}/domain", g.requireVerbGlobal(authz.VerbAdmin, handleChangeInstanceDomain(launcherSvc, graphSvc, options.mxlDomains, options.nodeValues, options.domainAudit)))
 	}
 	mux.HandleFunc("POST /api/v1/instances/{id}/restart", g.requireVerbGlobal(authz.VerbAdmin, handleRestartInstance(launcherSvc, workflowSvc, options.nodeValues, instanceMigrateSvc)))
-	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc, ioPortStore)))
+	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc, ioPortStore, instanceMigrateSvc)))
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — Drag-Umzug
 	// im Flow-Editor für eigenständige (nicht Workflow-gebundene)
 	// Instanzen, s. instancemigrate.Service.MigrateInstance-Doku.

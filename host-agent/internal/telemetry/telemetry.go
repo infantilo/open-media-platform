@@ -64,6 +64,8 @@ type Sample struct {
 	Sensors *SensorSample `json:"sensors,omitempty"`
 	// Nics: physische Netzwerkkarten (nic.go) mit Treiber, Link, PTP-Hardware-Uhr, RDMA, Bypass-Wegen.
 	Nics []NicInfo `json:"nics,omitempty"`
+	// Bridges: Gateway-Ketten, die dieser Host für Umzüge über Hostgrenzen bauen kann (Kap. 108); nil = ältere Version.
+	Bridges *BridgeCaps `json:"bridges,omitempty"`
 	// Goodbye markiert die letzte Nachricht eines Host-Agents, der per
 	// SIGTERM/SIGINT ABSICHTLICH beendet wird (Nutzerauftrag 2026-09-21:
 	// ein Host, der ohne manuelles Beenden offline geht, ist ein

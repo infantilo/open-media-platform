@@ -19,6 +19,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hostbridge"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 )
 
 // BridgeRunner baut Brücken (*hostbridge.Runner).
@@ -436,4 +437,72 @@ func (s *Service) PreviewMigration(ctx context.Context, oldInstanceID, targetHos
 			Peers: j.plan.Peers, Transport: j.plan.Candidates[0], Candidates: j.plan.Candidates})
 	}
 	return out, nil
+}
+
+// RemoveBridgesOf stoppt die Brücken, die zu einer Instanz gehören (Besitzer-Marke oder direkt an ihr hängend) — beim
+// Löschen der Instanz, sonst blieben die Gateway-Glieder stehen. Brücken-Glieder selbst haben keine eigenen Brücken.
+// Liefert die Zahl der gestoppten Glieder.
+func (s *Service) RemoveBridgesOf(ctx context.Context, instanceID string) int {
+	info := s.instanceInfo()
+	if self, ok := info.byID[instanceID]; ok && self.ExtraEnv[hostbridge.EnvID] != "" {
+		return 0
+	}
+	ids := map[string]bool{}
+	for id, in := range info.byID {
+		if in.ExtraEnv[hostbridge.EnvID] != "" && in.ExtraEnv[hostbridge.EnvOwner] == instanceID {
+			ids[id] = true
+		}
+	}
+	if node, ok := s.findNodeByInstance(instanceID); ok {
+		_, adjacent := unwrapBridges(s.graph.Graph(ctx).Edges, node, s.bridgeGroups(info))
+		for _, id := range adjacent {
+			ids[id] = true
+		}
+	}
+	n := 0
+	for id := range ids {
+		if err := s.launcher.Stop(id); err != nil && !errors.Is(err, launcher.ErrStopDeferred) {
+			slog.Warn("instancemigrate: Brücken-Glied ließ sich nicht stoppen", "instance", id, "error", err)
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// ReapOrphanBridges stoppt Brücken-Glieder, deren Besitzer (Marke OMP_BRIDGE_OWNER) nicht mehr als Instanz existiert —
+// Reste eines abgebrochenen Umzugs oder eines Orchestrator-Neustarts mitten im Umzug. Liefert die Zahl der gestoppten Glieder.
+func (s *Service) ReapOrphanBridges() int {
+	info := s.instanceInfo()
+	n := 0
+	for id, in := range info.byID {
+		if in.ExtraEnv[hostbridge.EnvID] == "" {
+			continue
+		}
+		owner := in.ExtraEnv[hostbridge.EnvOwner]
+		if owner == "" {
+			continue
+		}
+		if _, alive := info.byID[owner]; alive {
+			continue
+		}
+		if err := s.launcher.Stop(id); err != nil && !errors.Is(err, launcher.ErrStopDeferred) {
+			slog.Warn("instancemigrate: verwaistes Brücken-Glied ließ sich nicht stoppen", "instance", id, "error", err)
+			continue
+		}
+		slog.Info("instancemigrate: verwaistes Brücken-Glied gestoppt", "instance", id, "owner", owner)
+		n++
+	}
+	return n
+}
+
+// StartBridgeReaper räumt verwaiste Brücken-Glieder nach einer Anlaufzeit und danach regelmäßig auf (Prozesslaufzeit).
+func (s *Service) StartBridgeReaper(initialDelay, interval time.Duration) {
+	safego.Go("instancemigrate.bridgeReaper", func() {
+		time.Sleep(initialDelay)
+		for {
+			s.ReapOrphanBridges()
+			time.Sleep(interval)
+		}
+	})
 }

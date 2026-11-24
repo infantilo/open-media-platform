@@ -10,10 +10,28 @@ import { describePreview, type MigratePreview, type Tr } from "./migrate-preview
 const tr: Tr = (k, p) => (t as unknown as (key: string, params?: unknown) => string)(k, p);
 
 /**
- * Fragt die Vorschau ab und bestätigt den Umzug mit dem Nutzer. false = nicht umziehen (abgebrochen oder vom
- * Orchestrator abgelehnt, die Ablehnung wird mit Grund gemeldet). Ist die Vorschau nicht erreichbar (älterer
- * Orchestrator, Netz), gilt der einfache Bestätigungstext und der Umzug entscheidet selbst.
+ * Fragt die Vorschau ab. blocked = der Orchestrator lehnt den Umzug ab (Grund wurde als Meldung gezeigt);
+ * lines = Zeilen für den Bestätigungstext (leer: kein Brückenbau nötig oder Vorschau nicht erreichbar).
  */
+export async function previewLines(
+  instanceId: string,
+  targetHostId: string,
+  hostLabel: (id: string) => string,
+): Promise<{ blocked: boolean; lines: string[] }> {
+  try {
+    const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(instanceId)}/migrate-preview?targetHostId=${encodeURIComponent(targetHostId)}`);
+    if (res.status === 409) {
+      showToast(t("mig.blocked", { p0: (await res.text()).trim() }), { variant: "error", durationMs: 12000 });
+      return { blocked: true, lines: [] };
+    }
+    if (res.ok) return { blocked: false, lines: describePreview((await res.json()) as MigratePreview, hostLabel, tr) };
+  } catch {
+    // Vorschau optional (älterer Orchestrator, Netz): der Umzug entscheidet selbst
+  }
+  return { blocked: false, lines: [] };
+}
+
+/** Bestätigt einen Umzug mit Vorschau; false = nicht umziehen (abgebrochen oder abgelehnt). */
 export async function confirmMigrate(
   instanceId: string,
   targetHostId: string,
@@ -21,17 +39,8 @@ export async function confirmMigrate(
   confirmLabel: string,
   hostLabel: (id: string) => string,
 ): Promise<boolean> {
-  let lines: string[] = [];
-  try {
-    const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(instanceId)}/migrate-preview?targetHostId=${encodeURIComponent(targetHostId)}`);
-    if (res.status === 409) {
-      showToast(t("mig.blocked", { p0: (await res.text()).trim() }), { variant: "error", durationMs: 12000 });
-      return false;
-    }
-    if (res.ok) lines = describePreview((await res.json()) as MigratePreview, hostLabel, tr);
-  } catch {
-    // Vorschau optional
-  }
+  const { blocked, lines } = await previewLines(instanceId, targetHostId, hostLabel);
+  if (blocked) return false;
   const text = lines.length ? `${baseMessage}\n\n${lines.join("\n")}` : baseMessage;
   return await confirmDialog(text, { confirmLabel });
 }

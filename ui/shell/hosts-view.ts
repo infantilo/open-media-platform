@@ -19,6 +19,7 @@ import { whoami } from "./auth.ts";
 import { openHostWizard } from "./host-wizard.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 import { showToast } from "../kit/omp-toast.ts";
+import { previewLines } from "./migrate-preview.ts";
 import "./host-topology.ts"; // registriert <omp-host-topology> (Seiteneffekt-Import: ein reiner Typ-Import würde wegoptimiert)
 import "./host-trends.ts";
 import "./host-software.ts"; // registriert <omp-host-software> (Seiteneffekt-Import)
@@ -415,6 +416,10 @@ class HostsView extends HTMLElement {
       select.focus();
     });
     if (!chosen) return;
+    // Vorschau (Kap. 108): lehnt der Orchestrator ab, nicht umziehen; braucht der Umzug Brücken, vorher bestätigen lassen.
+    const prev = await previewLines(id, chosen.id, (hid) => targets.find((tg) => tg.id === hid)?.label ?? hid);
+    if (prev.blocked) return;
+    if (prev.lines.length && !(await confirmDialog(`${t("inst.confirmMigrate", { p0: label, p1: chosen.label })}\n\n${prev.lines.join("\n")}`, { confirmLabel: t("inst.confirmMigrateLabel") }))) return;
     const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(id)}/migrate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

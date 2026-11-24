@@ -51,6 +51,8 @@ type Metrics struct {
 	// RunningInstanceIDs: alle vom Host-Agent geführten Instanz-IDs (Spiegel von telemetry.Sample); nil = der
 	// Agent meldet die Liste nicht (ältere Version) — dann findet kein Abgleich statt.
 	RunningInstanceIDs []string `json:"runningInstanceIds"`
+	// Bridges: Gateway-Ketten für Umzüge über Hostgrenzen (Kap. 108, Spiegel von telemetry.BridgeCaps); nil = ältere Version.
+	Bridges *BridgeCaps `json:"bridges,omitempty"`
 	// Net ist nil, wenn der Host-Agent kein Interface für die
 	// Bandbreiten-Telemetrie konfiguriert hat (OMP_HOST_AGENT_NET_IFACE,
 	// s. host-agent/main.go) — Spiegelbild von
@@ -165,4 +167,12 @@ func (c *ClockMetrics) Problem() string {
 		return "tai"
 	}
 	return ""
+}
+
+// BridgeCaps spiegelt host-agent telemetry.BridgeCaps (Kapitel 108).
+type BridgeCaps struct {
+	Fabrics bool `json:"fabrics"`
+	ST2110  bool `json:"st2110"`
+	AES67   bool `json:"aes67"`
+	SRT     bool `json:"srt"`
 }
