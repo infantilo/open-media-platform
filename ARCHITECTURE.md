@@ -4781,3 +4781,24 @@ Mindest-Tone-Mapping SDR ↔ HDR (Qualitätsdienst später aus der Community), k
 SRT-Verbindungsbündelung (GStreamer 1.22), keine Anbindung fremder Buchungs-/Leitungsverwaltungssysteme, kein neuer Rechte-Kern.
 In der Entwicklungsumgebung gibt es weder PTP-Netzkarte noch 2110-Netz und keine echte Mobilfunkstrecke: Etiketten aus RTP-Zeitstempeln
 und Leitungsverhalten sind dort nur mit Software-Mitteln (lokale Sender, Systemuhr statt PTP) belegbar und werden so gekennzeichnet.
+
+## 34. Audio-Matrix `omp-audio-matrix` (Kap. 107, Plan 2026-11-24)
+
+### 34.1 Normen für Kanalbeschriftung (107.0, gelesen 2026-11-24)
+
+- **AMWA IS-04 v1.3.3**, Schema `source_audio.json` (specs.amwa.tv/is-04/releases/v1.3.3): `channels[]` ist Pflichtfeld einer Audio-Source;
+  je Kanal `label` (Pflicht, Freitext) und `symbol` (optional, „from VSF TR-03 Appendix A“). Zulässige Symbole: `L R C LFE Ls Rs Lss Rss Lrs Rrs
+  Lc Rc Cs HI VIN M1 M2 Lt Rt Lst Rst S`, `NSC001…NSC128` (nummerierter Quellkanal), `U01…U64` (undefinierter Kanal). Die Matrix übernimmt
+  genau diese Liste (`omp_mediaio::matrix::valid_symbol`).
+- **MXL-`flow_def`** (`third_party/mxl/examples/flow-configs/flow-audio.json`) kennt kein Kanalfeld; Labels gehören nach IS-04 an die Source.
+  Bis die Source-Registrierung im SDK Kanäle trägt, steht die Beschriftung als Tag `urn:x-omp:tag:channels/v1.0` (JSON-Text) am Flow
+  (eigener Namensraum, wird von Fremdsystemen ignoriert). **Offen (107.2):** `channels[]` an der IS-04-Source des Senders setzen.
+- Symbolbedeutung nach VSF TR-03 Anhang A selbst nicht gelesen (nur die Aufzählung aus dem IS-04-Schema); die Matrix prüft nur die Schreibweise.
+
+### 34.2 Umsetzung Kern (107.1)
+
+`nodes/omp-mediaio/src/matrix.rs` (Modell, Prüfung, Plan Kopie/Mischen/Stille, Teiler-Voreinstellung) und `rawmatrix.rs` (ein Thread, ein
+Ausgangstakt 10 ms mit 1 Block Spielraum, Lesen nach Sample-Index, Eingang ohne Daten = Stille). Entscheidungen: Kanalzahl eines Eingangs steht
+in der Konfiguration; der verbundene Flow muss mindestens so viele Kanäle haben. Ausgang mit neuer Kanalzahl → **neue Flow-ID**; gleiche Port-ID
+und Kanalzahl behalten den Flow (Umbenennen ändert nur die Anzeige). Grenzen: 16 Eingänge, 32 Ausgänge, 64 Kanäle, 16 Quellen je Kanal, Gain
+−120…+24 dB. Mischkanäle werden nicht begrenzt; Übersteuerung zählt `Shared::overs`.

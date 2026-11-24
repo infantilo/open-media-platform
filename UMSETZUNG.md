@@ -6958,3 +6958,92 @@ fremder Buchungs-/Leitungsverwaltungssysteme, Lautheitsangleichung (gehört zu d
 | 106.16 Inhaltsbasierte Messung | offen | | |
 | 106.17 Doku-Abschluss | erledigt (2026-11-22, uncommittet) | – | BENUTZERHANDBUCH §10p (Ablauf planen→testen→live→abbauen, „unverändert“, Rückwege, Grenzen), HANDBUCH Modul-mcr-Absatz (Überwachung, Alarme, Rollen, Kette, Betrieb, Grenzen), ENTWURF-MCR §9 Endstand, ARCHITECTURE §33.4a. Screenshots hell/dunkel und README-Zeile: siehe Prüfung unten |
 | Englische Handbücher (2026-11-23) | erledigt | 2026-11-23 | `docs/MANUAL.md` (= HANDBUCH.md) und `docs/USER-MANUAL.md` (= BENUTZERHANDBUCH.md): vollständige englische Fassungen, gleiche Abschnittsnummern, englische Oberflächenbezeichnungen; deutsche Originale verweisen darauf. **Pflege:** Änderungen am deutschen Handbuch im selben Arbeitsgang in die englische Fassung übernehmen (deutsch ist maßgeblich). Abgleich: `grep -c '^## ' ` beider Dateien muss gleich sein. |
+
+## Kapitel 107: Audio-Matrix `omp-audio-matrix` — freie Ein-/Ausgänge, Kreuzschiene, Kanal-Labels, MCR-Anbindung (Nutzerauftrag 2026-11-24, **umgesetzt, uncommittet**)
+
+**Auftrag (Nutzer):** Der Ton-Teiler (`omp-audio-split`, Kap. 106.19) hat eine beim Start feste Ausgangskonfiguration. Gebraucht wird
+(1) beliebige Ausgänge (Mono, Stereo, Mehrkanal) mit **Routing/Matrix**, (2) umgekehrt aus **mehreren verschiedenen Eingängen einen
+Mehrkanal-Flow (z. B. 16 Kanäle)** mit Routing, (3) **Labels je Kanal und Name je Flow**, (4) dieselbe Funktion im **MCR**.
+**Entscheidungen (Nutzer, 2026-11-24):** Eingänge und Ausgänge dürfen **zur Laufzeit** hinzukommen/wegfallen (kein Neustart);
+Kreuzpunkte sind standardmäßig **reines Kopieren** (bitgleich, ohne Latenz, wenig CPU), **optional mit Gain und Summe** (nur wo
+gebraucht, bezahlt nur dieser Pfad CPU/Latenz); im MCR muss die Funktion angeboten werden.
+
+### Entwurf
+
+**Ein Node für beides:** `omp-audio-matrix` (Katalog „Audio Matrix“). Teiler (1 Eingang → viele Ausgänge) und Kombinierer (viele
+Eingänge → 1 Ausgang) sind Sonderfälle derselben Matrix. `omp-audio-split` bleibt unverändert bestehen (MCR-Slot `splitter`, bestehende
+Workflows); die Matrix wird zusätzlich als Standard der neuen MCR-Funktion „Ton-Matrix“ angeboten.
+
+**Modell (JSON, eine Quelle der Wahrheit, Parameter `matrix.config`):**
+```
+{ "inputs":  [ {"id":"in1","name":"Kommentar","channels":["Mono"]},
+               {"id":"in2","name":"Programm","channels":["L","R"]} ],
+  "outputs": [ {"id":"out1","name":"PGM 16ch","channels":["PGM L","PGM R",…16 Labels]},
+               {"id":"out2","name":"Kommentar mono","channels":["Komm"]} ],
+  "routes":  [ {"out":"out1","ch":1,"in":"in2","inCh":1,"gainDb":0},   // Kopie (gainDb fehlt/0 und eine Quelle)
+               {"out":"out1","ch":9,"in":"in1","inCh":1},
+               {"out":"out1","ch":2,"in":"in2","inCh":2},
+               {"out":"out1","ch":2,"in":"in1","inCh":1,"gainDb":-6} ] }  // zweite Quelle auf dasselbe Ziel → Summe
+```
+- **Eingang** = ein NMOS-Empfänger (live per `add_receiver`/`remove_receiver`); Kanalzahl kommt vom verbundenen Flow, die Labels
+  stehen in der Konfiguration (fehlen sie, „1…n“). **Ausgang** = ein NMOS-Sender + ein MXL-Flow (live per `add_sender`/`remove_sender`),
+  `channel_count` = Länge der Label-Liste, Flow-Label = Ausgangsname, Kanal-Labels in der `flow_def` (Feld `channel_labels`/Tags,
+  Normprüfung in 107.1: NMOS IS-04 `channels[].label`/`symbol`, AES-Norm-Symbole „L/R/C/LFE…“ nach ST 2110-30/BCP-006 zuerst lesen).
+- **Matrix:** je Ausgangskanal 0…n Quellen. 0 = Stille; genau 1 mit Gain 0 dB = **Kopierpfad** (`copy_fragments`, bitgleich); sonst
+  **Mischpfad** (f32: Summe·10^(g/20), Begrenzung nur durch Hinweis „Übersteuerung möglich“, kein stilles Clippen). Mischpfad nur
+  für die betroffenen Ausgangskanäle, übrige Kanäle desselben Ausgangs bleiben Kopie.
+- **Zeitbezug:** alle MXL-Flows tragen TAI-Sample-Indizes; Eingänge werden **nach Index** gelesen (jeder Eingang ein Leser, ein
+  Ausgangs-Takt: `index` aus dem Jetzt, Batch wie `AUDIO_BATCH`). Ein Eingang, der nicht liefert, ergibt Stille auf seinen Kanälen
+  (Alarm/Anzeige „Eingang ohne Signal“), blockiert aber die anderen nicht. Eingänge dürfen nur 48 kHz `audio/float32`; sonst Ablehnung
+  mit Meldung (wie `check_split_source`). Latenz Kopierpfad = ein Batch; Mischpfad dasselbe (kein Zusatzpuffer).
+- **Laufzeitänderung ohne Aussetzer:** Routing/Gain/Labels ändern nur die Tabelle (RwLock, gilt ab nächstem Block). Ausgang
+  hinzufügen/löschen/Kanalzahl ändern erzeugt/löscht nur diesen Flow; andere Ausgänge laufen weiter. Kanalzahl-Änderung =
+  neuer Flow mit **gleicher Flow-ID** wäre ein Formatwechsel → Verbindungen werden neu verhandelt (IS-05 Re-Activate durch den
+  Orchestrator); in 107.2 klären, ob neue ID einfacher ist.
+- **Zustand:** `matrix.config` ist Teil des gesicherten Node-Zustands (Workflow-Stop/Start darf nichts verlieren, Memory
+  „Workflow Stop/Start“); Start-Option `OMP_MATRIX_CONFIG` nur als Vorgabe.
+- **UI (Matrix-Editor im Node-Panel, Muster der bestehenden Matrix-Ansicht, expliziter Speichern-Knopf, `t()` de/en):** Zeilen =
+  Quellkanäle (gruppiert nach Eingang, mit Label), Spalten = Zielkanäle (gruppiert nach Ausgang); Klick setzt Kreuzpunkt (Kopie),
+  Doppelklick/Menü → Gain; Schnellaktionen „Stereo-Paar 1:1“, „Mono → beide“, „Teilen in Einzelkanäle“, „16 aus N Eingängen
+  zusammensetzen“. Eingänge/Ausgänge anlegen, benennen, Kanalzahl, Kanal-Labels editierbar. Ein Dialog statt `confirm`.
+- **MCR:** neue Leitungsoption `normalize.audioMatrix` (löst `audioSplit` nicht ab; beide gleichzeitig verboten), Rolle
+  `<leitung>-matrix`, Slot `matrix` (Standard `omp-audio-matrix`; Vertrag: Empfänger/Sender entstehen aus `OMP_MATRIX_CONFIG`,
+  Sendername = Ausgangsname, Laufzeitänderung über `matrix.config`). Jeder Ausgang wird Workflow-Ausgang „<Leitung> · <Name>“;
+  zusätzliche Eingänge (z. B. Kommentator-Rückweg aus einer anderen Leitung/Quelle) per Verbindung im Event. Voreinstellungen:
+  `tracks`/`pairs` wie beim Teiler werden zu einer Matrix umgerechnet, damit die UI beides gleich bearbeitet.
+
+### Schritte (je Schritt eine Sitzung; Status pflegen)
+
+| Schritt | Inhalt | Prüfung |
+|---|---|---|
+| 107.0 Normen lesen | NMOS/IS-04-Kanalbeschriftung (`channels`, Symbole nach BCP-006/ST 2110-30), MXL-`flow_def`-Felder für Kanal-Labels; Ergebnis in ARCHITECTURE | Quellen mit Version im Text |
+| 107.1 Kern in `omp-mediaio` | `matrix.rs` (Modell, Validierung, Auflösung auf Kopier-/Mischtabelle, reiner Rechenteil ohne MXL) + `rawmatrix.rs` (Leser je Eingang, Schreiber je Ausgang, Index-Takt) | Rust-Tests: Kopie bitgleich, Summe+Gain, Stille bei fehlendem Eingang, Validierung; Live-Test `--ignored` mit 2 Quellen → 16 Kanäle |
+| 107.2 Node `omp-audio-matrix` | dynamische Empfänger/Sender, `matrix.config` (Get/Set mit Validierung), Zustand, Alarm „Eingang ohne Signal“, Katalog + `node-options.json` (de/en) | live: Ausgang anlegen/löschen ohne Aussetzer der anderen; Mono-/16-Kanal-Ausgang; Neustart behält Konfiguration |
+| 107.3 UI Matrix-Editor | Panel im Node-Paneel, Schnellaktionen, Labels, Speichern/Verwerfen | Browser mit echter Maus, Layout-Sprünge geprüft, UI-Test (`*-logic.ts`) |
+| 107.4 MCR-Anbindung | `audiomatrix.go` (Parsen/Umrechnen tracks/pairs), Slot `matrix`, Materialize, UI im Leitungsformular | Go-Tests wie `audiosplit_test.go`; live im Event |
+| 107.5 Doku | BENUTZERHANDBUCH + HANDBUCH §9 + `docs/*.md` (englisch), Katalogbeschreibung de/en, Doku-Index neu erzeugen | `sh docs/entwicklung/doku-index.sh` |
+| 107.6 Audiomischer-Bezug prüfen | Mischer bietet Matrix-Ausgänge als Quellen an (wie bei Kap. 106.19) | live mit 16-Kanal-Quelle |
+
+**Status-Checkliste Kapitel 107:**
+
+| Schritt | Stand |
+|---|---|
+| 107.0 Normen lesen | erledigt (2026-11-24, uncommittet): IS-04 v1.3.3 `source_audio.channels[]` (`label`, `symbol` nach VSF TR-03 Anh. A); MXL-`flow_def` hat kein Kanalfeld → Tag `urn:x-omp:tag:channels/v1.0`; Ergebnis in ARCHITECTURE §34.1. Offen: `channels[]` an der IS-04-Source (107.2) |
+| 107.1 Kern `omp-mediaio` | erledigt (2026-11-24, uncommittet): `matrix.rs` (7 Tests) + `rawmatrix.rs` (2 Tests + Live-Test `live_two_inputs_into_16_channels`, `--ignored`, grün: 2 Quellen → 16 Kanäle + Mono mit −6 dB, Summe, gleicher Flow bei gleicher Kanalzahl, neue ID bei anderer Kanalzahl, getrennter Eingang = Stille, falsche Kanalzahl abgelehnt). serde/serde_json jetzt feste Abhängigkeiten von `omp-mediaio`. **Nicht gemessen:** CPU/Latenz (Plan: ~1 Block + 1 Block Spielraum) |
+| 107.2 Node `omp-audio-matrix` | erledigt (2026-11-24, uncommittet; Debug-Build, Release-Build noch nicht erstellt): `nodes/omp-audio-matrix` (Port 9397), Parameter `matrix.config` (JSON lesen/schreiben, Prüfung vor Anwendung, Fehler in `matrix.error`), `matrix.status`, `flowing`; Eingänge = dynamische Receiver (`add_receiver`), Ausgänge = dynamische Sender mit eigenem Flow; `GET/POST /state` sichert Konfiguration + Receiver-/Sender-IDs je Port (IDs bleiben nach Neustart gleich). SDK: neues Feld `SenderSpec::audio_channels` → IS-04-Source `channels[]` mit Label/Symbol. Alarm `matrix-input-silent` (raised/cleared) nach 6 s ohne Signal an verbundenem Eingang. Katalog + `node-options.json` (de/en) eingetragen. **Live (Registry des Entwicklungssystems, eigene Test-PIDs, private Domain):** Quelle 4 Kanäle → Eingang verbunden/„live“, Ausgänge Mono + Stereo registriert, Source-Kanäle `Links/L, Rechts/R` sichtbar; ungültige Konfiguration abgelehnt, alter Stand bleibt; Ausgang „Wide8“ (8 Kanäle) live angelegt; Stereo → 3 Kanäle = neue Flow-ID bei **gleicher Sender-ID**; Ausgang gelöscht + umbenannt (Sender verschwindet bzw. behält ID); Neustart + `POST /state` stellt alle IDs identisch wieder her. **Offen:** Inhalt der Ausgänge am echten Signal nicht gemessen (Kernlogik durch Live-Test 107.1 belegt); Eingangs-Umbenennung wirkt erst bei neuem Receiver (Label bleibt); Orchestrator zieht Verbindungen bei neuer Flow-ID noch **nicht** nach (Empfänger müssen neu aktiviert werden) — in 107.4/107.6 klären; kein UI (107.3); Release-Binary (`make nodes`) |
+| 107.3 UI Matrix-Editor | erledigt (2026-11-24, uncommittet): `ui/modules/matrix-editor/` — `matrix-logic.ts` (Modell, Prüfung wie der Node, Kreuzpunkte, Ports, Kanalzahl, Labels/Symbole, Schnellaktionen 1:1 / Mono auf alle / in Einzelkanäle bzw. Paare teilen / alle Eingänge zusammensetzen) + `matrix-logic_test.ts` (7 Tests grün), `panel.ts` (Element `omp-audio-matrix-panel`: Kreuzschiene mit festen Zellgrößen, Klick = Kopie ersetzt, Strg/Alt-Klick = zusätzliche Quelle (Summe), Rechtsklick wählt Kreuzpunkt für Gain, Port-Listen mit Namen/Kanalzahl/Label/Symbol (TR-03-Liste), Signal-Chip je Eingang aus `matrix.status`, Entwurfskopie + Speichern/Verwerfen, Löschen mit zweitem Klick statt confirm, de/en). Auslieferung im Node (`ui/manifest.json`, `ui/bundle.js` per `include_str!`, Makefile-Zeile bei `make build`). **Geprüft:** headless Chromium über CDP gegen Attrappen-Server mit echten Mausereignissen (Linksklick, Rechtsklick, Speichern): Kreuzpunkt gesetzt, Gain-Zeile, gespeicherte Konfiguration stimmt, Zeilen für Meldungen/Kreuzpunkt springen nicht (Positionen und Höhen vor/nach dem Klick gleich), Screenshot angesehen; Bundle wird vom echten Node ausgeliefert. **Nicht geprüft:** im echten Orchestrator-UI/Node-Fenster (Anmeldung, isolierter Rahmen), Bedienung mit physischer Maus, große Matrizen (16×64 / 32×64) auf Geschwindigkeit; Stream-Deck-Belegung fehlt; Gain-Eingabe nur in 0,5-dB-Schritten per Zahlenfeld |
+| 107.4 MCR-Anbindung | erledigt (2026-11-24, uncommittet; **nicht live im Event geprüft**): Go `audiomatrix.go` — `normalize.audioMatrix` = `{"mode":"tracks"|"pairs"}` (wie der Tonteiler, aber als Matrix: ein Eingang „Input“ mit Hauskanälen, Kopierkreuzpunkte) **oder** volle Konfiguration `inputs/outputs/routes` (Prüfung spiegelt den Node: Grenzen 16/32/64/16 Quellen, eindeutige IDs/Namen, TR-03-Symbole, Gain −120…+24, doppelte Kreuzpunkte; für den MCR mindestens 1 Eingang + 1 Ausgang; erster Eingang ≤ Hauskanäle). Neben `audioSplit` verboten. Materialize: Rolle `<leitung>-matrix` (Slot `matrix`, Standard `omp-audio-matrix`, austauschbar, Eingangs-Port = Name des ersten Eingangs oder `Ports.AudioIn` des Slots), hinter dem Ton-Ausgang der Kette (auch hinter getrenntem A/V-Delay), Umgebung `OMP_MATRIX_CONFIG`, jeder Ausgang wird Workflow-Ausgang „<Leitung> · <Name>“; `LineRoles.Matrix/MatrixOutputs`. Weitere Eingänge (z. B. Kommentator) verbindet der Nutzer im Event, sie bleiben bis dahin ohne Signal (kein Alarm, solange unverbunden). UI: Leitungsformular → Block Ton-Teiler hat jetzt „Matrix“ (JSON-Feld, `{"mode":"pairs"}` oder volle Konfiguration; Fehler bei ungültigem JSON), Slot-Zeile „Ton-Matrix“ im Reiter Hausformat, Texte de/en. Tests: Go `audiomatrix_test.go` (Formen, Fehlerfälle, Auflösung tracks/pairs/voll, Ausschluss mit audioSplit, Materialize inkl. A/V-Delay und Fremd-Node im Slot, ohne Einstellung keine Rolle) + gesamtes MCR-Paket grün; Deno: 44 MCR-UI-Tests grün, `deno check` sauber. **Offen:** (1) **Neuverbinden bei neuer Flow-ID:** Ändert sich zur Laufzeit die Kanalzahl eines Matrix-Ausgangs, behält der Sender seine ID, aber der Flow wechselt; angeschlossene Empfänger zeigen noch auf den alten Flow und müssen neu aktiviert werden — der Orchestrator macht das noch nicht (Edge-Cache `graph` kennt nur Verbindungen, kein Nachziehen) → eigener Schritt (107.6a), bis dahin im Flow-Editor Verbindung trennen/neu setzen; Änderungen von Routing, Gain, Labels und Namen sind davon nicht betroffen. (2) Kein komfortabler Matrix-Editor im Leitungsformular (nur JSON; Bearbeitung zur Laufzeit im Node-Panel, aber Änderungen dort überleben das Beenden des Events nicht, weil Materialize bei jedem Start frisch aus der Leitung aufbaut — Übernahme ins Leitungsformular fehlt). (3) Lauf im echten Event nach Neustart des Orchestrators (beendet die lokalen Nodes → erst wenn nichts läuft) |
+| 107.6a Neuverbinden bei neuer Flow-ID | erledigt (2026-11-24, uncommittet; nur mit Attrappen geprüft): `graph.Service` merkt sich je Sender den Flow (`noteSenderFlows`, bei `node.added`/`node.updated`); wechselt der Flow bei gleicher Sender-ID (Matrix-Ausgang mit neuer Kanalzahl), aktiviert `Rewire` alle mit dem Sender verbundenen Empfänger per IS-05-PATCH (gleiche Sender-ID, der Node löst den Flow neu auf; im Hintergrund, nicht im Poller-Takt). Ein kurz fehlender Sender (Abmelden/Anmelden) zählt nicht als Wechsel; nicht erreichbare Empfänger blockieren die anderen nicht. Go-Tests `TestNoteSenderFlowsReportsOnlyRealChanges`, `TestRewireReactivatesOnlyReceiversOfThatSender`. **Nicht live geprüft** (braucht Orchestrator-Neustart, beendet die lokalen Nodes) |
+| 107.5 Doku | erledigt (2026-11-24, uncommittet): HANDBUCH (Node-Tabelle) + MANUAL, BENUTZERHANDBUCH + USER-MANUAL (Absatz „Freie Ausgänge und Kreuzschiene“ im MCR-Abschnitt), README-Zeile, Katalogtexte de/en, `node-options.json`, ARCHITECTURE §34, Doku-Index neu |
+| 107.6 Audiomischer | geprüft durch Lesen (2026-11-24): die Quellenerkennung des Mischers nimmt jeden MXL-Audio-Sender der Registry (`discovery_loop`), Matrix-Ausgänge (dynamisch per `add_sender`) sind davon nicht unterscheidbar von den Teiler-Ausgängen, die in Kap. 106.19 live am Mischer belegt wurden (Mono und Stereo). **Nicht** erneut live mit einem Matrix-Ausgang am Mischer geprüft |
+| Release-Binary | gebaut (`nodes/target/release/omp-audio-matrix`, mit `LD_LIBRARY_PATH` aus `deploy/dev/mxl.env` live gestartet): Konfiguration per Start-Option, Verbindung per IS-05, Zustand `GET/POST /state` — Empfänger- **und** Sender-IDs bleiben nach Neustart gleich |
+
+**Fund beim Abschluss:** Der Orchestrator ersetzt beim Sichern des Zustands jede Sender-ID einer eigenen Rolle durch einen Platzhalter (`workflows/state.go`, Listenposition). Der Matrix-Node legt seine Sender erst **nach** dem Wiederherstellen an, der Platzhalter wäre unauflösbar gewesen. Deshalb stehen die Sender-IDs im `/state` umgekehrt und ohne Bindestriche (`senderKeys`, `enc_id`/`dec_id`, Test) — ein Klartext-`senders` hätte nach einem Neustart ins Leere gezeigt.
+
+**Gesamtstand Kapitel 107 (2026-11-24): alle Schritte umgesetzt, uncommittet.** **Was bewusst nicht belegt ist:** (1) Ablauf im echten Event nach Neustart des Orchestrators (Zustandssicherung der Matrix über Stopp/Start, Rewire bei Flow-Wechsel, Rolle `-matrix`, Ausgänge im Event) — Neustart beendet die lokalen Nodes; (2) Bedienung des Panels im echten Node-Fenster mit physischer Maus (nur Chromium über CDP gegen Attrappe); (3) Matrix-Ausgang am Audiomischer; (4) CPU/Latenz des Kopier- und Mischpfads (erwartet ~20 ms, nicht gemessen); (5) kein komfortabler Matrix-Editor im Leitungsformular (nur JSON; Änderungen im Node-Fenster bleiben über den gesicherten Zustand erhalten, das Formular ist nur Startvorgabe); (6) Eingangs-Umbenennung wirkt erst bei einem neu angelegten Empfänger.
+
+**Entschieden (Nutzer 2026-11-24):** neue Flow-ID bei geänderter Kanalzahl, Orchestrator zieht Verbindungen nach; Grenzen 64 Kanäle/32 Ausgänge/16 Eingänge.
+
+**Offene Fragen an den Nutzer vor 107.1 (beantwortet 2026-11-24: neue Flow-ID, Grenzen passen):** (a) Kanalzahl eines bestehenden Ausgangs ändern: neue Flow-ID (einfach, Verbindungen
+müssen neu gesetzt werden) oder gleiche ID (Orchestrator verhandelt neu)? Vorschlag: neue ID, Orchestrator zieht Verbindungen nach.
+(b) Obergrenzen: 64 Kanäle je Ausgang, 32 Ausgänge, 16 Eingänge — ausreichend?

@@ -102,6 +102,7 @@ Erzeugt mit `sh docs/entwicklung/doku-index.sh`. Abschnitt gezielt lesen: Read m
 6728 Kapitel 104: PTZ-Kamerasteuerung `omp-ptz`
 6741 Kapitel 105: TAMS — zeitadressierter Medienspeicher: Aufnahme, Wiedergabe, optional eigener Speicher
 6783 Kapitel 106: Hauptkontrollraum (MCR / Ingest-Leitstelle) — Leitungen, Hausformat nur bei Abweichung, A/
+6962 Kapitel 107: Audio-Matrix `omp-audio-matrix` — freie Ein-/Ausgänge, Kreuzschiene, Kanal-Labels, MCR-An
 
 ## ARCHITECTURE.md
 
@@ -138,3 +139,4 @@ Erzeugt mit `sh docs/entwicklung/doku-index.sh`. Abschnitt gezielt lesen: Read m
 4619 31. Netzwerkarme Platzierung: Verbünde statt Einzelrollen
 4642 32. Getrennte MXL-Domains
 4651 33. Hauptkontrollraum (MCR / Ingest-Leitstelle)
+4785 34. Audio-Matrix `omp-audio-matrix` (Kap. 107, Plan 2026-11-24)

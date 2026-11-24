@@ -515,6 +515,7 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 - **omp-audio-split** — splits a multichannel audio flow (e.g. 16 tracks) into separate output flows (1/2 programme, 3/4 IT, …), bit-exact
   (video or audio, no conversion by default; the only place where domains are
   joined on purpose).
+- **omp-audio-matrix** — audio crosspoint matrix with free inputs/outputs (mono up to 64 channels, names and channel labels), changeable at runtime; bit-exact copy by default, optional gain/sum per crosspoint; splitter and combiner (e.g. several sources → one 16-channel flow) in one node, with a panel and MCR integration.
 - **omp-capture-card** — SDI/IP capture card bridge for Blackmagic DeckLink,
   AJA and (via an operator-built GStreamer plugin) other vendors' SDK cards; one
   instance per card. The start wizard lists the detected cards of the
