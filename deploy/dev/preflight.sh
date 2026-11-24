@@ -300,7 +300,7 @@ if command -v ss >/dev/null 2>&1; then
     [ "$port" = "8091" ] && [ "${proc:-}" = "omp-supervisor" ] && continue
     if [ "$omp_running" = "1" ]; then
       case "${proc:-}" in
-        ""|nats-server|etcd|postgres|patroni|conmon|rootlessport|slirp4netns|pasta|omp-*|nmos-cpp-*) continue ;;
+        ""|nats-server|etcd|postgres|patroni|conmon|rootlessport|slirp4netns|pasta|pasta.*|omp-*|nmos-cpp-*) continue ;;
       esac
     fi
     err "Port $port ($name) is in use" "${proc:+by \"$proc\"}" "Stop the occupying process: ss -ltnp | grep :$port   (an earlier run that did not shut down cleanly? 'make stop' or kill <PID>)"

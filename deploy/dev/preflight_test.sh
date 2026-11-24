@@ -50,6 +50,13 @@ s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind
   check "released port is no longer an error" bash -c '! grep -q "is in use" <<<"$0"' "$OUT"
 fi
 
+# 3b) Podman port forwarder of the own containers (Rocky 10: "pasta.avx2") must pass the allowlist
+PAT="$(grep -o '""|nats-server[^)]*' "$PF" | head -n1)"
+for pn in pasta pasta.avx2 rootlessport conmon; do
+  check "allowlist accepts $pn" bash -c 'case "$1" in '"$PAT"') exit 0;; esac; exit 1' _ "$pn"
+done
+check "allowlist rejects foreign process" bash -c 'case "$1" in '"$PAT"') exit 1;; esac; exit 0' _ nginx
+
 # 4) JSON output is valid
 if command -v python3 >/dev/null 2>&1; then
   PREFLIGHT_PORTS="" "$PF" --for=start --json 2>/dev/null | python3 -c "
