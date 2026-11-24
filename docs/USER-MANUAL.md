@@ -2870,6 +2870,16 @@ start key, numbers with a range become dials on the "+" / "+ XL". Your own nodes
 is operated only in the open browser tab (no background service). **Not yet checked on the real device** (simulator and real stack only): rotation
 of the pictures on the "+" and "+ XL", USB duration, reconnecting, dial direction of rotation — checklist at the end of `UMSETZUNG.md`.
 
+### Main control room (MCR)
+
+While open, the MCR view (workstation "Main control room") registers as the **MCR** tab on the device. **Event list:** one key per event (state,
+number of open alarms; LIVE red, test yellow, faults red); a press opens the event. **Event page:** **ZURÜCK** (back), the next lifecycle step (e.g. "→ TEST",
+"→ LIVE"), further allowed steps (back to planning, cancel), **QUITT. ALLE** (acknowledge all) and the **line keys** (traffic-light colour, alarm count). Anything that
+affects the programme or tears something down (to LIVE, teardown, finish, cancel, everything leaving LIVE) needs **two presses**: the first turns the key red
+("NOCHMAL", 4 s), only the second switches — the same safeguard as the on-screen confirmation dialog. If capacity does not fit the test, "→ TEST" also needs the second press. The
+**line key** selector (HÖREN listen / MESSGERÄT meter / QUITTIEREN acknowledge / PIP HALTEN hold PiP) decides what a press on a line does. Missing rights (test or live on the
+event) dim the key; the server checks anyway.
+
 ## 10g-2. MIDI control surfaces (motor-fader surface at the audio mixer)
 
 A MIDI surface in **Mackie Control** mode (e.g. **iCON V1-M** or **P1-M**, with extender **V1-X/P1-X** for 16 faders) operates the audio mixer: **faders** (motorized, follow the screen and other operators),

@@ -17,6 +17,7 @@ interface Host {
   authToken(): string | null;
   features(force?: boolean): Promise<FeatureSet | null>;
   directory(force?: boolean): Promise<Directory | null>;
+  deckTab?: { register(id: string, label: string, el: HTMLElement): void; unregister(id: string): void };
 }
 
 function host(): Host {
@@ -40,3 +41,7 @@ export const features = (force?: boolean): Promise<FeatureSet | null> => host().
 
 /** Nutzer und Gruppen zum Auswählen von Verantwortlichen (null, wenn die Person sie nicht sehen darf). */
 export const directory = (force?: boolean): Promise<Directory | null> => host().directory(force);
+
+/** Stream Deck: Ansicht als Tab am Gerät anmelden/abmelden (ohne Shell-Unterstützung stiller Leerlauf). */
+export const deckTabRegister = (id: string, label: string, el: HTMLElement): void => host().deckTab?.register(id, label, el);
+export const deckTabUnregister = (id: string): void => host().deckTab?.unregister(id);

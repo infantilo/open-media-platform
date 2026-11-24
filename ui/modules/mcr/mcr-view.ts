@@ -1,6 +1,6 @@
 // Arbeitsplatz „Hauptkontrollraum“ (UMSETZUNG 106.15): Eventliste, Event-Detail mit Leitungskarten, Vorlagen, Hausformat.
 // Aufbau: Karten werden einmal gebaut und danach nur noch in ihren Werten aktualisiert (feste Größen, kein Springen).
-import { apiFetch, confirmDialog, dateLocale, features, getLang, showToast, t, whoami } from "../host.ts";
+import { apiFetch, confirmDialog, deckTabRegister, deckTabUnregister, dateLocale, features, getLang, showToast, t, whoami } from "../host.ts";
 import { hasFeature } from "../../kit/features.ts";
 import { promptDialog } from "../../kit/omp-prompt.ts";
 import { dateTime, ensureStyle, field, h, input, modal, nextFullHour, note, quickTimes, segmented, select, toLocalValue } from "./mcr-dom.ts";
@@ -105,6 +105,7 @@ class McrView extends HTMLElement {
   connectedCallback() {
     ensureStyle();
     this.style.cssText = "display:block;box-sizing:border-box;width:100%;height:100%;";
+    deckTabRegister("mcr", "MCR", this); // Stream Deck: Tab für diese Ansicht (Adapter in der Shell)
     if (!this.#loaded) {
       this.#loaded = true;
       void this.#init();
@@ -112,6 +113,7 @@ class McrView extends HTMLElement {
   }
 
   disconnectedCallback() {
+    deckTabUnregister("mcr");
     clearInterval(this.#t1);
     clearInterval(this.#t2);
     clearInterval(this.#t3);

@@ -8,6 +8,7 @@ import { proxyIO } from "../autoraster.ts";
 import { audioMixerAdapter } from "./audio-mixer.ts";
 import { deviceHubAdapter } from "./device-hub.ts";
 import { lowlatMixerAdapter } from "./lowlat-mixer.ts";
+import { mcrAdapter, mcrIO } from "./mcr.ts";
 import { ografAdapter } from "./ograf.ts";
 import { coreIO, xyPanelAdapter } from "./xy-panel.ts";
 import { videoMixerAdapter, type VideoMixerApi } from "./video-mixer.ts";
@@ -23,6 +24,7 @@ const FACTORIES: Record<string, Factory | undefined> = {
   "omp-ograf-panel": (_el, nodeId) => ografAdapter(proxyIO(nodeId)),
   "omp-device-hub-panel": (_el, nodeId) => deviceHubAdapter(proxyIO(nodeId)),
   "omp-audio-mixer-panel": (_el, nodeId) => audioMixerAdapter(proxyIO(nodeId)),
+  "omp-mcr-view": () => mcrAdapter(mcrIO()),
   "omp-lowlat-mixer-panel": (_el, nodeId) => lowlatMixerAdapter(proxyIO(nodeId)),
 };
 

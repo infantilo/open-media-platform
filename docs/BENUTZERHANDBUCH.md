@@ -2896,6 +2896,16 @@ Starttaste, Zahlen mit Bereich werden am „+“ / „+ XL“ zu Dials. Eigene N
 wird nur im geöffneten Browser-Tab bedient (kein Hintergrunddienst). **Noch nicht am echten Gerät geprüft** (nur Simulator und echter Stack): Drehung
 der Bilder beim „+“ und „+ XL“, USB-Dauer, Wiederverbinden, Dial-Drehsinn — Prüfliste am Ende von `UMSETZUNG.md`.
 
+### Hauptkontrollraum (MCR)
+
+Die MCR-Ansicht (Arbeitsplatz „Hauptkontrollraum“) meldet sich, solange sie geöffnet ist, als Tab **MCR** am Gerät an. **Eventliste:** eine Taste je
+Event (Zustand, Anzahl offener Alarme; LIVE rot, Test gelb, Fehler rot hinterlegt); Druck öffnet das Event. **Event-Seite:** **ZURÜCK**, der nächste
+Schritt im Ablauf (z. B. „→ TEST“, „→ LIVE“), weitere erlaubte Schritte (zurück in die Planung, Abbrechen), **QUITT. ALLE** und die
+**Leitungstasten** (Ampelfarbe, Anzahl Alarme). Was auf Sendung wirkt oder etwas abbaut (nach LIVE, Abbau, Beenden, Abbrechen, alles aus LIVE heraus) braucht
+**zwei Drücke**: der erste färbt die Taste rot („NOCHMAL“, 4 s), erst der zweite schaltet — dieselbe Absicherung wie der Bestätigungsdialog am Bildschirm.
+Passt die Kapazität für den Test nicht, verlangt auch „→ TEST“ den zweiten Druck. Die Taste **Leitungstaste** (HÖREN / MESSGERÄT / QUITTIEREN / PIP HALTEN)
+legt fest, was ein Druck auf eine Leitung bewirkt. Fehlendes Recht (Test bzw. Sendung am Event) sperrt die Taste gedimmt; der Server prüft ohnehin.
+
 ## 10g-2. MIDI-Pulte (Fahrfader-Pult am Audiomischer)
 
 Ein MIDI-Pult mit **Mackie-Control**-Betrieb (z. B. **iCON V1-M** oder **P1-M**, mit Erweiterung **V1-X/P1-X** für 16 Fader) bedient den Audiomischer: **Fader** (mit Motor, folgt dem Bildschirm und anderen Bedienern),
