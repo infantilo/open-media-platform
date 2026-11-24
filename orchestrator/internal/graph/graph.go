@@ -146,6 +146,9 @@ type Service struct {
 
 	mu    sync.RWMutex
 	edges map[string]Edge // Schlüssel: Receiver-ID == Edge-ID
+	// flows: zuletzt gesehener Flow je Sender (Kap. 107.6a). Wechselt der Flow eines Senders bei gleicher Sender-ID (z. B. Matrix-Ausgang
+	// mit neuer Kanalzahl), müssen angeschlossene Empfänger neu aktiviert werden, sonst zeigen sie noch auf den alten Flow.
+	flows map[string]string
 }
 
 // NewService verbindet einen NodeLister mit einem IS-05-Client und
@@ -153,7 +156,7 @@ type Service struct {
 // einem LogPublisher für den zentralen Log-Kanal (ARCHITECTURE.md
 // §25.2, UMSETZUNG.md D19).
 func NewService(nodes NodeLister, client is05Client, events EventPublisher, logs LogPublisher) *Service {
-	return &Service{nodes: nodes, is05: client, events: events, logs: logs, edges: map[string]Edge{}}
+	return &Service{nodes: nodes, is05: client, events: events, logs: logs, edges: map[string]Edge{}, flows: map[string]string{}}
 }
 
 // publishLog — s. LogPublisher-Doku. Stiller No-Op ohne konfigurierten
@@ -229,6 +232,12 @@ func logEdgeDivergence(previous, fresh map[string]Edge) {
 // einer bestehenden Node wird spätestens vom nächsten periodischen
 // reconcileOnce (Run) erfasst.
 func (s *Service) HandleNodeEvent(ctx context.Context, eventType string, node registry.NodeView) {
+	if eventType == "node.added" || eventType == "node.updated" {
+		// Flow-Wechsel bei gleicher Sender-ID: Empfänger im Hintergrund neu aktivieren (IS-05-Aufrufe nicht im Poller-Takt).
+		for _, id := range s.noteSenderFlows(node) {
+			go s.Rewire(context.WithoutCancel(ctx), id)
+		}
+	}
 	switch eventType {
 	case "node.removed":
 		s.mu.Lock()
@@ -251,6 +260,53 @@ func (s *Service) HandleNodeEvent(ctx context.Context, eventType string, node re
 			}
 		}
 	}
+}
+
+// noteSenderFlows merkt sich den Flow jedes Senders der Node und liefert die Sender, deren Flow sich seit dem letzten Stand geändert hat.
+// Ein kurzzeitig fehlender Sender (Abmelden und neu Anmelden) ändert den gemerkten Stand nicht.
+func (s *Service) noteSenderFlows(node registry.NodeView) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var changed []string
+	for _, snd := range node.Senders {
+		if snd.FlowID == "" {
+			continue
+		}
+		if prev, ok := s.flows[snd.ID]; ok && prev != snd.FlowID {
+			changed = append(changed, snd.ID)
+		}
+		s.flows[snd.ID] = snd.FlowID
+	}
+	return changed
+}
+
+// Rewire aktiviert alle Empfänger neu, die mit senderID verbunden sind (gleicher Sender, IS-05-PATCH mit derselben Sender-ID: der Node
+// löst den Flow dabei neu auf). Keine Schleifenprüfung und kein Sender-PATCH nötig: die Verbindung besteht ja schon.
+// Rückgabe: Anzahl erfolgreich neu aktivierter Empfänger.
+func (s *Service) Rewire(ctx context.Context, senderID string) int {
+	ctx = tracing.Ensure(ctx)
+	views := s.nodes.List()
+	n := 0
+	for _, e := range s.snapshotEdges() {
+		if e.FromSender != senderID {
+			continue
+		}
+		node, ok := findNodeByReceiver(views, e.ToReceiver)
+		if !ok || node.APIBaseURL == "" {
+			continue
+		}
+		sender := senderID
+		if err := s.is05.PatchStaged(ctx, node.APIBaseURL, e.ToReceiver, &sender, true); err != nil {
+			slog.Warn("graph rewire: receiver reactivation failed", "receiver", e.ToReceiver, "sender", senderID, "error", err)
+			s.publishLog(ctx, "warn", fmt.Sprintf("flow of sender %s changed; reactivating receiver %s failed: %v", senderID, e.ToReceiver, err), node.ID)
+			continue
+		}
+		n++
+	}
+	if n > 0 {
+		slog.Info("graph rewire: receivers reactivated after flow change", "sender", senderID, "receivers", n)
+	}
+	return n
 }
 
 func (s *Service) setEdge(e Edge) {

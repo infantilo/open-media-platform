@@ -56,7 +56,7 @@ interface CardRefs {
 }
 
 interface Slot { nodeType?: string; video?: boolean; audio?: boolean; data?: boolean; strict?: boolean; ports?: Record<string, string>; env?: Record<string, string>; params?: Record<string, unknown>; maxFrames?: number }
-interface Slots { normalizer?: Slot; converter?: Slot; avdelay?: Slot; splitter?: Slot }
+interface Slots { normalizer?: Slot; converter?: Slot; avdelay?: Slot; splitter?: Slot; matrix?: Slot }
 
 class McrView extends HTMLElement {
   #tab: "wall" | "events" | "timeline" | "alarms" | "templates" | "house" = "wall";
@@ -924,7 +924,7 @@ class McrView extends HTMLElement {
     const slotErrors = new Set<HTMLElement>(); // Felder mit ungültiger Eingabe: Speichern bleibt gesperrt
     const row = (key: keyof Slots, label: string, withKinds: boolean) => {
       const s = (cur[key] ??= { nodeType: "" });
-      const nt = this.#typeSelect(s.nodeType ?? "", withKinds && key !== "splitter" ? { emptyLabel: t("mcr.slots.internal") } : {});
+      const nt = this.#typeSelect(s.nodeType ?? "", withKinds && key !== "splitter" && key !== "matrix" ? { emptyLabel: t("mcr.slots.internal") } : {});
       nt.addEventListener("change", () => (s.nodeType = nt.value));
       const cb = (k: "video" | "audio" | "data" | "strict", lbl: string, title?: string) => {
         const c = h("input", { type: "checkbox" }) as HTMLInputElement;
@@ -1003,7 +1003,7 @@ class McrView extends HTMLElement {
       if (r.ok) await this.#loadGlobal();
     });
     return h("div", { class: "mcr-form", style: "margin-top:18px" }, h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.slots.title")), note(t("mcr.slots.hint")), note(t("mcr.slots.override")),
-      h("div", { class: "mcr-chain-params" }, row("normalizer", t("mcr.slots.normalizer"), false), row("converter", t("mcr.slots.converter"), true), row("avdelay", t("mcr.slots.avdelay"), true), row("splitter", t("mcr.slots.splitter"), false)),
+      h("div", { class: "mcr-chain-params" }, row("normalizer", t("mcr.slots.normalizer"), false), row("converter", t("mcr.slots.converter"), true), row("avdelay", t("mcr.slots.avdelay"), true), row("splitter", t("mcr.slots.splitter"), false), row("matrix", t("mcr.slots.matrix"), false)),
       h("div", { style: "display:flex;gap:12px;align-items:center" }, save, out)));
   }
 

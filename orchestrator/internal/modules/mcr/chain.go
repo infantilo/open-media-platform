@@ -109,11 +109,13 @@ type Slots struct {
 	AVDelay    Slot `json:"avdelay"`
 	// Splitter: Ton-Teiler je Leitung (Standard `omp-audio-split`), teilt Mehrkanalton in einzelne Ausgänge (audiosplit.go).
 	Splitter Slot `json:"splitter"`
+	// Matrix: Ton-Matrix je Leitung (Standard `omp-audio-matrix`, audiomatrix.go): freie Ausgänge, Kreuzschiene, Kanal-Labels.
+	Matrix Slot `json:"matrix"`
 }
 
 // DefaultSlots: ohne Einstellung wie bisher (alles im Normalizer).
 func DefaultSlots() Slots {
-	return Slots{Normalizer: Slot{NodeType: NodeNormalizer, Video: true, Audio: true}, Splitter: Slot{NodeType: NodeAudioSplit, Audio: true}}
+	return Slots{Normalizer: Slot{NodeType: NodeNormalizer, Video: true, Audio: true}, Splitter: Slot{NodeType: NodeAudioSplit, Audio: true}, Matrix: Slot{NodeType: NodeAudioMatrix, Audio: true}}
 }
 
 // normalized füllt den Normalizer-Standard nach.
@@ -124,13 +126,16 @@ func (sl Slots) normalized() Slots {
 	if strings.TrimSpace(sl.Splitter.NodeType) == "" {
 		sl.Splitter = DefaultSlots().Splitter
 	}
+	if strings.TrimSpace(sl.Matrix.NodeType) == "" {
+		sl.Matrix = DefaultSlots().Matrix
+	}
 	return sl
 }
 
 // Validate: Typnamen plausibel; ein getrennter Node muss mindestens eine Art tragen.
 func (sl Slots) Validate() error {
 	sl = sl.normalized()
-	for name, s := range map[string]Slot{"Normalizer": sl.Normalizer, "Converter": sl.Converter, "A/V-Delay": sl.AVDelay, "Ton-Teiler": sl.Splitter} {
+	for name, s := range map[string]Slot{"Normalizer": sl.Normalizer, "Converter": sl.Converter, "A/V-Delay": sl.AVDelay, "Ton-Teiler": sl.Splitter, "Ton-Matrix": sl.Matrix} {
 		t := strings.TrimSpace(s.NodeType)
 		if t == "" {
 			continue
@@ -138,7 +143,7 @@ func (sl Slots) Validate() error {
 		if !nodeTypeRe.MatchString(t) {
 			return bad("Funktion %s: Node-Typ „%s“ ungültig", name, s.NodeType)
 		}
-		if name != "Normalizer" && name != "Ton-Teiler" && !s.Video && !s.Audio {
+		if name != "Normalizer" && name != "Ton-Teiler" && name != "Ton-Matrix" && !s.Video && !s.Audio {
 			return bad("Funktion %s: Node trägt weder Bild noch Ton", name)
 		}
 		if s.MaxFrames < 0 || s.MaxFrames > 250 {
@@ -186,6 +191,12 @@ func (c ChainConfig) autoStages() []Stage {
 func (c ChainConfig) splitterType() string { return c.Slots.normalized().Splitter.NodeType }
 func (c ChainConfig) splitterIn() string {
 	return orDefault(c.Slots.normalized().Splitter.Ports.AudioIn, "Receiver 1")
+}
+
+// matrixType: Node-Typ der Ton-Matrix; der Eingangs-Port ist der Name des ersten Eingangs der Konfiguration, solange der Slot keinen eigenen nennt.
+func (c ChainConfig) matrixType() string { return c.Slots.normalized().Matrix.NodeType }
+func (c ChainConfig) matrixIn(firstInput string) string {
+	return orDefault(c.Slots.normalized().Matrix.Ports.AudioIn, firstInput)
 }
 
 // normalizerType: Node-Typ des Hauptknotens je Leitung.

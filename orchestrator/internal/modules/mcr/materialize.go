@@ -38,6 +38,9 @@ type LineRoles struct {
 	// Split: Rolle des Tonteilers dieser Leitung (leer = keiner); SplitOutputs: seine Ausgänge in Hauskanälen.
 	Split        string     `json:"split,omitempty"`
 	SplitOutputs []SplitOut `json:"splitOutputs,omitempty"`
+	// Matrix: Rolle der Ton-Matrix dieser Leitung (leer = keine); MatrixOutputs: Namen ihrer Ausgänge.
+	Matrix        string   `json:"matrix,omitempty"`
+	MatrixOutputs []string `json:"matrixOutputs,omitempty"`
 	// Verarbeitungskette (106.13g): Stufen vor und nach dem Normalizer in Reihenfolge.
 	Pre  []StageRole `json:"pre,omitempty"`
 	Post []StageRole `json:"post,omitempty"`
@@ -367,6 +370,23 @@ func Materialize(e Event, global *HouseFormat, secretsDir string, chain ...Chain
 			for _, so := range splitOuts {
 				pn := l.Name + " · " + so.Name
 				def.Interface.Outputs = append(def.Interface.Outputs, workflows.InterfacePort{Name: pn, Label: pn, Members: []workflows.InterfaceMember{{Role: lr.Split, Port: so.Name}}})
+			}
+		}
+		// Ton-Matrix (normalize.audioMatrix): wie der Tonteiler hinter dem Ton-Ausgang der Kette; der erste Eingang bekommt den Haus-Ton.
+		matrixCfg, err := ResolveAudioMatrix(l, houseCh)
+		if err != nil {
+			return def, nil, nil, err
+		}
+		if matrixCfg != nil && w.outAudio != "" {
+			lr.Matrix = base + "-matrix"
+			def.Roles = append(def.Roles, workflows.Role{Name: lr.Matrix, NodeType: cc.matrixType()})
+			envs[lr.Matrix] = MatrixEnv(*matrixCfg)
+			def.Connections = append(def.Connections, workflows.Connection{FromRole: w.outAudio, FromSender: w.outAudioPort, ToRole: lr.Matrix, ToReceiver: cc.matrixIn(strings.TrimSpace(matrixCfg.Inputs[0].Name))})
+			for _, o := range matrixCfg.Outputs {
+				name := strings.TrimSpace(o.Name)
+				lr.MatrixOutputs = append(lr.MatrixOutputs, name)
+				pn := l.Name + " · " + name
+				def.Interface.Outputs = append(def.Interface.Outputs, workflows.InterfacePort{Name: pn, Label: pn, Members: []workflows.InterfaceMember{{Role: lr.Matrix, Port: name}}})
 			}
 		}
 		// Die Datenspur (ANC, Zeitcode, Untertitel) geht nur mit, wenn die Leitung eine Datenquelle hat.

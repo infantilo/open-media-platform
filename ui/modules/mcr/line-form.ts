@@ -282,12 +282,20 @@ export function openLineForm(initial: LineDraft | null, others: { id: string; na
   // Ton-Teiler (normalize.audioSplit): Mehrkanalton in einzelne Ausgänge teilen (z. B. für den Audiomischer)
   const nz = (d.normalize ?? {}) as Record<string, unknown>;
   const sp = nz.audioSplit as { mode?: string; outputs?: { name: string; channels: number[] }[] } | undefined;
-  let splitMode = sp?.outputs?.length ? "custom" : sp?.mode === "tracks" || sp?.mode === "pairs" ? sp.mode : "off";
+  const am = nz.audioMatrix as Record<string, unknown> | undefined;
+  let splitMode = am && Object.keys(am).length ? "matrix" : sp?.outputs?.length ? "custom" : sp?.mode === "tracks" || sp?.mode === "pairs" ? sp.mode : "off";
+  const matrixJson = h("textarea", { rows: "7", spellcheck: "false", style: "width:100%;font-family:monospace;font-size:12px" }) as HTMLTextAreaElement;
+  matrixJson.value = am && Object.keys(am).length ? JSON.stringify(am, null, 1) : "";
+  matrixJson.placeholder = '{"mode":"pairs"}';
+  const matrixRow = field(t("mcr.split.matrixJson"), matrixJson, t("mcr.split.matrixJsonHint"));
   const splitJson = input(sp?.outputs?.length ? JSON.stringify(sp.outputs) : "", { placeholder: '[{"name":"Programm","channels":[1,2]},{"name":"IT","channels":[3,4]}]' });
   const splitJsonRow = field(t("mcr.split.json"), splitJson, t("mcr.split.jsonHint"));
-  const syncSplit = () => (splitJsonRow.style.display = splitMode === "custom" ? "" : "none");
+  const syncSplit = () => {
+    splitJsonRow.style.display = splitMode === "custom" ? "" : "none";
+    matrixRow.style.display = splitMode === "matrix" ? "" : "none";
+  };
   const splitSeg = segmented(
-    [{ value: "off", label: t("mcr.split.off") }, { value: "tracks", label: t("mcr.split.tracks"), title: t("mcr.split.tracksHint") }, { value: "pairs", label: t("mcr.split.pairs"), title: t("mcr.split.pairsHint") }, { value: "custom", label: t("mcr.split.custom") }],
+    [{ value: "off", label: t("mcr.split.off") }, { value: "tracks", label: t("mcr.split.tracks"), title: t("mcr.split.tracksHint") }, { value: "pairs", label: t("mcr.split.pairs"), title: t("mcr.split.pairsHint") }, { value: "custom", label: t("mcr.split.custom") }, { value: "matrix", label: t("mcr.split.matrix"), title: t("mcr.split.matrixHint") }],
     splitMode,
     (v) => {
       splitMode = v;
@@ -339,7 +347,7 @@ export function openLineForm(initial: LineDraft | null, others: { id: string; na
     h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.f.transport")), srcSeg, tpBox, ex.el),
     h("div", { class: "mcr-fieldset" }, sw(ownHouse, t("mcr.f.ownHouse")), hfBox),
     h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.chain.title")), chain.el),
-    h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.split.title")), note(t("mcr.split.hint")), splitSeg, splitJsonRow),
+    h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.split.title")), note(t("mcr.split.hint")), splitSeg, splitJsonRow, matrixRow),
     h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.mon.title")), mon.el),
     h("div", { class: "mcr-fieldset" }, h("h3", {}, t("mcr.rec.title")), h("label", { class: "mcr-sw" }, recOn, t("mcr.rec.house")), recBox, note(t("mcr.rec.hint"))),
     h("div", { class: "mcr-fieldset" }, sw(wantRet, t("mcr.f.wantReturn")), retBox),
@@ -363,7 +371,18 @@ export function openLineForm(initial: LineDraft | null, others: { id: string; na
       if (recOn.checked) out.record = { house: true, profileId: recProfile.value.trim(), ...(recDir.value.trim() ? { dir: recDir.value.trim() } : {}) };
       else delete out.record;
       const norm = { ...nz } as Record<string, unknown>;
-      if (splitMode === "tracks" || splitMode === "pairs") norm.audioSplit = { mode: splitMode };
+      delete norm.audioMatrix;
+      if (splitMode === "matrix") {
+        let obj: unknown;
+        try {
+          obj = JSON.parse(matrixJson.value);
+        } catch {
+          throw new Error(t("mcr.split.badMatrix"));
+        }
+        if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error(t("mcr.split.badMatrix"));
+        norm.audioMatrix = obj;
+        delete norm.audioSplit;
+      } else if (splitMode === "tracks" || splitMode === "pairs") norm.audioSplit = { mode: splitMode };
       else if (splitMode === "custom") {
         let list: unknown;
         try {

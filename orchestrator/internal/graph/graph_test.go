@@ -600,3 +600,48 @@ func TestDisconnectReadsPreviousSenderFromCacheNotIS05(t *testing.T) {
 		t.Errorf("senderPatched[send-A] = %v, %v; want false, true (previous sender correctly identified via cache)", enabled, ok)
 	}
 }
+
+func TestNoteSenderFlowsReportsOnlyRealChanges(t *testing.T) {
+	svc := NewService(fakeNodeLister{}, newFakeIS05Client(), nil, nil)
+	node := func(flow string) registry.NodeView {
+		return registry.NodeView{ID: "n", Senders: []registry.SenderView{{ID: "s1", FlowID: flow}, {ID: "s2"}}}
+	}
+	if c := svc.noteSenderFlows(node("f1")); len(c) != 0 {
+		t.Fatalf("erste Beobachtung ist keine Änderung: %v", c)
+	}
+	if c := svc.noteSenderFlows(node("f1")); len(c) != 0 {
+		t.Fatalf("gleicher Flow: %v", c)
+	}
+	// kurzzeitig ohne Sender (Abmelden/Anmelden) ändert nichts, danach neuer Flow wird erkannt
+	if c := svc.noteSenderFlows(registry.NodeView{ID: "n"}); len(c) != 0 {
+		t.Fatalf("Sender fehlt: %v", c)
+	}
+	if c := svc.noteSenderFlows(node("f2")); len(c) != 1 || c[0] != "s1" {
+		t.Fatalf("neuer Flow: %v", c)
+	}
+}
+
+func TestRewireReactivatesOnlyReceiversOfThatSender(t *testing.T) {
+	views := []registry.NodeView{
+		{ID: "node-A", APIBaseURL: "http://a", Senders: []registry.SenderView{{ID: "send-A", FlowID: "f2"}}},
+		{ID: "node-B", APIBaseURL: "http://b", Receivers: []registry.ReceiverView{{ID: "recv-B"}}},
+		{ID: "node-C", APIBaseURL: "http://c", Receivers: []registry.ReceiverView{{ID: "recv-C"}, {ID: "recv-D"}}},
+	}
+	client := newFakeIS05Client()
+	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true}
+	client.active["recv-C"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true}
+	client.active["recv-D"] = is05.ActiveResource{SenderID: strPtr("send-X"), MasterEnable: true}
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
+	svc.reconcileOnce(context.Background())
+
+	client.receiverErr["recv-C"] = true // ein Empfänger nicht erreichbar: die anderen werden trotzdem neu aktiviert
+	if n := svc.Rewire(context.Background(), "send-A"); n != 1 {
+		t.Fatalf("Rewire = %d, want 1", n)
+	}
+	if p, ok := client.patched["recv-B"]; !ok || p.senderID == nil || *p.senderID != "send-A" || !p.masterEnable {
+		t.Errorf("recv-B nicht neu aktiviert: %+v", p)
+	}
+	if _, ok := client.patched["recv-D"]; ok {
+		t.Error("recv-D hängt an einem anderen Sender und darf nicht berührt werden")
+	}
+}

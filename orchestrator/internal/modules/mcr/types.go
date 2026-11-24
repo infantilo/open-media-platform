@@ -199,6 +199,13 @@ func validateLine(l *Line) error {
 			return err
 		}
 	}
+	if m, err := ParseAudioMatrix(*l); err != nil {
+		return err
+	} else if m != nil {
+		if a, _ := ParseAudioSplit(*l); a != nil {
+			return bad("Leitung „%s“: Tonteiler (audioSplit) und Ton-Matrix (audioMatrix) schließen sich aus", l.Name)
+		}
+	}
 	if len(l.Avsync) > 0 {
 		var a struct {
 			Mode string `json:"mode"`

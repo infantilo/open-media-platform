@@ -113,7 +113,11 @@ func ResolveAudioSplit(l Line, houseChannels int) ([]SplitOut, error) {
 	if err != nil || a == nil {
 		return nil, err
 	}
-	label := fmt.Sprintf("Leitung „%s“ Tonteiler", l.Name)
+	return resolveSplitOuts(l, a, fmt.Sprintf("Leitung „%s“ Tonteiler", l.Name), houseChannels)
+}
+
+// resolveSplitOuts löst `tracks`/`pairs`/ausdrückliche Ausgänge in Ausgänge mit Hauskanälen auf (gemeinsam für Tonteiler und Ton-Matrix).
+func resolveSplitOuts(l Line, a *AudioSplit, label string, houseChannels int) ([]SplitOut, error) {
 	var outs []SplitOut
 	switch {
 	case len(a.Outputs) > 0:
