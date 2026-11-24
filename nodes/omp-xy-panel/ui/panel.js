@@ -31,7 +31,7 @@ const XY_T = (() => {
       pickTarget: "Ziel-Node wählen.", nothingToRoute: "Nichts zu schalten — Zuordnung prüfen.", moveUp: "Nach oben",
       skinNew: "Konsole 2 ▸", skinClassic: "◂ Klassisch", skinTip: "Optik umschalten (nur Darstellung)", moveDown: "Nach unten",
       bundleN: "{n} Quellen", notMatched: "Ohne Partner",
-      viewList: "Listen", viewMatrix: "Matrix", collapseAll: "Alle zu", expandAll: "Alle auf", mxTip: "Zeile = Ziel, Spalte = Quelle. Klick auf einen Kreuzpunkt schaltet, Klick auf einen aktiven Kreuzpunkt trennt. Node-Kopf klicken: auf-/zuklappen.", mxCorner: "Ziele ↓ / Quellen →", mxGroup: "{n} Punkte, {r} geschaltet (zum Aufklappen klicken)", mxEmpty: "Keine Quellen oder Ziele für diesen Filter.",
+      viewList: "Listen", viewMatrix: "Matrix", viewRouter: "Router", rtLevels: "Ebenen", rtAllLevels: "Alle Ebenen", rtEmpty: "leer", collapseAll: "Alle zu", expandAll: "Alle auf", mxTip: "Zeile = Ziel, Spalte = Quelle. Klick auf einen Kreuzpunkt schaltet, Klick auf einen aktiven Kreuzpunkt trennt. Node-Kopf klicken: auf-/zuklappen.", mxCorner: "Ziele ↓ / Quellen →", mxGroup: "{n} Punkte, {r} geschaltet (zum Aufklappen klicken)", mxEmpty: "Keine Quellen oder Ziele für diesen Filter.",
       grant: "Schalten über dieses Panel freigeben", grantHint: "Nutzer/Gruppen mit Bedienrecht (operate) auf diesem Panel dürfen darüber beliebige Ziele schalten.", grantFailed: "Freigabe konnte nicht gespeichert werden: {detail}",
     },
     en: {
@@ -60,7 +60,7 @@ const XY_T = (() => {
       pickTarget: "Choose a destination node.", nothingToRoute: "Nothing to route — check the mapping.", moveUp: "Move up",
       skinNew: "Console 2 ▸", skinClassic: "◂ Classic", skinTip: "Switch look (display only)", moveDown: "Move down",
       bundleN: "{n} sources", notMatched: "No partner",
-      viewList: "Lists", viewMatrix: "Matrix", collapseAll: "Collapse all", expandAll: "Expand all", mxTip: "Row = destination, column = source. Click a crosspoint to route, click an active crosspoint to disconnect. Click a node header to expand/collapse.", mxCorner: "Destinations ↓ / Sources →", mxGroup: "{n} points, {r} routed (click to expand)", mxEmpty: "No sources or destinations for this filter.",
+      viewList: "Lists", viewMatrix: "Matrix", viewRouter: "Router", rtLevels: "Levels", rtAllLevels: "All levels", rtEmpty: "empty", collapseAll: "Collapse all", expandAll: "Expand all", mxTip: "Row = destination, column = source. Click a crosspoint to route, click an active crosspoint to disconnect. Click a node header to expand/collapse.", mxCorner: "Destinations ↓ / Sources →", mxGroup: "{n} points, {r} routed (click to expand)", mxEmpty: "No sources or destinations for this filter.",
       grant: "Allow routing via this panel", grantHint: "Users/groups with operate rights on this panel may route any destination through it.", grantFailed: "Could not save the permission: {detail}",
     },
   };
@@ -243,6 +243,47 @@ function xyEl(tag, attrs, ...kids) {
   return e;
 }
 
+const XY_RT_CSS = `
+.rt { display: flex; flex-direction: column; gap: 8px; }
+.rt .blk { background: #141a24; border: 1px solid #0a0d13; border-radius: 3px; padding: 6px 8px 8px; }
+.rt .blk > h4 { margin: 0 0 6px; font-size: 14px; font-weight: 500; }
+.rt .banks { display: flex; gap: 4px; margin: 0 0 6px 4px; flex-wrap: wrap; }
+.rt .banks button { min-width: 90px; background: #232b38; border-color: #0a0d13; font-size: 11px; }
+.rt .banks button.on { background: #3a4a63; border-color: #6d86ad; color: #fff; }
+.rt .row { display: flex; gap: 8px; align-items: stretch; }
+.rt .tiles { flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); grid-auto-rows: 66px; gap: 6px;
+  min-height: 138px; max-height: 280px; overflow: auto; align-content: start;
+  background-image: repeating-linear-gradient(#0000 0 66px, #0000 66px 72px); }
+.rt .side-btns { display: grid; grid-template-columns: repeat(2, 62px); grid-auto-rows: 66px; gap: 6px; padding-left: 8px; border-left: 1px solid #0a0d13; align-content: start; }
+.rt .side-btns button, .rt .tiles button { width: 100%; height: 100%; padding: 2px; font-size: 10px; line-height: 1.15; text-align: center; border-radius: 2px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; overflow: hidden; overflow-wrap: anywhere; text-transform: none; letter-spacing: 0; }
+.rt .tiles button { background: #2a3350; border: 1px solid #0a0d13; color: #aab8ff; font-family: ui-monospace, monospace; }
+.rt .tiles button .n { font-weight: 600; }
+.rt .tiles button small { font-size: 9px; opacity: .8; }
+.rt .tiles button.audio { background: #1f3a2b; color: #8fe0a8; }
+.rt .tiles button.data { background: #2a2748; color: #b0a8f0; }
+.rt .tiles button.video { background: #2a3350; color: #aab8ff; }
+.rt .tiles button.live { box-shadow: inset 0 0 0 1px #3fbf6a; }
+.rt .tiles button.sel { background: #d8d8d8; color: #111; border-color: #fff; }
+.rt .tiles button.dim { opacity: .3; }
+.rt .tiles button.off { opacity: .45; border-style: dashed; }
+.rt .tiles button.folder { background: #3a3220; color: #e8c97a; }
+.rt .tiles .none { background: #1b212c; border: 1px solid #10151d; border-radius: 2px; }
+.rt .side-btns button { background: #232b38; border: 1px solid #0a0d13; color: #9fb0c8; }
+.rt .side-btns button:disabled { opacity: .35; cursor: default; }
+.rt .side-btns button.clear { color: #6fb4ff; }
+.rt .side-btns button.disc { color: #e0b44a; font-size: 9px; letter-spacing: -0.04em; }
+.rt .side-btns button.take { background: #5a1818; color: #ff6060; border-color: #a02020; font-weight: 600; }
+.rt .side-btns button.take:disabled { opacity: .35; }
+.rt .lv { display: flex; gap: 8px; }
+.rt .lv .lvall { width: 70px; background: #3a3414; color: #ffe27a; border: 1px solid #0a0d13; border-radius: 2px; font-size: 11px; }
+.rt .lv .lvt { flex: 1; min-height: 44px; border-radius: 2px; border: 2px solid #0a0d13; font-size: 14px; background: #1b212c; color: #7f8da3; opacity: .55; }
+.rt .lv .lvt.on { opacity: 1; }
+.rt .lv .lvt.video.on { background: #4a331a; color: #ffb35c; border-color: #8a5a22; }
+.rt .lv .lvt.audio.on { background: #17402a; color: #5be08a; border-color: #2c8a54; }
+.rt .lv .lvt.data.on { background: #26244a; color: #9d93ff; border-color: #4a45a0; }
+`;
+
 class OmpXyPanel extends HTMLElement {
   connectedCallback() {
     if (this._started) { this._restart && this._restart(); return; }
@@ -250,7 +291,7 @@ class OmpXyPanel extends HTMLElement {
     const L = globalThis.OmpXyLogic;
     const t = XY_T;
     const shadow = this.attachShadow({ mode: "open" });
-    shadow.append(xyEl("style", { text: XY_CSS + XY_C2_CSS }));
+    shadow.append(xyEl("style", { text: XY_CSS + XY_C2_CSS + XY_RT_CSS }));
     const host = this;
     const skinNow = () => { try { return new URLSearchParams(location.search).get("skin") === "classic" || localStorage.getItem(XY_SKIN_KEY) === "classic" ? "classic" : "v2"; } catch { return "v2"; } };
     const applySkin = (skin) => host.setAttribute("data-skin", skin === "v2" ? "c2" : "classic");
@@ -270,7 +311,8 @@ class OmpXyPanel extends HTMLElement {
       auto: localStorage.getItem("omp-xy-auto") !== "0",
       nodeMode: ["tags", "tagsOnly", "order"].includes(localStorage.getItem("omp-xy-nodemode")) ? localStorage.getItem("omp-xy-nodemode") : "tags",
       tab: "src",
-      view: localStorage.getItem("omp-xy-view") === "matrix" ? "matrix" : "list",
+      view: ["matrix", "router"].includes(localStorage.getItem("omp-xy-view")) ? localStorage.getItem("omp-xy-view") : "list",
+      rt: { levels: { video: true, audio: true, data: true } },
       mx: { sm: "", sq: "", dm: "", dq: "", closedSrc: new Set(), closedDst: new Set(), top: 0, left: 0 },
       draft: null, // null = aus, sonst [{from,to}]
       bundle: null, // null = aus, sonst {items:[Quellpunkte], name, mode}
@@ -726,6 +768,54 @@ class OmpXyPanel extends HTMLElement {
       return xyEl("div", { class: "mxbox" }, tools, wrap);
     }
 
+    /** Router-Ansicht: Quellen-Bank, Ebenen, Ziele-Bank, Take (Kachelraster wie ein Hardware-Router-Panel). */
+    function renderRouter() {
+      const routeOfSink = L.routeMap(st.edges);
+      const srcMap = bySrc();
+      const levelOn = (p) => st.rt.levels[p.mediaType] !== false;
+      const MIN_TILES = 18;
+      const bank = (kind) => {
+        const s = st.side[kind];
+        const all = (kind === "src" ? allSources() : allSinks()).filter(levelOn);
+        const byNode = L.groupPointsByNode(all);
+        const top = L.levelContents(st.model, [], byNode);
+        const lvl = L.levelContents(st.model, s.path, byNode);
+        const banks = xyEl("div", { class: "banks" },
+          xyEl("button", { class: s.path.length === 0 ? "on" : "", onclick: () => { s.path = []; render(); } }, t("home")),
+          top.folders.map((f) => xyEl("button", { class: s.path[0] === f.id ? "on" : "", title: L.folderLabel(f, t), onclick: () => { s.path = [f.id]; render(); } }, L.folderLabel(f, t))));
+        const tiles = [
+          ...lvl.folders.map((f) => xyEl("button", { class: "folder", onclick: () => { s.path = [...s.path, f.id]; render(); } },
+            xyEl("span", { class: "n", text: L.folderLabel(f, t) }), xyEl("small", { text: String(f.count) }))),
+          ...lvl.nodes.flatMap((n) => n.points.map((p) => renderPoint(kind, p, routeOfSink, srcMap))),
+        ];
+        while (tiles.length < MIN_TILES) tiles.push(xyEl("div", { class: "none" }));
+        return { banks, tiles: xyEl("div", { class: "tiles" }, tiles) };
+      };
+      const src = bySrc().get(st.selSrc);
+      const dst = byDst().get(st.selDst);
+      const connected = dst && L.routeMap(st.edges).has(dst.id);
+      const nodeMode = st.selSrcNode && st.selDstNode;
+      const anySel = src || dst || st.selSrcNode || st.selDstNode;
+      const clearSel = () => { st.selSrc = null; st.selDst = null; st.selSrcNode = null; st.selDstNode = null; render(); };
+      const sb = bank("src");
+      const db = bank("dst");
+      const levels = xyEl("div", { class: "lv" },
+        xyEl("button", { class: "lvall", onclick: () => { st.rt.levels = { video: true, audio: true, data: true }; render(); } }, t("rtAllLevels")),
+        ["video", "audio", "data"].map((m) => xyEl("button", { class: "lvt " + m + (st.rt.levels[m] ? " on" : ""), "aria-pressed": st.rt.levels[m] ? "true" : "false",
+          onclick: () => { st.rt.levels[m] = !st.rt.levels[m]; render(); } }, t(m))));
+      return xyEl("div", { class: "rt" },
+        xyEl("div", { class: "blk" }, xyEl("h4", { text: t("sources") }), sb.banks,
+          xyEl("div", { class: "row" }, sb.tiles, xyEl("div", { class: "side-btns" },
+            xyEl("button", { class: "clear", disabled: !anySel, onclick: clearSel }, t("clear"))))),
+        xyEl("div", { class: "blk" }, xyEl("h4", { text: t("rtLevels") }), levels),
+        xyEl("div", { class: "blk" }, xyEl("h4", { text: t("sinks") }), db.banks,
+          xyEl("div", { class: "row" }, db.tiles, xyEl("div", { class: "side-btns" },
+            xyEl("button", { class: "clear", disabled: !anySel, onclick: clearSel }, t("clear")),
+            xyEl("button", { class: "disc", disabled: !connected, onclick: () => doDisconnect(dst) }, t("disconnect")),
+            xyEl("button", { disabled: !liveUndo(), onclick: doUndo }, "↶ " + t("undo")),
+            xyEl("button", { class: "take", disabled: !(nodeMode || (src && dst)), onclick: () => nodeMode ? doNodeTake(st.selSrcNode, st.selDstNode) : doTake(src, dst) }, t("take"))))));
+    }
+
     function renderBar() {
       const src = bySrc().get(st.selSrc);
       const dst = byDst().get(st.selDst);
@@ -957,9 +1047,11 @@ class OmpXyPanel extends HTMLElement {
         grantUi = xyEl("label", { class: "auto", title: t("grantHint") }, cb, t("grant"));
       }
       const matrix = st.view === "matrix" && !st.bundle;
+      const router = st.view === "router" && !st.bundle;
       const views = xyEl("div", { class: "views" },
-        xyEl("button", { class: matrix ? "" : "on", onclick: () => { st.view = "list"; try { localStorage.setItem("omp-xy-view", "list"); } catch {} render(); } }, "☰ " + t("viewList")),
-        xyEl("button", { class: matrix ? "on" : "", onclick: () => { st.view = "matrix"; try { localStorage.setItem("omp-xy-view", "matrix"); } catch {} render(); } }, "▦ " + t("viewMatrix")));
+        xyEl("button", { class: matrix || router ? "" : "on", onclick: () => { st.view = "list"; try { localStorage.setItem("omp-xy-view", "list"); } catch {} render(); } }, "☰ " + t("viewList")),
+        xyEl("button", { class: matrix ? "on" : "", onclick: () => { st.view = "matrix"; try { localStorage.setItem("omp-xy-view", "matrix"); } catch {} render(); } }, "▦ " + t("viewMatrix")),
+        xyEl("button", { class: router ? "on" : "", onclick: () => { st.view = "router"; try { localStorage.setItem("omp-xy-view", "router"); } catch {} render(); } }, "▤ " + t("viewRouter")));
       const top = xyEl("div", { class: "top" },
         views,
         xyEl("div", { class: "grp" }, xyEl("button", { onclick: openBouquetDialog }, "▦ " + t("bouquets")), xyEl("button", { onclick: openTagDialog }, "# " + t("tagRouting"))),
@@ -970,7 +1062,7 @@ class OmpXyPanel extends HTMLElement {
           applySkin(next); render();
         } }, host.getAttribute("data-skin") === "c2" ? t("skinClassic") : t("skinNew")));
       const msg = xyEl("div", { id: "msg", class: "msg" + (st.msgErr ? " err" : ""), role: "status", "aria-live": "polite", text: st.msg });
-      root.replaceChildren(top, ...(matrix ? [renderMatrix()] : [tabs, xyEl("div", { class: "cols" }, renderSide("src"), renderSide("dst"))]), ...(st.draft ? [renderDraft()] : []), ...(st.bundle ? [renderBundle()] : [renderBar()]), msg);
+      root.replaceChildren(top, ...(router ? [renderRouter()] : matrix ? [renderMatrix()] : [tabs, xyEl("div", { class: "cols" }, renderSide("src"), renderSide("dst"))]), ...(st.draft ? [renderDraft()] : []), ...(st.bundle ? [renderBundle()] : router ? [] : [renderBar()]), msg);
       if (keepFocus) {
         const inp = shadow.querySelector(`input[data-side="${keepFocus}"]`);
         if (inp) { inp.focus(); try { inp.setSelectionRange(caret, caret); } catch { /* egal */ } }
