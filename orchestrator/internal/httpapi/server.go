@@ -23,6 +23,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/hostbridge"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/instancemigrate"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/organizations"
@@ -381,6 +382,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// sind schon da und erfüllen strukturell die (bewusst kleineren)
 	// Interfaces von instancemigrate.
 	instanceMigrateSvc := instancemigrate.NewService(nodes, launcherSvc, graphSvc)
+	// Kap. 108: Umzug über Hostgrenzen mit Gateway-Brücken statt Sperre (Transport je Host, hostbridge).
+	instanceMigrateSvc.SetBridges(&hostbridge.Runner{Launcher: launcherSvc, Nodes: nodes, Ready: hostbridge.FabricsReady(nodeClient)}, hostBridgeCaps(hostRegistry))
 	if mover, ok := options.nodeValues.(instancemigrate.OptionMover); ok {
 		instanceMigrateSvc.SetOptionMover(mover)
 	}

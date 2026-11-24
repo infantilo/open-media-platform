@@ -52,6 +52,8 @@ type carried struct {
 	// ownState: der eigene /state der migrierten Instanz (z. B. Quellenwahl eines Switchers,
 	// Programm/Preset eines Mixers) — Werte, die nicht als schreibbarer Parameter existieren.
 	ownState json.RawMessage
+	// oldBridges: Instanzen der Brücken, die zur alten Instanz gehörten (Kap. 108) — nach dem Umzug zu stoppen.
+	oldBridges []string
 }
 
 func (s *Service) client() *http.Client {

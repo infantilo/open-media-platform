@@ -103,6 +103,7 @@ Erzeugt mit `sh docs/entwicklung/doku-index.sh`. Abschnitt gezielt lesen: Read m
 6741 Kapitel 105: TAMS — zeitadressierter Medienspeicher: Aufnahme, Wiedergabe, optional eigener Speicher
 6783 Kapitel 106: Hauptkontrollraum (MCR / Ingest-Leitstelle) — Leitungen, Hausformat nur bei Abweichung, A/
 6962 Kapitel 107: Audio-Matrix `omp-audio-matrix` — freie Ein-/Ausgänge, Kreuzschiene, Kanal-Labels, MCR-An
+7051 Kapitel 108: Ausfallfreier Umzug über Hostgrenzen trotz MXL-Gegenstellen
 
 ## ARCHITECTURE.md
 

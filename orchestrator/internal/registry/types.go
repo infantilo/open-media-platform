@@ -78,6 +78,16 @@ type is04Flow struct {
 	ID       string `json:"id"`
 	Format   string `json:"format"`
 	SourceID string `json:"source_id"`
+	// Format-Merkmale (IS-04 v1.3): Bild-Raster/-Rate, Abtastrate; für Host-Brücken (Kap. 108).
+	FrameWidth  int       `json:"frame_width,omitempty"`
+	FrameHeight int       `json:"frame_height,omitempty"`
+	GrainRate   *is04Rate `json:"grain_rate,omitempty"`
+	SampleRate  *is04Rate `json:"sample_rate,omitempty"`
+}
+
+type is04Rate struct {
+	Numerator   int `json:"numerator"`
+	Denominator int `json:"denominator,omitempty"`
 }
 
 // is04Source: nur die Audio-Kanalliste wird gebraucht (Kanalanzahl → abgeleitete
@@ -143,6 +153,12 @@ type SenderView struct {
 	DiscoveredTags []string `json:"discovered_tags,omitempty"`
 	// ChannelCount: Audio-Kanäle der Quelle des Flows (0 = unbekannt/kein Audio).
 	ChannelCount int `json:"channel_count,omitempty"`
+	// Width/Height/RateNum/RateDen (Bild) bzw. SampleRate (Ton) des Flows; 0 = unbekannt (Kap. 108).
+	Width      int `json:"width,omitempty"`
+	Height     int `json:"height,omitempty"`
+	RateNum    int `json:"rate_num,omitempty"`
+	RateDen    int `json:"rate_den,omitempty"`
+	SampleRate int `json:"sample_rate,omitempty"`
 	// GroupHint ist der rohe erste `urn:x-nmos:tag:grouphint/v1.0`-Wert
 	// des Senders (leer, wenn nicht gesetzt) — Grundlage für die
 	// Natural-Group-Darstellung im Source-Selector.

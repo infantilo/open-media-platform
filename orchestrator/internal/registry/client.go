@@ -515,13 +515,28 @@ func applyChannelCounts(views []NodeView, flows []is04Flow, sources []is04Source
 		channelsBySource[s.ID] = len(s.Channels)
 	}
 	sourceByFlow := make(map[string]string, len(flows))
+	flowByID := make(map[string]is04Flow, len(flows))
 	for _, f := range flows {
 		sourceByFlow[f.ID] = f.SourceID
+		flowByID[f.ID] = f
 	}
 	for ni := range views {
 		for si := range views[ni].Senders {
 			if fid := views[ni].Senders[si].FlowID; fid != "" {
-				views[ni].Senders[si].ChannelCount = channelsBySource[sourceByFlow[fid]]
+				sv := &views[ni].Senders[si]
+				sv.ChannelCount = channelsBySource[sourceByFlow[fid]]
+				if f, ok := flowByID[fid]; ok {
+					sv.Width, sv.Height = f.FrameWidth, f.FrameHeight
+					if f.GrainRate != nil {
+						sv.RateNum, sv.RateDen = f.GrainRate.Numerator, f.GrainRate.Denominator
+						if sv.RateDen == 0 {
+							sv.RateDen = 1
+						}
+					}
+					if f.SampleRate != nil {
+						sv.SampleRate = f.SampleRate.Numerator
+					}
+				}
 			}
 		}
 	}

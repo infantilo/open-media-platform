@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/hostbridge"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
@@ -113,6 +114,9 @@ type Service struct {
 	httpClient *http.Client
 	// roles: optional; verhindert den Einzelumzug von Workflow-Rollen.
 	roles RoleFinder
+	// bridges/bridgeCaps: Umzug über Hostgrenzen (Kapitel 108, bridges.go); nil = alte Sperre ErrMXLPeer.
+	bridges    BridgeRunner
+	bridgeCaps func(hostID string) hostbridge.Caps
 }
 
 // SetRoleFinder verdrahtet die Prüfung "gehört die Instanz zu einem Workflow?".
@@ -138,6 +142,8 @@ type edgeRef struct {
 	// mit deterministischen IDs, z. B. omp-device-hub), gewinnt sie gegenüber dem Index.
 	portID      string
 	otherPortID string
+	// job: läuft die Kante nach dem Umzug über eine Host-Brücke (Kap. 108), sonst nil.
+	job *bridgeJob
 }
 
 // MigrateInstance (Kapitel 13 Teil 3) validiert synchron (unbekannte
@@ -204,17 +210,25 @@ func (s *Service) prepareMigration(ctx context.Context, oldInstanceID, targetHos
 		}
 		return inst, nil, carried{}, fmt.Errorf("%w: %q", ErrNotRegistered, oldInstanceID)
 	}
+	info := s.instanceInfo()
+	groups := s.bridgeGroups(info)
 	g := s.graph.Graph(ctx)
-	if ll, ok := s.launcher.(interface{ List() []launcher.Instance }); ok {
-		instHost := map[string]string{}
-		for _, in := range ll.List() {
-			instHost[in.ID] = in.HostID
-		}
-		if peer, bad := workflows.MXLPeerConflict(s.nodes.List(), g.Edges, instHost, oldNode.ID, targetHostID); bad {
-			return inst, nil, carried{}, fmt.Errorf("%w: %s", ErrMXLPeer, peer)
-		}
+	eff, oldBridges := unwrapBridges(g.Edges, oldNode, groups)
+	edges := s.captureEdgesFrom(eff, oldNode)
+	byEdge, jobs, err := s.planBridges(oldNode, eff, targetHostID, info)
+	if err != nil {
+		return inst, nil, carried{}, fmt.Errorf("%w: %w", ErrMXLPeer, err)
 	}
-	return inst, s.captureEdges(ctx, oldNode), s.captureCarried(oldNode, !lost), nil
+	if len(jobs) > 0 && s.bridges == nil {
+		peer, _ := workflows.MXLPeerConflict(s.nodes.List(), eff, info.hostOf, oldNode.ID, targetHostID)
+		return inst, nil, carried{}, fmt.Errorf("%w: %s", ErrMXLPeer, peer)
+	}
+	for i := range edges {
+		edges[i].job = byEdge[keyOf(edges[i])]
+	}
+	carry := s.captureCarried(oldNode, !lost)
+	carry.oldBridges = oldBridges
+	return inst, edges, carry, nil
 }
 
 // migrate zieht eine eigenständige Instanz make-before-break auf den Zielhost um (Nutzerforderung
@@ -243,21 +257,33 @@ func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []e
 	// Zustand der alten Instanz JETZT noch einmal abnehmen: sie lief während des Starts weiter.
 	oldNode, haveOld := s.findNodeByInstance(oldInstanceID)
 	if haveOld && !lost {
+		oldBridges := carry.oldBridges
 		carry = s.captureCarried(oldNode, true)
+		carry.oldBridges = oldBridges
 	}
 	newNode = s.restoreOwnState(carry, newNode)
 	newNode = s.awaitEdgePorts(newNode, edges)
+	if err := s.buildAndWire(context.Background(), newInst, newNode, edges); err != nil {
+		slog.Warn("instancemigrate: Brücke über die Hostgrenze gescheitert — alte Instanz läuft unverändert weiter", "instance", oldInstanceID, "error", err)
+		_ = s.launcher.Stop(newInst.ID)
+		return fmt.Errorf("bridge across hosts: %w", err)
+	}
 	s.reconnect(context.Background(), newNode, edges)
 	s.moveOptions(oldInstanceID, newInst.ID)
 	s.restoreCarried(carry, newNode)
 	if haveOld && !lost { // eine verlorene Quelle sendet nicht mehr: das Warten auf die Verbraucher entfällt
-		s.handover(oldNode, newNode)
+		s.handover(oldNode, newNode, targetHostID, uniqueJobs(edges))
 	}
 
 	// Erst jetzt die alte Instanz beenden (die Kanten laufen bereits über die neue).
 	if err := s.launcher.Stop(oldInstanceID); err != nil && !errors.Is(err, launcher.ErrStopDeferred) {
 		slog.Error("instancemigrate: alte Instanz ließ sich nach dem Umzug nicht stoppen — beide laufen", "instance", oldInstanceID, "newInstance", newInst.ID, "error", err)
 		return nil // umgezogen ist sie
+	}
+	for _, id := range carry.oldBridges { // Brücken der alten Instanz: ihre Strecke läuft jetzt über die neuen
+		if err := s.launcher.Stop(id); err != nil && !errors.Is(err, launcher.ErrStopDeferred) {
+			slog.Warn("instancemigrate: alte Brücke ließ sich nicht stoppen", "instance", id, "error", err)
+		}
 	}
 	slog.Info("instancemigrate: migration completed (make-before-break)", "oldInstance", oldInstanceID, "newInstance", newInst.ID, "targetHost", targetHostID)
 	return nil
@@ -267,7 +293,7 @@ func (s *Service) migrate(inst launcher.Instance, targetHostID string, edges []e
 // übergangen) und wartet, bis jeder, der eine Übergabe meldet (`handoverPending`), fertig ist — erst dann darf die
 // alte Instanz stoppen. Eine eigenständige Instanz hat keine Workflow-Definition, aus der sich ihre Verbraucher
 // ablesen ließen (Bild-/Tonmischer entdecken Quellen selbst), deshalb gehen alle Nodes mit.
-func (s *Service) handover(oldNode, newNode registry.NodeView) {
+func (s *Service) handover(oldNode, newNode registry.NodeView, targetHostID string, jobs []*bridgeJob) {
 	pairs := workflows.SenderPairs(oldNode.Senders, newNode.Senders)
 	if len(pairs) == 0 {
 		return
@@ -276,13 +302,35 @@ func (s *Service) handover(oldNode, newNode registry.NodeView) {
 		Old string `json:"old"`
 		New string `json:"new"`
 	}
-	body := struct {
-		Replacements []repl `json:"replacements"`
-	}{}
-	for _, p := range pairs {
-		body.Replacements = append(body.Replacements, repl{Old: p[0], New: p[1]})
+	// Verbraucher auf dem Zielhost übernehmen den neuen Sender, Verbraucher auf einem anderen Host (Kap. 108) den
+	// Ausgang der Brücke zu ihrem Host; für alles andere gibt es dort keinen Weg, also keine Ersetzung.
+	info := s.instanceInfo()
+	bodyFor := func(n registry.NodeView) []byte {
+		host, known := info.hostOf[n.InstanceID]
+		if !known {
+			host = targetHostID
+		}
+		body := struct {
+			Replacements []repl `json:"replacements"`
+		}{}
+		for _, p := range pairs {
+			if host == targetHostID {
+				body.Replacements = append(body.Replacements, repl{Old: p[0], New: p[1]})
+				continue
+			}
+			for _, j := range jobs {
+				if j.oldIsSender && j.built != nil && j.plan.ReceiverHost == host && j.plan.FromSender == p[0] {
+					body.Replacements = append(body.Replacements, repl{Old: p[0], New: j.built.ExitSender()})
+					break
+				}
+			}
+		}
+		if len(body.Replacements) == 0 {
+			return nil
+		}
+		raw, _ := json.Marshal(body)
+		return raw
 	}
-	raw, _ := json.Marshal(body)
 	client := s.client()
 
 	var waiting []string
@@ -290,7 +338,7 @@ func (s *Service) handover(oldNode, newNode registry.NodeView) {
 		if n.APIBaseURL == "" || n.ID == oldNode.ID {
 			continue
 		}
-		if n.ID != newNode.ID {
+		if raw := bodyFor(n); n.ID != newNode.ID && raw != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.APIBaseURL+"/handover", bytes.NewReader(raw))
 			if err == nil {
@@ -362,7 +410,11 @@ func (s *Service) awaitRegistration(ctx context.Context, instanceID string) (reg
 // Instanz!) und merkt sich für jede Kante, die einen Port von oldNode
 // betrifft, dessen Rolle (Seite+Index) plus die ID am anderen Ende.
 func (s *Service) captureEdges(ctx context.Context, oldNode registry.NodeView) []edgeRef {
-	g := s.graph.Graph(ctx)
+	return s.captureEdgesFrom(s.graph.Graph(ctx).Edges, oldNode)
+}
+
+// captureEdgesFrom wie captureEdges, aber für eine vorgegebene Kantenliste (Kap. 108: ohne die eigenen Brücken).
+func (s *Service) captureEdgesFrom(allEdges []graph.Edge, oldNode registry.NodeView) []edgeRef {
 
 	outputIndex := make(map[string]int, len(oldNode.Senders))
 	for i, sn := range oldNode.Senders {
@@ -374,7 +426,7 @@ func (s *Service) captureEdges(ctx context.Context, oldNode registry.NodeView) [
 	}
 
 	var edges []edgeRef
-	for _, e := range g.Edges {
+	for _, e := range allEdges {
 		if idx, ok := outputIndex[e.FromSender]; ok {
 			edges = append(edges, edgeRef{side: "output", index: idx, portID: e.FromSender, otherPortID: e.ToReceiver})
 		}
@@ -394,6 +446,9 @@ func (s *Service) captureEdges(ctx context.Context, oldNode registry.NodeView) [
 func (s *Service) reconnect(ctx context.Context, newNode registry.NodeView, edges []edgeRef) int {
 	connected := 0
 	for _, e := range edges {
+		if e.job != nil {
+			continue // läuft über eine Host-Brücke, schaltet buildAndWire
+		}
 		var fromSender, toReceiver string
 		switch e.side {
 		case "output":
