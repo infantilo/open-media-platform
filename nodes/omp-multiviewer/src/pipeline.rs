@@ -205,7 +205,7 @@ fn build(
             let umd = gst::ElementFactory::make("textoverlay")
                 .property("text", input.label.as_str())
                 .property("shaded-background", true)
-                .property("font-desc", "Sans 8")
+                .property("font-desc", "Sans Bold 13")
                 .build()
                 .map_err(|e| format!("textoverlay (tile {i}): {e}"))?;
             umd.set_property_from_str("valignment", "bottom");
