@@ -42,6 +42,10 @@ pub struct Rules {
     pub order: Vec<String>,
     /// Bild gilt als „da“, wenn das letzte Bild höchstens so viele ms alt ist (Fernsehen). Standard 800 ms; im Redundanzprofil 3 Bildperioden.
     pub present_ms: u64,
+    /// Erst scharf schalten, wenn das Hauptsignal einmal gesund war (Redundanzprofil): ohne das schaltete der Umschalter beim Anlauf auf den
+    /// Standby, sobald dieser vor dem Primär Bilder lieferte, und blieb dort (kein Rücksprung). Nach `ARM_TIMEOUT_MS` ohne gesundes
+    /// Hauptsignal wird trotzdem scharf (ein Primär, der nie kommt, ist ein Ausfall).
+    pub arm_required: bool,
     /// Stille überhaupt prüfen? Ein Redundanzpaar für reine Bildmischer hat keinen Ton am Eingang — Stille wäre dort keine Störung.
     pub check_silence: bool,
 }
@@ -60,6 +64,7 @@ impl Default for Rules {
             auto_return: true,
             order: ["n1", "n2", "n3", "clip", "still"].iter().map(|s| s.to_string()).collect(),
             present_ms: 800,
+            arm_required: false,
             check_silence: true,
         }
     }
@@ -67,7 +72,7 @@ impl Default for Rules {
 
 impl Rules {
     /// Profil „Redundanzpaar“ (Kapitel 109 Stufe B): Hauptsignal = aktiver Mischer, `n1` = Standby-Mischer. Ausfall erkannt nach
-    /// 3 Bildperioden ohne neues Bild (+ 20 ms), kein Rücksprung von selbst (Standby bleibt aktiv, Rückkehr nur von Hand),
+    /// 3 Bildperioden ohne neues Bild (+ 20 ms), Rückkehr erst nach 5 s stabilem Hauptsignal,
     /// Freeze/Schwarz/Stille nicht als Störung (ein Mischer darf ein Standbild oder Schwarz zeigen).
     pub fn redundancy(frame_period_ms: u64) -> Rules {
         Rules {
@@ -75,12 +80,16 @@ impl Rules {
             freeze_ms: 0,
             black_ms: 0,
             healthy_ms: 200,
-            return_ms: 0,
-            min_hold_ms: 0,
-            auto_return: false,
+            // Rückkehr erst nach 5 s stabilem Hauptsignal (und 5 s Verweildauer): ein kurzer Aussetzer des Hauptmischers (z. B. beim Aufschalten
+            // einer Quelle) lässt den Umschalter sonst dauerhaft auf dem Standby stehen. Beide Mischer zeigen dasselbe Bild (Befehls-Spiegelung),
+            // die Rückkehr ist deshalb unsichtbar.
+            return_ms: 5000,
+            min_hold_ms: 5000,
+            auto_return: true,
             order: vec!["n1".to_string()],
             present_ms: (3 * frame_period_ms).clamp(60, 500),
             check_silence: false,
+            arm_required: true,
             ..Rules::default()
         }
     }
@@ -110,6 +119,9 @@ impl Rules {
         Ok(())
     }
 }
+
+/// So lange darf das Hauptsignal beim Anlauf ausbleiben, bevor der Umschalter (Profil mit `arm_required`) trotzdem scharf wird.
+pub const ARM_TIMEOUT_MS: u64 = 10_000;
 
 /// Beobachtung einer Quelle für einen Block.
 #[derive(Clone, Copy, Debug, Default)]
@@ -240,6 +252,8 @@ pub struct Controller {
     /// Merker für Alarm-Flanken.
     all_down_alarmed: bool,
     manual_bad_alarmed: bool,
+    /// Hauptsignal war seit dem Start (oder seit `arm_required` gilt) einmal gesund (s. `Rules::arm_required`).
+    armed: bool,
     pub takeovers: u64,
     pub log: VecDeque<(u64, String)>,
 }
@@ -255,6 +269,7 @@ impl Controller {
             now_ms: 0,
             all_down_alarmed: false,
             manual_bad_alarmed: false,
+            armed: false,
             takeovers: 0,
             log: VecDeque::new(),
         }
@@ -338,7 +353,11 @@ impl Controller {
         }
         let mut ev = Vec::new();
         let rules = self.rules.clone();
-        let active_fail = self.h(&self.active).failure(&rules);
+        if rules.arm_required && !self.armed && (self.h("main").healthy(&rules) || self.now_ms >= ARM_TIMEOUT_MS) {
+            self.armed = true;
+        }
+        // Anlauf: noch nicht scharf — keine Umschaltung, weder auf noch von einer Quelle
+        let active_fail = if rules.arm_required && !self.armed { None } else { self.h(&self.active).failure(&rules) };
         match self.mode.clone() {
             Mode::Manual(_) => {
                 if let Some(c) = active_fail {
@@ -673,7 +692,7 @@ mod tests {
         let r = Rules::redundancy(40);
         assert!(r.validate().is_ok());
         assert_eq!(r.present_ms, 120);
-        assert!(!r.auto_return && !r.check_silence);
+        assert!(r.auto_return && !r.check_silence);
     }
 
     #[test]
@@ -687,7 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn redundancy_switches_within_a_few_blocks_and_stays() {
+    fn redundancy_switches_within_a_few_blocks_and_returns_after_stable_main() {
         let mut c = Controller::new(Rules::redundancy(40));
         for _ in 0..100 {
             c.step(10, &pair_obs(PIC, PIC));
@@ -699,11 +718,15 @@ mod tests {
         }
         assert_eq!(c.active, "n1");
         assert!(blocks <= 3, "Umschaltung nach {blocks} Blöcken à 10 ms");
-        // Hauptsignal kommt zurück: kein Rücksprung von selbst
-        for _ in 0..2000 {
+        // Hauptsignal kommt zurück: erst nach 5 s stabil (und 5 s Verweildauer) geht es zurück, vorher nicht
+        for _ in 0..300 {
             c.step(10, &pair_obs(PIC, PIC));
         }
-        assert_eq!(c.active, "n1");
+        assert_eq!(c.active, "n1", "nach 3 s noch nicht zurück");
+        for _ in 0..500 {
+            c.step(10, &pair_obs(PIC, PIC));
+        }
+        assert_eq!(c.active, "main", "nach stabilem Hauptsignal zurück");
     }
 
     #[test]
@@ -717,5 +740,32 @@ mod tests {
             c.step(10, &pair_obs(GONE, PIC));
         }
         assert_eq!(c.active, "main");
+    }
+
+    #[test]
+    fn redundancy_does_not_switch_while_starting_up() {
+        let mut c = Controller::new(Rules::redundancy(40));
+        // Anlauf: Hauptsignal kommt erst nach 3 s, der Standby ist von Anfang an da
+        for _ in 0..300 {
+            c.step(10, &pair_obs(GONE, PIC));
+        }
+        assert_eq!(c.active, "main", "vor dem ersten gesunden Hauptsignal darf nicht umgeschaltet werden");
+        for _ in 0..100 {
+            c.step(10, &pair_obs(PIC, PIC));
+        }
+        // jetzt scharf: Ausfall schaltet um
+        for _ in 0..5 {
+            c.step(10, &pair_obs(GONE, PIC));
+        }
+        assert_eq!(c.active, "n1");
+    }
+
+    #[test]
+    fn redundancy_arms_after_timeout_when_main_never_comes() {
+        let mut c = Controller::new(Rules::redundancy(40));
+        for _ in 0..1200 {
+            c.step(10, &pair_obs(GONE, PIC));
+        }
+        assert_eq!(c.active, "n1", "ein Primär, der nie kommt, ist ein Ausfall");
     }
 }

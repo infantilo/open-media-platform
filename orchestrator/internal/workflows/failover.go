@@ -446,8 +446,8 @@ func (s *Service) hostOffline(hostID string) bool {
 }
 
 // connectionsForTakeover liefert die bei der Übernahme neu anzuwendenden Verbindungen der Primärrolle. Bei einem
-// Live-Standby (Role.StandbyLive) stehen die Eingänge schon; dann kommen die Ausgänge (FromRole == Primärrolle) zuerst,
-// die Eingänge folgen danach nur noch zur Auffrischung. Ohne Live-Standby bleibt die Reihenfolge der Definition.
+// Live-Standby (Role.StandbyLive) stehen die Eingänge schon: nur die Ausgänge (FromRole == Primärrolle) werden umgesteckt.
+// Ohne Live-Standby bleibt es bei allen Verbindungen in der Reihenfolge der Definition.
 func connectionsForTakeover(wf Workflow, primaryRole, standbyRole string) []Connection {
 	var out, in []Connection
 	for _, conn := range wf.Definition.Connections {
@@ -459,7 +459,10 @@ func connectionsForTakeover(wf Workflow, primaryRole, standbyRole string) []Conn
 		}
 	}
 	if def, ok := roleByName(wf, standbyRole); ok && def.StandbyLive {
-		return append(out, in...)
+		// Live-Standby: die Eingänge stehen schon (gespiegelt) und seine Programm-/Preset-Wahl folgt den gespiegelten Befehlen. Sie
+		// jetzt noch einmal anzuwenden hieße bei Mischern: `crosspoint.take` der Ursprungsquelle — das würde die Bedienung der letzten
+		// Sekunden zurückdrehen (Live-Fund im Browser-Test, Kapitel 109). Fehlt etwas, holt resyncLiveStandby den Zustand nach.
+		return out
 	}
 	// Reihenfolge der Definition unverändert.
 	var all []Connection
@@ -542,10 +545,9 @@ func (s *Service) refreshLiveStandbyInputs(wf Workflow, role string) {
 		}
 		if affected {
 			s.mirrorStandbyInbound(wf, primary)
-			if role == "" || role == r.Name {
-				// Start bzw. Neustart des Standby: Bedienzustand der Primärrolle beim nächsten Takt nachziehen
-				s.resyncPending.Store(wf.ID+"|"+primary, struct{}{})
-			}
+			// Das Spiegeln der Eingänge wendet bei Mischern `crosspoint.take` auf den Standby an und überschreibt dessen Wahl:
+			// danach den Bedienzustand der Primärrolle beim nächsten Takt nachziehen.
+			s.resyncPending.Store(wf.ID+"|"+primary, struct{}{})
 		}
 	}
 }

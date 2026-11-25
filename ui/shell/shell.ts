@@ -37,6 +37,7 @@ import type { WorkTile } from "./modules-logic.ts";
 import { installListenService } from "./listen.ts";
 import { createDeckToggle } from "./streamdeck/panel.ts";
 import { createMidiToggle } from "./midi/panel.ts";
+import { clientId } from "./client-id.ts";
 import { connectionMonitor } from "./connection.ts";
 // Reiner Seiteneffekt-Import (registriert nur customElements.define) —
 // gleicher Grund wie beim console-view.ts-Fall oben. app-shell.ts
@@ -160,7 +161,9 @@ async function fetchConsoles(): Promise<ConsolesResponse> {
 // geht es nur um "dieselbe schon offene Konsolen-Rolle folgt einem
 // Prozesswechsel", nicht um Autorisierungsänderungen mitten in der
 // Sitzung.
-const CONSOLE_REFRESH_EVENT_TYPES = new Set(["node.added", "node.removed", "lost-events"]);
+// Kap. 109: eine Standby-Übernahme ändert nur die Zuordnung Rolle -> Node (kein node.added/-removed zur selben Zeit): die Kachel der
+// Primärrolle muss sofort auf den übernommenen Node zeigen, nicht erst nach dem 30-s-Poll.
+const CONSOLE_REFRESH_EVENT_TYPES = new Set(["node.added", "node.removed", "lost-events", "workflow.updated", "workflow.failover", "workflow.standby"]);
 const CONSOLE_POLL_FALLBACK_INTERVAL_MS = 30000;
 
 // Gemeinsames Interface für <omp-console-view> (Tab-Leiste, ein aktiver
@@ -187,14 +190,59 @@ function createConsoleHost(entries: ConsoleEntry[], workflowId: string): Console
   return document.createElement("omp-console-view") as ConsoleView;
 }
 
+// Eigene Ereignis-Verbindung, die nur bei den genannten Typen etwas tut (Wiederaufbau nach 3 s bei Abbruch, kein Backoff nötig:
+// das 30-s-Polling bleibt als Netz darunter). Token wie connection.ts (EventSource kann keine Header setzen).
+function watchFilteredEvents(types: Set<string>, onHit: () => void) {
+  const open = () => {
+    let token: string | null = null;
+    try {
+      token = localStorage.getItem("omp-auth-token");
+    } catch {
+      token = null;
+    }
+    const cid = `cid=${encodeURIComponent(clientId())}`;
+    const es = new EventSource(token ? `/api/v1/events?access_token=${encodeURIComponent(token)}&${cid}` : `/api/v1/events?${cid}`);
+    es.onmessage = (ev) => {
+      try {
+        if (types.has(JSON.parse(ev.data).type)) onHit();
+      } catch {
+        // kein JSON: ignorieren
+      }
+    };
+    es.onerror = () => {
+      es.close();
+      setTimeout(open, 3000);
+    };
+  };
+  open();
+}
+
 function watchConsoleEntries(
   view: ConsoleHost,
   selectEntries: (consoles: ConsoleEntry[]) => ConsoleEntry[],
   preselectNodeRoleId?: string,
 ) {
+  // Ereignisse kommen gehäuft (workflow.updated + failover + standby innerhalb von Millisekunden): läuft schon ein Abruf, wird danach
+  // höchstens einer nachgeholt. Hängt ein Durchlauf (z. B. ein Kachel-Aufbau wartet auf einen toten Node), gibt ihn nach 8 s ein neuer
+  // Abruf frei — sonst blieben alle weiteren Ereignisse wirkungslos.
+  let startedAt = 0;
+  let again = false;
   const refresh = async () => {
-    const { consoles } = await fetchConsoles();
-    await view.setEntries(selectEntries(consoles), preselectNodeRoleId);
+    if (startedAt !== 0 && Date.now() - startedAt < 8000) {
+      again = true;
+      return;
+    }
+    startedAt = Date.now();
+    const mine = startedAt;
+    try {
+      do {
+        again = false;
+        const { consoles } = await fetchConsoles();
+        await view.setEntries(selectEntries(consoles), preselectNodeRoleId);
+      } while (again && startedAt === mine);
+    } finally {
+      if (startedAt === mine) startedAt = 0;
+    }
   };
 
   connectionMonitor.addEventListener("sse-message", (ev: Event) => {
@@ -206,6 +254,10 @@ function watchConsoleEntries(
     }
     if (CONSOLE_REFRESH_EVENT_TYPES.has(parsed.type)) void refresh();
   });
+  // Die Kiosk-Konsole startet den ConnectionMonitor nicht (das tut nur die App-Shell der Engineering-Ansicht) — ihn dort zu starten ließ
+  // die Panels bei jedem Ereignis neu abfragen (Anfrage-Flut, ERR_INSUFFICIENT_RESOURCES, Live-Fund Kapitel 109). Stattdessen eine
+  // eigene, auf die Konsolen-Ereignisse gefilterte Verbindung: sie löst nur den Abruf der Konsolen-Liste aus.
+  watchFilteredEvents(CONSOLE_REFRESH_EVENT_TYPES, () => void refresh());
   // Kein disconnectedCallback-Äquivalent nötig: die Kiosk-Route ist kein
   // SPA-Router-Ziel (jeder Routenwechsel ist ein echter Seitenwechsel,
   // s. Datei-Kommentar oben zu spaFallback) — Listener/Intervall leben

@@ -72,8 +72,8 @@ func TestConnectionsForTakeoverOrder(t *testing.T) {
 		},
 	}}
 	got := connectionsForTakeover(wf, "p", "s")
-	if len(got) != 2 || got[0].FromRole != "p" {
-		t.Fatalf("live order = %+v, want outputs first", got)
+	if len(got) != 1 || got[0].FromRole != "p" {
+		t.Fatalf("live takeover = %+v, want only the output connection", got)
 	}
 	wf.Definition.Roles[1].StandbyLive = false
 	got = connectionsForTakeover(wf, "p", "s")
@@ -152,6 +152,20 @@ func TestRoleLinksDoNotBindStandby(t *testing.T) {
 		}
 		if l.A == "p" && !l.Bound {
 			t.Errorf("link of primary must still bind: %+v", l)
+		}
+	}
+}
+
+// Nach der Übernahme teilen sich Primär- und Standby-Rolle einen Node: die Auflösung muss die Primärrolle liefern, immer.
+func TestRoleIndexPrefersPromotedPrimary(t *testing.T) {
+	wf := Workflow{ID: "w", Name: "w", Runtime: map[string]RoleRuntime{
+		"p": {InstanceID: "i2", NodeID: "n2", StandbyActive: true},
+		"s": {InstanceID: "i2", NodeID: "n2"},
+	}}
+	for i := 0; i < 50; i++ { // Map-Reihenfolge ist zufällig
+		idx := (&Store{}).buildRoleIndex([]Workflow{wf})
+		if idx.byNode["n2"].role != "p" || idx.byInstance["i2"].role != "p" {
+			t.Fatalf("run %d: node -> %q, instance -> %q, want p", i, idx.byNode["n2"].role, idx.byInstance["i2"].role)
 		}
 	}
 }

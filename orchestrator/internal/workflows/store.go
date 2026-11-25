@@ -55,11 +55,18 @@ func (s *Store) buildRoleIndex(wfs []Workflow) *roleIndex {
 		}
 		for r, rt := range wf.Runtime {
 			ref := roleRef{workflowID: wf.ID, label: label, role: r, instanceID: rt.InstanceID}
+			// Nach einer Standby-Übernahme zeigen Primär- UND Standby-Rolle auf dieselbe Instanz/denselben Node. Dann gilt die
+			// übernommene Primärrolle (StandbyActive) — nicht die zufällige Reihenfolge der Map (Live-Fund Kapitel 109: die
+			// Konsole zeigte die Kachel der Primärrolle mal auf dem toten, mal auf dem übernommenen Node).
 			if rt.NodeID != "" {
-				idx.byNode[rt.NodeID] = ref
+				if _, taken := idx.byNode[rt.NodeID]; !taken || rt.StandbyActive {
+					idx.byNode[rt.NodeID] = ref
+				}
 			}
 			if rt.InstanceID != "" {
-				idx.byInstance[rt.InstanceID] = ref
+				if _, taken := idx.byInstance[rt.InstanceID]; !taken || rt.StandbyActive {
+					idx.byInstance[rt.InstanceID] = ref
+				}
 			}
 		}
 	}
