@@ -47,6 +47,13 @@ if [ -f "$MXL_ENV_FILE" ]; then
   # shellcheck disable=SC1090
   source "$MXL_ENV_FILE"
 fi
+# mxl.env enthält absolute Pfade des Rechners, auf dem MXL gebaut wurde (z. B. Build-Rechner → verschobener/kopierter
+# Baum, Offline-Paket): dann findet kein Node libmxl.so. Die Bibliothek dieses Baums deshalb immer vorn anhängen.
+for d in "$ROOT_DIR"/third_party/mxl/build/*/lib; do
+  [ -f "$d/libmxl.so" ] || continue
+  export LD_LIBRARY_PATH="$d:$d/fabrics/ofi${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  break
+done
 
 # VA-API-Elemente des GStreamer-va-Plugins werden beim Verdrahten automatisch gewählt; der VA-Treiber der VM
 # (virtio_gpu_drv_video.so) stürzt darin ab (Segfault im Thread videotestsrc0, Player/Mischer sterben). Die Nodes
