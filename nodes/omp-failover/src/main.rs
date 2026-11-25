@@ -22,6 +22,15 @@ use omp_node_sdk::{Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, P
 use serde_json::{Value, json};
 use video::{VideoCfg, VideoIo};
 
+/// Regelsatz je Profil: „emergency“ (Standard) oder „redundancy“ (Kapitel 109 Stufe B).
+fn rules_for_profile(name: &str, frame_period_ms: u64) -> Result<Rules, String> {
+    match name {
+        "emergency" | "" => Ok(Rules::default()),
+        "redundancy" => Ok(Rules::redundancy(frame_period_ms)),
+        other => Err(format!("Profil „{other}“ gibt es nicht (emergency, redundancy)")),
+    }
+}
+
 fn unix_now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -73,6 +82,7 @@ impl Engine {
     fn audio_tick(&mut self, ts_ns: Option<u64>) {
         let still = SOURCES.iter().position(|s| *s == "still").unwrap_or(5);
         let mut obs = [Obs::default(); N];
+        let present_ms = self.sh.ctl.lock().expect("lock poisoned").rules.present_ms;
         for slot in 0..N {
             let got = self.io.take(slot, &mut self.bufs[slot]);
             let db = if got > 0 { peak_db(&self.bufs[slot][..got * CH]) } else { -120.0 };
@@ -82,7 +92,7 @@ impl Engine {
             obs[slot] = match &self.video {
                 // Fernsehen: „Signal da“ heißt Bild da; Stille/Standbild/Schwarz kommen aus Ton und Bildanalyse
                 Some(v) => Obs {
-                    present: v.present(slot, 800),
+                    present: v.present(slot, present_ms),
                     level_db: if slot == still { None } else { Some(db) },
                     frozen: if slot == still { Some(false) } else { Some(v.frozen(slot, 3)) },
                     black: Some(v.is_black(slot)),
@@ -195,18 +205,17 @@ struct VideoInputControl {
     video: Arc<VideoIo>,
     slot: usize,
     registry: RegistryClient,
+    generation: Arc<AtomicU64>,
 }
 
 impl ReceiverControl for VideoInputControl {
     fn apply(&self, resource: &ReceiverResource) {
+        let mine = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         match (&resource.sender_id, resource.master_enable) {
-            (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
-                Ok(sender) => match sender.flow_id {
-                    Some(flow_id) => self.video.connect_input(self.slot, flow_id),
-                    None => eprintln!("omp-failover: Sender {sender_id} hat keinen Flow"),
-                },
-                Err(e) => eprintln!("omp-failover: Sender {sender_id} nicht auflösbar: {e}"),
-            },
+            (Some(sender_id), true) => {
+                let (video, slot) = (self.video.clone(), self.slot);
+                io::resolve_and_connect(&self.registry, sender_id, &self.generation, mine, move |flow_id| video.connect_input(slot, flow_id));
+            }
             _ => self.video.connect_input(self.slot, String::new()),
         }
     }
@@ -279,6 +288,8 @@ impl ParamStore for Store {
                 rw("order", ParamType::String, None),
                 rw("freezeMs", ParamType::Number, Some("ms")),
                 rw("blackMs", ParamType::Number, Some("ms")),
+                rw("presentMs", ParamType::Number, Some("ms")),
+                rw("checkSilence", ParamType::Boolean, None),
                 rw("clipFile", ParamType::String, None),
                 rw("stillFile", ParamType::String, None),
                 ro("videoMode", ParamType::Boolean),
@@ -297,6 +308,7 @@ impl ParamStore for Store {
             methods: vec![
                 MethodSpec { name: "select".to_string(), args: vec![MethodArg { name: "source".to_string(), kind: ParamType::String }] },
                 MethodSpec { name: "auto".to_string(), args: vec![] },
+                MethodSpec { name: "profile".to_string(), args: vec![MethodArg { name: "name".to_string(), kind: ParamType::String }] },
             ],
         }
     }
@@ -320,6 +332,8 @@ impl ParamStore for Store {
             "order" => json!(serde_json::to_string(&c.rules.order).unwrap_or_default()),
             "freezeMs" => json!(c.rules.freeze_ms),
             "blackMs" => json!(c.rules.black_ms),
+            "presentMs" => json!(c.rules.present_ms),
+            "checkSilence" => json!(c.rules.check_silence),
             "clipFile" => json!(self.sh.clip_path.lock().expect("lock poisoned").clone()),
             "stillFile" => json!(self.sh.still_path.lock().expect("lock poisoned").clone()),
             "videoMode" => json!(self.video.is_some()),
@@ -361,6 +375,8 @@ impl ParamStore for Store {
             "minHoldMs" => r.min_hold_ms = value.as_u64().ok_or(SetError::Unknown)?,
             "freezeMs" => r.freeze_ms = value.as_u64().ok_or(SetError::Unknown)?,
             "blackMs" => r.black_ms = value.as_u64().ok_or(SetError::Unknown)?,
+            "presentMs" => r.present_ms = value.as_u64().ok_or(SetError::Unknown)?,
+            "checkSilence" => r.check_silence = value.as_bool().ok_or(SetError::Unknown)?,
             "autoReturn" => r.auto_return = value.as_bool().ok_or(SetError::Unknown)?,
             "order" => {
                 let text = value.as_str().ok_or(SetError::Unknown)?;
@@ -393,6 +409,12 @@ impl ParamStore for Store {
                 c.auto();
                 Ok(())
             }
+            "profile" => {
+                // Profil „emergency“ (Havarieumschalter, Standard) oder „redundancy“ (Redundanzpaar, Kapitel 109 Stufe B)
+                let n = args.get("name").and_then(Value::as_str).ok_or_else(|| InvokeError::Message("name fehlt".to_string()))?;
+                c.rules = rules_for_profile(n, self.video.as_ref().map(|v| v.cfg.period_ns() / 1_000_000).unwrap_or(40)).map_err(InvokeError::Message)?;
+                Ok(())
+            }
             _ => Err(InvokeError::Unknown),
         }
     }
@@ -405,7 +427,7 @@ impl ParamStore for Store {
         if method == "GET" && path == "/state" {
             let c = self.sh.ctl.lock().expect("lock poisoned");
             let r = &c.rules;
-            return Some(json_ok(json!({"state": {"noSignalMs": r.no_signal_ms, "silenceDb": r.silence_db, "silenceMs": r.silence_ms, "freezeMs": r.freeze_ms, "blackMs": r.black_ms, "healthyMs": r.healthy_ms,
+            return Some(json_ok(json!({"state": {"noSignalMs": r.no_signal_ms, "silenceDb": r.silence_db, "silenceMs": r.silence_ms, "freezeMs": r.freeze_ms, "blackMs": r.black_ms, "healthyMs": r.healthy_ms, "presentMs": r.present_ms, "checkSilence": r.check_silence,
                 "returnMs": r.return_ms, "minHoldMs": r.min_hold_ms, "autoReturn": r.auto_return, "order": r.order,
                 "clipFile": self.sh.clip_path.lock().expect("lock poisoned").clone(),
                 "stillFile": self.sh.still_path.lock().expect("lock poisoned").clone(),
@@ -424,6 +446,8 @@ impl ParamStore for Store {
             if let Some(x) = u("silenceMs") { r.silence_ms = x; }
             if let Some(x) = u("freezeMs") { r.freeze_ms = x; }
             if let Some(x) = u("blackMs") { r.black_ms = x; }
+            if let Some(x) = u("presentMs") { r.present_ms = x; }
+            if let Some(x) = s.get("checkSilence").and_then(Value::as_bool) { r.check_silence = x; }
             if let Some(x) = u("healthyMs") { r.healthy_ms = x; }
             if let Some(x) = u("returnMs") { r.return_ms = x; }
             if let Some(x) = u("minHoldMs") { r.min_hold_ms = x; }
@@ -503,14 +527,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let connections: Vec<Arc<ReceiverConnection<InputControl>>> = receiver_ids
         .iter()
         .enumerate()
-        .map(|(slot, id)| Arc::new(ReceiverConnection::new(id.clone(), InputControl { io: io.clone(), slot, registry: registry.clone() })))
+        .map(|(slot, id)| Arc::new(ReceiverConnection::new(id.clone(), InputControl { io: io.clone(), slot, registry: registry.clone(), generation: Arc::new(AtomicU64::new(0)) })))
         .collect();
     let video_receiver_ids: Vec<String> = if tv { (0..MXL_INPUTS).map(|_| omp_node_sdk::idgen::new_v4()).collect() } else { Vec::new() };
     let video_connections: Vec<Arc<ReceiverConnection<VideoInputControl>>> = match &video {
         Some(v) => video_receiver_ids
             .iter()
             .enumerate()
-            .map(|(slot, id)| Arc::new(ReceiverConnection::new(id.clone(), VideoInputControl { video: v.clone(), slot, registry: registry.clone() })))
+            .map(|(slot, id)| Arc::new(ReceiverConnection::new(id.clone(), VideoInputControl { video: v.clone(), slot, registry: registry.clone(), generation: Arc::new(AtomicU64::new(0)) })))
             .collect(),
         None => Vec::new(),
     };
@@ -554,7 +578,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let sh = Arc::new(Shared {
-        ctl: Mutex::new(Controller::new(Rules::default())),
+        ctl: Mutex::new(Controller::new(rules_for_profile(&env_or("OMP_FAILOVER_PROFILE", "emergency"), video.as_ref().map(|v| v.cfg.period_ns() / 1_000_000).unwrap_or(40)).unwrap_or_default())),
         levels: std::array::from_fn(|_| AtomicU32::new((-120.0f32).to_bits())),
         out_level: AtomicU32::new((-120.0f32).to_bits()),
         start_unix_ms: unix_now_ms(),

@@ -40,6 +40,10 @@ pub struct Rules {
     pub auto_return: bool,
     /// Reihenfolge der Notquellen (Priorität, „zuerst das, dann das“); nicht genannte Notquellen werden nicht benutzt.
     pub order: Vec<String>,
+    /// Bild gilt als „da“, wenn das letzte Bild höchstens so viele ms alt ist (Fernsehen). Standard 800 ms; im Redundanzprofil 3 Bildperioden.
+    pub present_ms: u64,
+    /// Stille überhaupt prüfen? Ein Redundanzpaar für reine Bildmischer hat keinen Ton am Eingang — Stille wäre dort keine Störung.
+    pub check_silence: bool,
 }
 
 impl Default for Rules {
@@ -55,14 +59,40 @@ impl Default for Rules {
             min_hold_ms: 2000,
             auto_return: true,
             order: ["n1", "n2", "n3", "clip", "still"].iter().map(|s| s.to_string()).collect(),
+            present_ms: 800,
+            check_silence: true,
+        }
+    }
+}
+
+impl Rules {
+    /// Profil „Redundanzpaar“ (Kapitel 109 Stufe B): Hauptsignal = aktiver Mischer, `n1` = Standby-Mischer. Ausfall erkannt nach
+    /// 3 Bildperioden ohne neues Bild (+ 20 ms), kein Rücksprung von selbst (Standby bleibt aktiv, Rückkehr nur von Hand),
+    /// Freeze/Schwarz/Stille nicht als Störung (ein Mischer darf ein Standbild oder Schwarz zeigen).
+    pub fn redundancy(frame_period_ms: u64) -> Rules {
+        Rules {
+            no_signal_ms: 20,
+            freeze_ms: 0,
+            black_ms: 0,
+            healthy_ms: 200,
+            return_ms: 0,
+            min_hold_ms: 0,
+            auto_return: false,
+            order: vec!["n1".to_string()],
+            present_ms: (3 * frame_period_ms).clamp(60, 500),
+            check_silence: false,
+            ..Rules::default()
         }
     }
 }
 
 impl Rules {
     pub fn validate(&self) -> Result<(), String> {
-        if !(100..=600_000).contains(&self.no_signal_ms) || !(500..=3_600_000).contains(&self.silence_ms) || self.freeze_ms > 3_600_000 || self.black_ms > 3_600_000 {
-            return Err("Haltezeiten außerhalb des Bereichs (Signal 0,1–600 s, Stille 0,5 s–1 h, Freeze ≤ 1 h)".to_string());
+        if !(20..=600_000).contains(&self.no_signal_ms) || !(500..=3_600_000).contains(&self.silence_ms) || self.freeze_ms > 3_600_000 || self.black_ms > 3_600_000 {
+            return Err("Haltezeiten außerhalb des Bereichs (Signal 0,02–600 s, Stille 0,5 s–1 h, Freeze ≤ 1 h)".to_string());
+        }
+        if !(20..=10_000).contains(&self.present_ms) {
+            return Err("presentMs 20–10000 ms".to_string());
         }
         if !(-120.0..=-10.0).contains(&self.silence_db) {
             return Err("Schwelle −120…−10 dBFS".to_string());
@@ -126,7 +156,7 @@ pub struct Health {
 }
 
 impl Health {
-    fn feed(&mut self, dt: u64, o: &Obs, silence_db: f64) {
+    fn feed(&mut self, dt: u64, o: &Obs, silence_db: f64, check_silence: bool) {
         self.present = o.present;
         self.last_level_db = o.level_db.unwrap_or(-120.0);
         let bad_signal = !o.present;
@@ -137,7 +167,7 @@ impl Health {
         }
         // Stille und Freeze zählen nur, wenn Daten da sind (sonst gilt „kein Signal“)
         match o.level_db {
-            Some(l) if o.present => self.silent_ms = if l < silence_db { self.silent_ms + dt } else { 0 },
+            Some(l) if o.present && check_silence => self.silent_ms = if l < silence_db { self.silent_ms + dt } else { 0 },
             _ => self.silent_ms = 0,
         }
         match o.frozen {
@@ -302,8 +332,9 @@ impl Controller {
     pub fn step(&mut self, dt_ms: u64, obs: &[Obs; N]) -> Vec<Event> {
         self.now_ms += dt_ms;
         let silence_db = self.rules.silence_db;
+        let check_silence = self.rules.check_silence;
         for (i, (_, h)) in self.health.iter_mut().enumerate() {
-            h.feed(dt_ms, &obs[i], silence_db);
+            h.feed(dt_ms, &obs[i], silence_db, check_silence);
         }
         let mut ev = Vec::new();
         let rules = self.rules.clone();
@@ -625,5 +656,66 @@ mod tests {
         r.silence_db = -60.0;
         r.no_signal_ms = 10;
         assert!(r.validate().is_err());
+    }
+
+    // Kapitel 109 Stufe B: Redundanzpaar (Hauptsignal = aktiver Mischer, n1 = Standby-Mischer), reine Bildquellen ohne Ton.
+    const PIC: Obs = Obs { present: true, level_db: Some(-120.0), frozen: Some(false), black: Some(false) };
+
+    fn pair_obs(main: Obs, n1: Obs) -> [Obs; N] {
+        let mut o = [GONE; N];
+        o[0] = main;
+        o[1] = n1;
+        o
+    }
+
+    #[test]
+    fn redundancy_profile_is_valid_and_fast() {
+        let r = Rules::redundancy(40);
+        assert!(r.validate().is_ok());
+        assert_eq!(r.present_ms, 120);
+        assert!(!r.auto_return && !r.check_silence);
+    }
+
+    #[test]
+    fn redundancy_silent_picture_is_no_failure() {
+        let mut c = Controller::new(Rules::redundancy(40));
+        for _ in 0..1000 {
+            c.step(10, &pair_obs(PIC, PIC));
+        }
+        assert_eq!(c.active, "main");
+        assert_eq!(c.status(), Status::Normal);
+    }
+
+    #[test]
+    fn redundancy_switches_within_a_few_blocks_and_stays() {
+        let mut c = Controller::new(Rules::redundancy(40));
+        for _ in 0..100 {
+            c.step(10, &pair_obs(PIC, PIC));
+        }
+        let mut blocks = 0;
+        while c.active == "main" && blocks < 50 {
+            c.step(10, &pair_obs(GONE, PIC));
+            blocks += 1;
+        }
+        assert_eq!(c.active, "n1");
+        assert!(blocks <= 3, "Umschaltung nach {blocks} Blöcken à 10 ms");
+        // Hauptsignal kommt zurück: kein Rücksprung von selbst
+        for _ in 0..2000 {
+            c.step(10, &pair_obs(PIC, PIC));
+        }
+        assert_eq!(c.active, "n1");
+    }
+
+    #[test]
+    fn redundancy_standby_not_healthy_yet_blocks_switch() {
+        let mut c = Controller::new(Rules::redundancy(40));
+        for _ in 0..5 {
+            c.step(10, &pair_obs(PIC, PIC));
+        }
+        // Standby erst 50 ms gesund (healthy_ms = 200): Ausfall der Hauptquelle schaltet noch nicht
+        for _ in 0..10 {
+            c.step(10, &pair_obs(GONE, PIC));
+        }
+        assert_eq!(c.active, "main");
     }
 }

@@ -99,7 +99,7 @@ var allowedExtraEnvKeys = map[string]bool{
 	"OMP_RESUME_MS":          true,
 	"OMP_REFILL_PERMILLE":    true,
 	"OMP_RADIO_TARGET_LABEL": true, "OMP_STUDIO_MIXER_LABEL": true, "OMP_STUDIO_GPIO_LABEL": true, "OMP_GPIO_INPUTS": true, "OMP_GPIO_OUTPUTS": true, // Radio-Moderationsplatz (Kap. 89)
-	"OMP_FAILOVER_VIDEO": true, "OMP_FAILOVER_WIDTH": true, "OMP_FAILOVER_HEIGHT": true, "OMP_FAILOVER_FPS": true, "OMP_FAILOVER_CLIP": true, "OMP_FAILOVER_STILL": true, // Havarieumschalter
+	"OMP_FAILOVER_VIDEO": true, "OMP_FAILOVER_PROFILE": true, "OMP_FAILOVER_WIDTH": true, "OMP_FAILOVER_HEIGHT": true, "OMP_FAILOVER_FPS": true, "OMP_FAILOVER_CLIP": true, "OMP_FAILOVER_STILL": true, // Havarieumschalter
 	// Hauptkontrollraum (Kapitel 106.10, modules/mcr RoleEnvHook): Startumgebung der Leitungs-Nodes aus der Datenbank.
 	"OMP_HOUSE_FORMAT": true, "OMP_NORMALIZE_MODE": true, "OMP_AUDIO_MAP": true,
 	"OMP_CONTRIB_URI": true, "OMP_CONTRIB_MODE": true, "OMP_CONTRIB_LATENCY_MS": true, "OMP_CONTRIB_STREAMID": true, "OMP_CONTRIB_AUDIO_PIDS": true,

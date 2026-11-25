@@ -30855,3 +30855,7 @@ LDAP-Bind“ aus 2026-07-10).
 ## Nachtrag 2026-11-25: Hot-Standby übernimmt beim ersten Ausfall; Live-Standby je Rolle (Kapitel 109)
 
 Die Crash-Loop-Bremse (5 Neustarts/60 s) war Failover-Trigger (Nachtrag 113). Mit warmem Standby verzögert das die Übernahme unnötig; sie entscheidet jetzt nur noch über den Wiederanlauf der ausgefallenen Instanz. Neu: Trigger `first-exit` (`launcher.ExitObserver`), Schalter `OMP_STANDBY_FIRST_EXIT=off`; `Role.StandbyLive` (Eingänge gespiegelt, Standby rendert mit; abschaltbar wegen CPU). Stufen B (Redundanz-Umschalter in `omp-failover`) und C (Befehls-Spiegelung) folgen, siehe UMSETZUNG Kapitel 109.
+
+## Nachtrag 2026-11-25: Redundanz-Umschalter (Kapitel 109 Stufe B)
+
+`omp-failover` bekommt ein Profil „redundancy“ statt eines neuen Nodes: die Zustandsmaschine (Quellen, Gesundheit, Bildgrenze, MXL-Ausgang) war vorhanden, es fehlten nur schnellere, eigene Schwellen (`presentMs`, `no_signal_ms` ab 20 ms), Stille-Prüfung abschaltbar (`checkSilence`) und kein Rücksprung. Alle Zeiten sind Eigenwerte (keine Norm). Live gemessen: 107–142 ms von hartem Kill bis Umschaltung. Dabei drei echte Fehler im Eingangs-Management des Nodes gefunden und behoben (Reihenfolge der IS-05-Aufrufe, veralteter Pipeline-Aufbau, Registry-404 ohne Wiederholung).

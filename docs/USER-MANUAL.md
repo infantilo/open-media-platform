@@ -504,6 +504,16 @@ short visible cut (not a seamless genlock switch) —
 usually unnecessary for uncritical control-room positions, recommended for 24/7 broadcast positions with
 a single load-bearing role (e.g. the video mixer).
 
+The takeover starts at the **first** unexpected process exit of the primary
+role (not only after several restart attempts); `OMP_STANDBY_FIRST_EXIT=off`
+restores the earlier rule. Choosing **"Live standby for: …"** in the dropdown
+gives the standby the same inputs as the primary role and lets it render
+continuously; on takeover only the outputs are re-plugged. This costs the full
+CPU load of a second instance — switch it off per role by choosing
+"Standby for: …" (cold standby). For an uninterrupted output put a
+`omp-failover` switch with the "redundancy" profile behind the pair (see the
+node table in the manual).
+
 ### 4.2 Latency budget (delay compensation)
 
 The workflow form has a field "Target latency (frames)"

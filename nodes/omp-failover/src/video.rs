@@ -55,6 +55,8 @@ fn now_ms() -> u64 {
 }
 
 struct ActiveV {
+    /// Flow, für den die Pipeline gebaut wurde — ein veralteter Aufbau (alter Flow, spät fertig) darf den Platz eines neuen nicht belegen.
+    flow: String,
     pipeline: gst::Pipeline,
     _input: Option<MxlVideoInput>,
 }
@@ -262,25 +264,42 @@ impl VideoIo {
 
     /// Verbindet einen MXL-Videoeingang mit einem Flow (leer = trennen) und hält die Verbindung (Wiederaufbau bei Neuentstehung des Flows).
     pub fn connect_input(self: &Arc<Self>, slot: usize, flow_id: String) {
-        let me = self.clone();
-        std::thread::spawn(move || {
-            let s = &me.slots[slot];
+        // Zustand SOFORT (nicht erst im Thread) umstellen: zwei kurz hintereinander eintreffende Aufrufe (z. B. Trennen des alten, Verbinden
+        // des neuen Senders) sonst in beliebiger Reihenfolge ausführen ließe — der spätere Thread gewänne, nicht der spätere Aufruf
+        // (live gefunden, Kapitel 109 Stufe B: Eingang blieb nach Quellentausch tot).
+        {
+            let s = &self.slots[slot];
             *s.source.lock().expect("lock poisoned") = flow_id.clone();
             s.last_ms.store(0, Ordering::Relaxed);
             s.same_run.store(0, Ordering::Relaxed);
             *s.latest.lock().expect("lock poisoned") = None;
             *s.active.lock().expect("lock poisoned") = None;
-            if flow_id.is_empty() {
-                return;
-            }
+        }
+        eprintln!("omp-failover: Bild-Eingang {slot} -> Flow \"{flow_id}\"");
+        if flow_id.is_empty() {
+            return;
+        }
+        let me = self.clone();
+        std::thread::spawn(move || {
+            let s = &me.slots[slot];
             let wanted = || *s.source.lock().expect("lock poisoned") == flow_id;
             let mut warned = false;
             while wanted() {
-                let have = s.active.lock().expect("lock poisoned").is_some();
+                // Eine Pipeline eines anderen Flows (alter Aufbau, der erst nach dem Wechsel fertig wurde) zählt nicht als „vorhanden“
+                let have = {
+                    let mut act = s.active.lock().expect("lock poisoned");
+                    if act.as_ref().is_some_and(|a| a.flow != flow_id) {
+                        *act = None;
+                    }
+                    act.is_some()
+                };
                 if !have {
                     match me.build_input(slot, &flow_id) {
                         Ok(a) => {
-                            *s.active.lock().expect("lock poisoned") = Some(a);
+                            // Wurde der Eingang während des Aufbaus umgestellt, verwerfen (kein Platz für den veralteten Aufbau)
+                            if wanted() {
+                                *s.active.lock().expect("lock poisoned") = Some(a);
+                            }
                             warned = false;
                         }
                         Err(e) => {
@@ -307,7 +326,7 @@ impl VideoIo {
         self.attach_branches(&pipeline, slot, &input.tail, false)?;
         input.activate()?;
         pipeline.set_state(gst::State::Playing).map_err(|e| format!("playing: {e}"))?;
-        Ok(ActiveV { pipeline, _input: Some(input) })
+        Ok(ActiveV { flow: flow_id.to_string(), pipeline, _input: Some(input) })
     }
 
     /// Standbild aus einer Bilddatei (leer = keins). Das Bild wird einmal in das Zielformat gebracht und dann dauerhaft als „letztes Bild“ gehalten.

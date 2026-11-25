@@ -152,16 +152,20 @@ impl MxlIo {
         if slot >= MXL_INPUTS {
             return;
         }
-        let me = self.clone();
-        std::thread::spawn(move || {
-            let s = &me.slots[slot];
+        // Zustand sofort umstellen (s. video.rs connect_input): sonst entscheidet die Thread-Reihenfolge statt der Aufruf-Reihenfolge.
+        {
+            let s = &self.slots[slot];
             *s.source.lock().expect("lock poisoned") = flow_id.clone();
             s.last_data_ms.store(0, Ordering::Relaxed);
             s.ring.lock().expect("lock poisoned").clear();
             *s.active.lock().expect("lock poisoned") = None;
-            if flow_id.is_empty() {
-                return;
-            }
+        }
+        if flow_id.is_empty() {
+            return;
+        }
+        let me = self.clone();
+        std::thread::spawn(move || {
+            let s = &me.slots[slot];
             let wanted = || *s.source.lock().expect("lock poisoned") == flow_id;
             let mut warned = false;
             while wanted() {
@@ -355,23 +359,62 @@ impl MxlIo {
     }
 }
 
+/// Löst den Sender zur Flow-ID auf und ruft `connect` damit. Ein frisch gestarteter Sender steht in der Registry oft erst einen Moment
+/// später (404): dann im Hintergrund weiter versuchen (bis 20 s), solange kein neuerer `apply` (anderer `generation`-Wert) kam —
+/// sonst bliebe der Eingang für immer getrennt (live gefunden, Kapitel 109 Stufe B).
+pub fn resolve_and_connect(registry: &RegistryClient, sender_id: &str, generation: &Arc<std::sync::atomic::AtomicU64>, mine: u64, connect: impl Fn(String) + Send + 'static) {
+    let try_once = |registry: &RegistryClient| -> Result<bool, String> {
+        match registry.get_sender(sender_id) {
+            Ok(sender) => match sender.flow_id {
+                Some(flow_id) => {
+                    connect(flow_id);
+                    Ok(true)
+                }
+                None => Ok(false),
+            },
+            Err(e) => Err(e.to_string()),
+        }
+    };
+    match try_once(registry) {
+        Ok(true) => {}
+        Ok(false) => eprintln!("omp-failover: Sender {sender_id} hat keinen Flow"),
+        Err(first) => {
+            eprintln!("omp-failover: Sender {sender_id} nicht auflösbar: {first} — versuche weiter");
+            let (registry, sender_id, generation) = (registry.clone(), sender_id.to_string(), generation.clone());
+            std::thread::spawn(move || {
+                for _ in 0..40 {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if generation.load(std::sync::atomic::Ordering::SeqCst) != mine {
+                        return; // inzwischen neu verbunden oder getrennt
+                    }
+                    if let Ok(sender) = registry.get_sender(&sender_id) {
+                        if let Some(flow_id) = sender.flow_id {
+                            connect(flow_id);
+                        }
+                        return;
+                    }
+                }
+            });
+        }
+    }
+}
+
 /// IS-05-Steuerung eines Eingangs: löst den Sender zur Flow-ID auf und verbindet.
 pub struct InputControl {
     pub io: Arc<MxlIo>,
     pub slot: usize,
     pub registry: RegistryClient,
+    pub generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl ReceiverControl for InputControl {
     fn apply(&self, resource: &ReceiverResource) {
+        let mine = self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         match (&resource.sender_id, resource.master_enable) {
-            (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
-                Ok(sender) => match sender.flow_id {
-                    Some(flow_id) => self.io.connect_input(self.slot, flow_id),
-                    None => eprintln!("omp-failover: Sender {sender_id} hat keinen Flow"),
-                },
-                Err(e) => eprintln!("omp-failover: Sender {sender_id} nicht auflösbar: {e}"),
-            },
+            (Some(sender_id), true) => {
+                let (io, slot) = (self.io.clone(), self.slot);
+                resolve_and_connect(&self.registry, sender_id, &self.generation, mine, move |flow_id| io.connect_input(slot, flow_id));
+            }
             _ => self.io.connect_input(self.slot, String::new()),
         }
     }

@@ -35,6 +35,7 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
@@ -472,7 +473,7 @@ func liveStandbyOf(wf Workflow, primaryRole string) string {
 	return ""
 }
 
-// mirrorStandbyInbound wendet die Eingangs-Verbindungen der Primärrolle (ToRole == primaryRole) zusätzlich auf die
+// mirrorStandbyInbound (Name aus Stufe A) verdrahtet den Live-Standby: Eingangs-Verbindungen der Primärrolle (ToRole == primaryRole) zusätzlich auf die
 // Live-Standby-Rolle an — gleicher Sender, Empfänger des Standby. Best effort: Fehler werden nur protokolliert, der
 // Standby bleibt dann kalt (die Übernahme wendet die Eingänge ohnehin noch einmal an). Ohne Live-Standby oder bei
 // bereits übernommener Rolle passiert nichts.
@@ -486,20 +487,29 @@ func (s *Service) mirrorStandbyInbound(wf Workflow, primaryRole string) {
 		return
 	}
 	for _, conn := range wf.Definition.Connections {
-		if conn.ToRole != primaryRole {
+		var from, to registry.NodeView
+		var okFrom, okTo bool
+		switch {
+		case conn.ToRole == primaryRole:
+			// Eingang der Primärrolle: derselbe Sender, Empfänger ist der Standby
+			from, okFrom = s.nodeForRole(wf, conn.FromRole)
+			to, okTo = standbyNode, true
+			conn.ToRole = standbyRole
+		case conn.FromRole == standbyRole:
+			// ausdrücklich modellierter Ausgang des Standby (z. B. zum Redundanz-Umschalter, Kapitel 109 Stufe B)
+			from, okFrom = standbyNode, true
+			to, okTo = s.nodeForRole(wf, conn.ToRole)
+		default:
 			continue
 		}
-		fromNode, ok := s.nodeForRole(wf, conn.FromRole)
-		if !ok {
+		if !okFrom || !okTo {
 			continue
 		}
-		mirrored := conn
-		mirrored.ToRole = standbyRole
 		ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
-		err := s.applyConnection(ctx, mirrored, fromNode, standbyNode, roleNodeType(wf, standbyRole))
+		err := s.applyConnection(ctx, conn, from, to, roleNodeType(wf, conn.ToRole))
 		cancel()
 		if err != nil {
-			slog.Warn("workflows: live standby: mirroring input failed", "workflow", wf.ID, "role", primaryRole, "standbyRole", standbyRole, "connection", conn, "error", err)
+			slog.Warn("workflows: live standby: wiring failed", "workflow", wf.ID, "role", primaryRole, "standbyRole", standbyRole, "connection", conn, "error", err)
 		}
 	}
 }

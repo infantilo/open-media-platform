@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"testing"
 	"time"
 )
@@ -86,5 +87,33 @@ func TestValidateStandbyLiveNeedsStandbyFor(t *testing.T) {
 	_, err := svc.Create("x", Definition{Roles: []Role{{Name: "a", NodeType: "omp-viewer", StandbyLive: true}}}, nil, "")
 	if err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+// Stufe B: ein ausdrücklich modellierter Ausgang des Standby (zum Redundanz-Umschalter) wird mit gespiegelt.
+func TestMirrorStandbyWiresExplicitStandbyOutput(t *testing.T) {
+	svc, nodes, g, _, wf, _, _ := setupRedundantWorkflowLive(t, true)
+	nodes.add(registry.NodeView{ID: "node-sb2", InstanceID: "i-sb2", Senders: []registry.SenderView{{ID: "send-sb2"}}, Receivers: []registry.ReceiverView{{ID: "recv-sb2"}}})
+	nodes.add(registry.NodeView{ID: "node-sink", InstanceID: "i-sink", Receivers: []registry.ReceiverView{{ID: "recv-sink"}}})
+	wf.Definition.Roles = append(wf.Definition.Roles, Role{Name: "sink", NodeType: "omp-viewer"})
+	wf.Definition.Connections = append(wf.Definition.Connections, Connection{FromRole: "standby", ToRole: "sink"})
+	wf.Runtime["standby"] = RoleRuntime{InstanceID: "i-sb2", NodeID: "node-sb2"}
+	wf.Runtime["sink"] = RoleRuntime{InstanceID: "i-sink", NodeID: "node-sink"}
+	g.mu.Lock()
+	g.calls = nil
+	g.mu.Unlock()
+
+	svc.mirrorStandbyInbound(wf, "active")
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.calls) != 2 {
+		t.Fatalf("calls = %+v, want input mirror + standby output", g.calls)
+	}
+	if g.calls[0].fromSender != "send-src" || g.calls[0].toReceiver != "recv-sb2" {
+		t.Errorf("input mirror = %+v", g.calls[0])
+	}
+	if g.calls[1].fromSender != "send-sb2" || g.calls[1].toReceiver != "recv-sink" {
+		t.Errorf("standby output = %+v", g.calls[1])
 	}
 }

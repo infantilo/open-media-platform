@@ -134,12 +134,14 @@ var allowedRoleEnv = map[string][]string{
 	"OMP_GPIO_INPUTS":        nil,
 	"OMP_GPIO_OUTPUTS":       nil,
 	// Havarieumschalter (Kapitel 89): Fernsehbetrieb, Ausgangsformat, Notclip, Standbild
-	"OMP_FAILOVER_VIDEO":  {"0", "1"},
-	"OMP_FAILOVER_WIDTH":  nil,
-	"OMP_FAILOVER_HEIGHT": nil,
-	"OMP_FAILOVER_FPS":    nil,
-	"OMP_FAILOVER_CLIP":   nil,
-	"OMP_FAILOVER_STILL":  nil,
+	"OMP_FAILOVER_VIDEO": {"0", "1"},
+	// Kapitel 109 Stufe B: Regelsatz des Umschalters ("redundancy" = Redundanzpaar für Mischer-Primär/-Standby).
+	"OMP_FAILOVER_PROFILE": {"emergency", "redundancy"},
+	"OMP_FAILOVER_WIDTH":   nil,
+	"OMP_FAILOVER_HEIGHT":  nil,
+	"OMP_FAILOVER_FPS":     nil,
+	"OMP_FAILOVER_CLIP":    nil,
+	"OMP_FAILOVER_STILL":   nil,
 }
 
 // validateRoleEnv prüft Role.Env gegen die Allowlist.
