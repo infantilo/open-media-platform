@@ -30863,3 +30863,7 @@ Die Crash-Loop-Bremse (5 Neustarts/60 s) war Failover-Trigger (Nachtrag 113). Mi
 ## Nachtrag 2026-11-25: Befehls-Spiegelung für Live-Standby (Kapitel 109 Stufe C)
 
 Spiegelung im Orchestrator-Proxy (`httpapi.commandMirrorTap`) statt in den Nodes: jeder Node-Typ mit Live-Standby funktioniert ohne eigenen Code, die Konsolen (rollenbezogen) laufen ohnehin über diesen Weg. Preis: kein gemeinsamer Zeitstempel (das wäre Stufe D und bräuchte Node-Unterstützung), Aufrufe am Orchestrator vorbei werden nicht gespiegelt. Fehlende Befehle werden durch vollständiges Nachziehen des Bedienzustands geheilt (Auslesen direkt vom Primär-Node, nicht aus der Sicherung). Bei der Übernahme eines Live-Standby wird der gesicherte Stand nicht mehr eingespielt, weil er älter ist als der gespiegelte.
+
+## Nachtrag 2026-11-25: Standby nie auf dem Host der Primärrolle (Kapitel 109)
+
+Live-Fund beim Host-Ausfall-Test: Wird der Standby ausdrücklich mit dem Umschalter verdrahtet, bildete er mit seiner Primärrolle einen MXL-Verbund und lief auf demselben Host. Fix: Verbindungen eines Standby binden nicht (`roleLinks`), und Primär/Standby bekommen automatisch ein gemeinsames RedundancyGroup-Tag (`withStandbyRedundancy`, beim Anlegen/Ändern). Bestehende, früher gespeicherte Workflows bekommen das Tag erst beim nächsten Speichern.

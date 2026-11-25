@@ -117,3 +117,41 @@ func TestMirrorStandbyWiresExplicitStandbyOutput(t *testing.T) {
 		t.Errorf("standby output = %+v", g.calls[1])
 	}
 }
+
+func TestWithStandbyRedundancyTagsPair(t *testing.T) {
+	def := Definition{Roles: []Role{{Name: "p", NodeType: "x"}, {Name: "s", NodeType: "x", StandbyFor: "p"}, {Name: "o", NodeType: "x"}}}
+	got := withStandbyRedundancy(def)
+	if got.Roles[0].RedundancyGroup == "" || got.Roles[0].RedundancyGroup != got.Roles[1].RedundancyGroup {
+		t.Fatalf("pair not tagged: %+v", got.Roles)
+	}
+	if got.Roles[2].RedundancyGroup != "" {
+		t.Errorf("unrelated role tagged: %+v", got.Roles[2])
+	}
+	if def.Roles[0].RedundancyGroup != "" {
+		t.Error("input definition must not be mutated")
+	}
+	// vorhandenes Tag wird übernommen, zwei verschiedene bleiben
+	def.Roles[0].RedundancyGroup = "mix"
+	if g := withStandbyRedundancy(def); g.Roles[1].RedundancyGroup != "mix" {
+		t.Errorf("tag not inherited: %+v", g.Roles[1])
+	}
+	def.Roles[1].RedundancyGroup = "other"
+	if g := withStandbyRedundancy(def); g.Roles[0].RedundancyGroup != "mix" || g.Roles[1].RedundancyGroup != "other" {
+		t.Errorf("user tags changed: %+v", g.Roles)
+	}
+}
+
+func TestRoleLinksDoNotBindStandby(t *testing.T) {
+	def := Definition{
+		Roles:       []Role{{Name: "p", NodeType: "a"}, {Name: "s", NodeType: "a", StandbyFor: "p"}, {Name: "sel", NodeType: "b"}},
+		Connections: []Connection{{FromRole: "p", ToRole: "sel"}, {FromRole: "s", ToRole: "sel"}},
+	}
+	for _, l := range roleLinks(def, nil) {
+		if (l.A == "s" || l.B == "s") && l.Bound {
+			t.Errorf("link of standby must not bind: %+v", l)
+		}
+		if l.A == "p" && !l.Bound {
+			t.Errorf("link of primary must still bind: %+v", l)
+		}
+	}
+}

@@ -436,6 +436,7 @@ func (s *Service) Create(name string, def Definition, adopt map[string]RoleRunti
 	if err := validate(def); err != nil {
 		return Workflow{}, err
 	}
+	def = withStandbyRedundancy(def)
 	if len(adopt) > 0 {
 		roleNames := make(map[string]bool, len(def.Roles))
 		for _, role := range def.Roles {
@@ -775,6 +776,7 @@ func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 	if err := validate(def); err != nil {
 		return Workflow{}, err
 	}
+	def = withStandbyRedundancy(def)
 	wf, err := s.store.Get(id)
 	if err != nil {
 		return Workflow{}, err

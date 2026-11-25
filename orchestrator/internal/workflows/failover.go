@@ -549,3 +549,36 @@ func (s *Service) refreshLiveStandbyInputs(wf Workflow, role string) {
 		}
 	}
 }
+
+// withStandbyRedundancy sorgt dafür, dass eine Primärrolle und ihr Standby nie ohne Not auf demselben Host landen (Live-Fund
+// Kapitel 109: ein ausdrücklich verdrahteter Standby wurde mit seiner Primärrolle zu einem Verbund und teilte deren Host — ein
+// Host-Ausfall hätte beide getroffen). Fehlt beiden ein RedundancyGroup-Tag, bekommen sie ein gemeinsames („standby:<Primär>“);
+// hat eine Seite schon eines, übernimmt die andere es. Zwei verschiedene gesetzte Tags bleiben unverändert (Nutzerwahl).
+// Liefert eine Kopie der Rollenliste.
+func withStandbyRedundancy(def Definition) Definition {
+	roles := append([]Role(nil), def.Roles...)
+	idx := map[string]int{}
+	for i, r := range roles {
+		idx[r.Name] = i
+	}
+	for i, r := range roles {
+		if r.StandbyFor == "" {
+			continue
+		}
+		pi, ok := idx[r.StandbyFor]
+		if !ok {
+			continue
+		}
+		switch {
+		case roles[i].RedundancyGroup == "" && roles[pi].RedundancyGroup == "":
+			roles[i].RedundancyGroup = "standby:" + r.StandbyFor
+			roles[pi].RedundancyGroup = roles[i].RedundancyGroup
+		case roles[i].RedundancyGroup == "":
+			roles[i].RedundancyGroup = roles[pi].RedundancyGroup
+		case roles[pi].RedundancyGroup == "":
+			roles[pi].RedundancyGroup = roles[i].RedundancyGroup
+		}
+	}
+	def.Roles = roles
+	return def
+}

@@ -27,6 +27,12 @@ func roleLinks(def Definition, catalog []launcher.CatalogEntry) []placement.Link
 	for _, r := range def.Roles {
 		typeOf[r.Name] = r.NodeType
 	}
+	standbyOf := map[string]bool{}
+	for _, r := range def.Roles {
+		if r.StandbyFor != "" {
+			standbyOf[r.Name] = true
+		}
+	}
 	gateway := map[string]bool{}
 	for _, e := range catalog {
 		if e.Network != nil {
@@ -40,6 +46,11 @@ func roleLinks(def Definition, catalog []launcher.CatalogEntry) []placement.Link
 			continue
 		}
 		bound := !gateway[typeOf[c.FromRole]] && !gateway[typeOf[c.ToRole]]
+		// Ein Standby bindet nicht an die Gegenstellen seiner Primärrolle (Kapitel 109): sonst bildete er mit ihr einen Verbund und
+		// teilte ihren Host, und die Redundanz wäre wertlos.
+		if standbyOf[c.FromRole] || standbyOf[c.ToRole] {
+			bound = false
+		}
 		k := [2]string{c.FromRole, c.ToRole}
 		if seen[k] {
 			continue
