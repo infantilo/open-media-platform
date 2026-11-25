@@ -22,6 +22,8 @@ export interface DraftRole {
   // orchestrator/internal/workflows/types.go Role.StandbyFor (einzige
   // Quelle der Durchsetzungs-Wahrheit, hier nur Dropdown-Komfort).
   standbyFor?: string;
+  // standbyLive (Kap. 109 Stufe A): Standby rendert mit und bekommt dieselben Eingänge wie die Primärrolle.
+  standbyLive?: boolean;
   // placement (D6 Teil 4, ARCHITECTURE.md §6.1 Erweiterung 2026-07-13
   // Punkt 2): Placement-Eskalationsstufe dieser Rolle — bewusst als
   // verschachteltes Objekt statt flacher Felder, identisch zum
@@ -75,7 +77,7 @@ export function removeRole(
     // Grund wie das Herausfiltern der Connections unten).
     roles: roles
       .filter((r) => r.name !== name)
-      .map((r) => (r.standbyFor === name ? { ...r, standbyFor: undefined } : r)),
+      .map((r) => (r.standbyFor === name ? { ...r, standbyFor: undefined, ...(r.standbyLive ? { standbyLive: undefined } : {}) } : r)),
     connections: connections.filter((c) => c.fromRole !== name && c.toRole !== name),
   };
 }

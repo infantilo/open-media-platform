@@ -1185,6 +1185,7 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 		}
 	}
 
+	s.refreshLiveStandbyInputs(wf, "") // Kapitel 109: Live-Standby bekommt dieselben Eingänge wie seine Primärrolle
 	// D8 Teil 3 (ARCHITECTURE.md §15.1 Punkt 3): Plan erneut berechnen
 	// (Start() hat ihn bereits als Preflight validiert, hier nur noch
 	// angewendet) und per setOutputDelay auf die jetzt registrierten
@@ -1528,6 +1529,7 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 		slog.Warn("workflows: rewireAfterRestart: persist failed", "workflow", wf.ID, "error", err)
 	}
 	s.publish(wf)
+	s.refreshLiveStandbyInputs(wf, role)
 	slog.Info("workflows: rewired role after automatic restart", "workflow", wf.ID, "role", role, "instance", instanceID)
 	s.autoRestoreAfterCrash(wf.ID, role, roleNodeType(wf, role))
 }
@@ -1776,6 +1778,7 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 		slog.Warn("workflows: RestartRole: persist final state failed", "workflow", wf.ID, "role", roleName, "error", err)
 	}
 	s.publish(wf)
+	s.refreshLiveStandbyInputs(wf, roleName)
 	slog.Info("workflows: restarted role", "workflow", wf.ID, "role", roleName, "instance", inst.ID)
 }
 
@@ -2423,6 +2426,9 @@ func validate(def Definition) error {
 	}
 	standbyOfPrimary := map[string]string{} // primaryRole -> standbyRole (Eindeutigkeit)
 	for _, r := range def.Roles {
+		if r.StandbyLive && r.StandbyFor == "" {
+			return fmt.Errorf("%w: role %q sets standbyLive but is not a standby role (standbyFor empty)", ErrValidation, r.Name)
+		}
 		if r.StandbyFor == "" {
 			continue
 		}

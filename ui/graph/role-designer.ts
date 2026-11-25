@@ -1154,12 +1154,20 @@ export class RoleDesigner extends HTMLElement {
       const opt = document.createElement("option");
       opt.value = candidate.name;
       opt.textContent = t("rd.2238e9", { p0: candidate.name });
-      if (candidate.name === role.standbyFor) opt.selected = true;
+      if (candidate.name === role.standbyFor && !role.standbyLive) opt.selected = true;
       standbySelect.appendChild(opt);
+      // Kap. 109: Live-Standby (rendert mit, bekommt dieselben Eingänge) — Wert "<Rolle>\u0001live".
+      const liveOpt = document.createElement("option");
+      liveOpt.value = candidate.name + "\u0001live";
+      liveOpt.textContent = t("rd.standbylive", { p0: candidate.name });
+      if (candidate.name === role.standbyFor && role.standbyLive) liveOpt.selected = true;
+      standbySelect.appendChild(liveOpt);
     }
     standbySelect.addEventListener("change", () => {
       this.#pushUndo();
-      role.standbyFor = standbySelect.value || undefined;
+      const [target, mode] = standbySelect.value.split("\u0001");
+      role.standbyFor = target || undefined;
+      role.standbyLive = target && mode === "live" ? true : undefined;
       this.#render();
     });
     standbyObject.appendChild(standbySelect);

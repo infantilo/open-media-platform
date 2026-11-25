@@ -510,6 +510,15 @@ kurzer sichtbarer Schnitt (kein unterbrechungsfreier Genlock-Wechsel) —
 für unkritische Regieplätze meist unnötig, für 24/7-Sendeplätze mit
 einer einzelnen tragenden Rolle (z. B. dem Bildmischer) empfohlen.
 
+Die Übernahme beginnt schon beim **ersten** unerwarteten Prozessende der
+Primärrolle (nicht erst nach mehreren Neustart-Versuchen); mit
+`OMP_STANDBY_FIRST_EXIT=off` gilt wieder die frühere Regel (erst nach
+erschöpfter Neustart-Bremse). Wählst du im Dropdown **„Live-Standby für: …“**,
+bekommt der Standby dieselben Eingänge wie die Primärrolle und rendert
+dauernd mit; bei der Übernahme werden nur noch die Ausgänge umgesteckt. Das
+kostet die volle CPU-Last einer zweiten Instanz — je Rolle abschaltbar, indem
+du „Standby für: …“ (kalter Standby) wählst.
+
 ### 4.2 Latenzbudget (Verzögerungsausgleich)
 
 Das Workflow-Formular hat ein Feld „Ziel-Latenz (Frames)"

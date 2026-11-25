@@ -299,6 +299,14 @@ type FailoverObserver interface {
 	InstanceGaveUp(instanceID string)
 }
 
+// ExitObserver ist optional zusätzlich zu FailoverObserver: wird beim ERSTEN unerwarteten Prozessende einer Instanz
+// gerufen, noch bevor der Launcher sie neu startet (Kapitel 109 Stufe A). Mit einem warmen Standby ist kein
+// Neustart-Versuch abzuwarten — die Übernahme kann sofort laufen. Die Methode muss sofort zurückkehren (sie wird mit
+// gehaltenem l.mu gerufen) und die eigentliche Arbeit asynchron erledigen.
+type ExitObserver interface {
+	InstanceExited(instanceID string)
+}
+
 // restartState hält die Crash-Loop-Buchführung einer Instanz (nicht
 // persistiert — ein Orchestrator-Neustart ist ein anderer, bereits
 // separat behandelter Fehlerfall, s. loadState).
@@ -1992,6 +2000,9 @@ func (l *Launcher) recordRestartLocked(id string) (shouldRestart bool, totalRest
 	st.countInWindow++
 	st.total++
 	l.totalRestarts.Add(1)
+	if eo, ok := l.failoverObserver.(ExitObserver); ok {
+		eo.InstanceExited(id)
+	}
 	if int64(st.countInWindow) > maxCrashRestarts.Load() {
 		return false, st.total
 	}

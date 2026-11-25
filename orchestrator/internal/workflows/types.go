@@ -112,6 +112,11 @@ type Role struct {
 	// beides), höchstens ein Standby pro Primärrolle (kein `replicas`
 	// diese Runde — YAGNI, s. Plan).
 	StandbyFor string `json:"standbyFor,omitempty"`
+	// StandbyLive (Kapitel 109, Stufe A): nur an einer Standby-Rolle. Der Standby bekommt dieselben EINGÄNGE wie die
+	// Primärrolle (Verbindungen mit ToRole == Primärrolle werden zusätzlich auf ihn angewendet) und rendert dauernd mit —
+	// bei der Übernahme müssen nur noch die Ausgänge umgesteckt werden. Kostet die volle CPU-Last einer zweiten Instanz,
+	// deshalb je Rolle abschaltbar (false = kalter, unverbundener Standby wie bisher).
+	StandbyLive bool `json:"standbyLive,omitempty"`
 	// Placement (D6 Teil 4, ARCHITECTURE.md §6.1 Erweiterung
 	// 2026-07-13 Punkt 2): pro-Rolle konfigurierbare Eskalationsstufe
 	// für die Placement-Engine (placement.Engine.evaluateOnce-Alarm bei

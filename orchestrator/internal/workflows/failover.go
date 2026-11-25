@@ -29,6 +29,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
@@ -98,6 +100,24 @@ func (s *Service) publishFailover(ev failoverEvent) {
 // Bediener") bleibt unverändert bestehen.
 func (s *Service) InstanceGaveUp(instanceID string) {
 	safego.Go("workflows.tryPromoteForInstance", func() { s.tryPromoteForInstance(instanceID, "crash-loop") })
+}
+
+// standbyFirstExitEnabled liest OMP_STANDBY_FIRST_EXIT: "off" stellt das frühere Verhalten wieder her (Übernahme erst
+// nach erschöpfter Crash-Loop-Bremse). Standard: an.
+func standbyFirstExitEnabled() bool {
+	return strings.ToLower(strings.TrimSpace(os.Getenv("OMP_STANDBY_FIRST_EXIT"))) != "off"
+}
+
+// InstanceExited implementiert launcher.ExitObserver (Kapitel 109, Stufe A): schon das ERSTE unerwartete Prozessende
+// einer Primärrolle mit Standby löst die Übernahme aus. Ein Neustart-Versuch am selben Ort dauert Sekunden und wäre
+// ohnehin sichtbar; der warme Standby läuft bereits. Die Crash-Loop-Bremse bleibt für den Wiederanlauf der
+// ausgefallenen Instanz zuständig, nicht für die Entscheidung zu übernehmen. Rollen ohne Standby sind nicht betroffen
+// (tryPromoteForInstance kehrt dort sofort zurück).
+func (s *Service) InstanceExited(instanceID string) {
+	if !standbyFirstExitEnabled() {
+		return
+	}
+	safego.Go("workflows.tryPromoteForInstance.firstExit", func() { s.tryPromoteForInstance(instanceID, "first-exit") })
 }
 
 func (s *Service) tryPromoteForInstance(instanceID, trigger string) {
@@ -251,11 +271,7 @@ func (s *Service) promoteStandby(wf Workflow, primaryRole, standbyRole, trigger 
 	// Alle Connections der Primärrolle neu anwenden — identisch zu
 	// rewireAfterRestart, deckt sowohl IS-05-Connect als auch
 	// Crosspoint-Methodenruf ab (beide Fälle laufen durch applyConnection).
-	for _, conn := range wf.Definition.Connections {
-		if conn.FromRole != primaryRole && conn.ToRole != primaryRole {
-			continue
-		}
-
+	for _, conn := range connectionsForTakeover(wf, primaryRole, standbyRole) {
 		// Freshness-Re-Check pro Verbindung — gleicher Grund/gleiches
 		// Live-Fund-Muster wie rewireAfterRestart.stillBacks (service.go,
 		// dortige ausführliche Doku): die vorige applyConnection dieser
@@ -418,4 +434,96 @@ func (s *Service) hostOffline(hostID string) bool {
 		return false
 	}
 	return time.Since(first) >= hostOfflineTimeout
+}
+
+// connectionsForTakeover liefert die bei der Übernahme neu anzuwendenden Verbindungen der Primärrolle. Bei einem
+// Live-Standby (Role.StandbyLive) stehen die Eingänge schon; dann kommen die Ausgänge (FromRole == Primärrolle) zuerst,
+// die Eingänge folgen danach nur noch zur Auffrischung. Ohne Live-Standby bleibt die Reihenfolge der Definition.
+func connectionsForTakeover(wf Workflow, primaryRole, standbyRole string) []Connection {
+	var out, in []Connection
+	for _, conn := range wf.Definition.Connections {
+		switch {
+		case conn.FromRole == primaryRole:
+			out = append(out, conn)
+		case conn.ToRole == primaryRole:
+			in = append(in, conn)
+		}
+	}
+	if def, ok := roleByName(wf, standbyRole); ok && def.StandbyLive {
+		return append(out, in...)
+	}
+	// Reihenfolge der Definition unverändert.
+	var all []Connection
+	for _, conn := range wf.Definition.Connections {
+		if conn.FromRole == primaryRole || conn.ToRole == primaryRole {
+			all = append(all, conn)
+		}
+	}
+	return all
+}
+
+// liveStandbyOf liefert die Live-Standby-Rolle zu primaryRole (Role.StandbyLive), sonst "".
+func liveStandbyOf(wf Workflow, primaryRole string) string {
+	for _, r := range wf.Definition.Roles {
+		if r.StandbyFor == primaryRole && r.StandbyLive {
+			return r.Name
+		}
+	}
+	return ""
+}
+
+// mirrorStandbyInbound wendet die Eingangs-Verbindungen der Primärrolle (ToRole == primaryRole) zusätzlich auf die
+// Live-Standby-Rolle an — gleicher Sender, Empfänger des Standby. Best effort: Fehler werden nur protokolliert, der
+// Standby bleibt dann kalt (die Übernahme wendet die Eingänge ohnehin noch einmal an). Ohne Live-Standby oder bei
+// bereits übernommener Rolle passiert nichts.
+func (s *Service) mirrorStandbyInbound(wf Workflow, primaryRole string) {
+	standbyRole := liveStandbyOf(wf, primaryRole)
+	if standbyRole == "" || wf.Runtime[primaryRole].StandbyActive {
+		return
+	}
+	standbyNode, ok := s.nodeForRole(wf, standbyRole)
+	if !ok {
+		return
+	}
+	for _, conn := range wf.Definition.Connections {
+		if conn.ToRole != primaryRole {
+			continue
+		}
+		fromNode, ok := s.nodeForRole(wf, conn.FromRole)
+		if !ok {
+			continue
+		}
+		mirrored := conn
+		mirrored.ToRole = standbyRole
+		ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout.Load())
+		err := s.applyConnection(ctx, mirrored, fromNode, standbyNode, roleNodeType(wf, standbyRole))
+		cancel()
+		if err != nil {
+			slog.Warn("workflows: live standby: mirroring input failed", "workflow", wf.ID, "role", primaryRole, "standbyRole", standbyRole, "connection", conn, "error", err)
+		}
+	}
+}
+
+// refreshLiveStandbyInputs spiegelt die Eingänge aller Primärrollen neu, die von einem Ereignis an role (Start,
+// Neustart, Umzug) betroffen sein können: die Rolle selbst als Primär oder Standby, oder als Quelle einer
+// Eingangs-Verbindung. Keine Last ohne Live-Standby.
+func (s *Service) refreshLiveStandbyInputs(wf Workflow, role string) {
+	for _, r := range wf.Definition.Roles {
+		if !r.StandbyLive || r.StandbyFor == "" {
+			continue
+		}
+		primary := r.StandbyFor
+		affected := role == "" || role == primary || role == r.Name
+		if !affected {
+			for _, conn := range wf.Definition.Connections {
+				if conn.ToRole == primary && conn.FromRole == role {
+					affected = true
+					break
+				}
+			}
+		}
+		if affected {
+			s.mirrorStandbyInbound(wf, primary)
+		}
+	}
 }

@@ -1305,6 +1305,7 @@ export const de = {
   "rd.f53db2": "Warme Standby-Rolle für eine andere Rolle desselben Node-Typs — übernimmt automatisch, wenn die Primärrolle ausfällt (K7 Teil 4).",
   "rd.7ce364": "Standby für: —",
   "rd.2238e9": "Standby für: {p0}",
+  "rd.standbylive": "Live-Standby für: {p0} (rendert mit, mehr CPU)",
   "rd.b94a25": "Placement-Eskalation bei Host-Überlast (D6 Teil 4) — advisory zeigt nur einen Alarm, auto-confirm-window/auto ziehen die Rolle automatisch auf einen gesunden Ausweichhost um.",
   "rd.a92c96": "Bestätigungsfenster in Sekunden, bevor die Migration ohne Eingriff automatisch ausgeführt wird (leer = 30s).",
   "rd.dfb4af": "Placement: advisory",

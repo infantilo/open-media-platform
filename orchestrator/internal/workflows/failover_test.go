@@ -45,6 +45,13 @@ func (f *fakeHostMetrics) Get(hostID string) (hosts.Metrics, bool) {
 // active/standby.
 func setupRedundantWorkflow(t *testing.T) (svc *Service, nodes *fakeNodeLister, g *fakeGraph, l *fakeLauncher, wf Workflow, activeInstance, standbyInstance string) {
 	t.Helper()
+	return setupRedundantWorkflowLive(t, false)
+}
+
+// setupRedundantWorkflowLive: wie setupRedundantWorkflow, mit live=true ist die Standby-Rolle ein Live-Standby (Kapitel 109)
+// und bekommt beim Start dieselben Eingänge wie "active".
+func setupRedundantWorkflowLive(t *testing.T, live bool) (svc *Service, nodes *fakeNodeLister, g *fakeGraph, l *fakeLauncher, wf Workflow, activeInstance, standbyInstance string) {
+	t.Helper()
 	original, originalPoll := registrationTimeout.Load(), registrationPollInterval.Load()
 	registrationTimeout.Store(2 * time.Second)
 	registrationPollInterval.Store(10 * time.Millisecond)
@@ -59,7 +66,7 @@ func setupRedundantWorkflow(t *testing.T) (svc *Service, nodes *fakeNodeLister, 
 		Roles: []Role{
 			{Name: "src", NodeType: "omp-source"},
 			{Name: "active", NodeType: "omp-viewer", RedundancyGroup: "viewer-red"},
-			{Name: "standby", NodeType: "omp-viewer", StandbyFor: "active", RedundancyGroup: "viewer-red"},
+			{Name: "standby", NodeType: "omp-viewer", StandbyFor: "active", StandbyLive: live, RedundancyGroup: "viewer-red"},
 		},
 		Connections: []Connection{{FromRole: "src", ToRole: "active"}},
 	}
@@ -114,8 +121,12 @@ func setupRedundantWorkflow(t *testing.T) (svc *Service, nodes *fakeNodeLister, 
 	g.mu.Lock()
 	callsAfterStart := len(g.calls)
 	g.mu.Unlock()
-	if callsAfterStart != 1 {
-		t.Fatalf("connect calls after start = %d, want exactly 1 (src->active only, standby stays unconnected)", callsAfterStart)
+	wantCalls := 1
+	if live {
+		wantCalls = 2 // zusätzlich src->standby (gespiegelter Eingang)
+	}
+	if callsAfterStart != wantCalls {
+		t.Fatalf("connect calls after start = %d, want exactly %d (live=%v)", callsAfterStart, wantCalls, live)
 	}
 	return svc, nodes, g, l, wf, activeInstance, standbyInstance
 }

@@ -104,6 +104,7 @@ Erzeugt mit `sh docs/entwicklung/doku-index.sh`. Abschnitt gezielt lesen: Read m
 6783 Kapitel 106: Hauptkontrollraum (MCR / Ingest-Leitstelle) — Leitungen, Hausformat nur bei Abweichung, A/
 6962 Kapitel 107: Audio-Matrix `omp-audio-matrix` — freie Ein-/Ausgänge, Kreuzschiene, Kanal-Labels, MCR-An
 7051 Kapitel 108: Ausfallfreier Umzug über Hostgrenzen trotz MXL-Gegenstellen
+7088 Kapitel 109: Ausfallfreies Hot-Standby
 
 ## ARCHITECTURE.md
 

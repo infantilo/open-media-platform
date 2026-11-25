@@ -1306,6 +1306,7 @@ export const en: Record<keyof typeof de, string> = {
   "rd.f53db2": "Warm standby role for another role of the same node type — takes over automatically if the primary role fails (K7 part 4).",
   "rd.7ce364": "Standby for: —",
   "rd.2238e9": "Standby for: {p0}",
+  "rd.standbylive": "Live standby for: {p0} (renders along, more CPU)",
   "rd.b94a25": "Placement escalation on host overload (D6 part 4) — advisory only shows an alarm, auto-confirm-window/auto automatically move the role to a healthy fallback host.",
   "rd.a92c96": "Confirmation window in seconds before the migration is executed automatically without intervention (empty = 30s).",
   "rd.dfb4af": "Placement: advisory",
