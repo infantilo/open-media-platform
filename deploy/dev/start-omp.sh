@@ -110,6 +110,8 @@ mkdir -p "${OMP_MXL_DOMAIN:-/dev/shm/omp-mxl}"
 # Medienverzeichnisse, die Container-Nodes mit Katalogfeld mediaRead (z. B. Auto-Untertitel, Datei-SRT) schreibgeschützt und mit
 # gleichem Pfad sehen — sonst meldet der Node „Datei nicht gefunden“. Weitere Pfade mit `:` anhängen.
 export OMP_MEDIA_MOUNTS="${OMP_MEDIA_MOUNTS:-$ROOT_DIR/data/media:$ROOT_DIR/data/review}"
+# podman bindet nur vorhandene Pfade ("statfs ...: no such file or directory" -> Start der Container-Nodes scheitert, z. B. auf frisch eingespielten Rechnern)
+_ifs="$IFS"; IFS=:; for _p in $OMP_MEDIA_MOUNTS; do [ -z "$_p" ] || mkdir -p "$_p" 2>/dev/null || true; done; IFS="$_ifs"
 
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   echo "Orchestrator läuft bereits (PID $(cat "$PID_FILE"))." >&2
