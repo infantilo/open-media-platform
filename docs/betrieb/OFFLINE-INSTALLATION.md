@@ -186,6 +186,7 @@ mit Container-Runner laufen sollen.
 - **Nichts bauen**: Auf dem Zielrechner lässt sich OMP aus dem Paket nicht neu kompilieren (kein Go/Rust/Deno, keine
   `-dev`-Pakete). Codeänderungen = neues Paket auf dem Build-Rechner.
 - **Cloud-Funktionen** (Kap. 35) brauchen naturgemäß Internet; ohne bleiben sie aus.
+- **OGraf unter Rocky**: das WPE-Plugin fehlt dort, der native Node `omp-ograf` startet nicht (`wpesrc` nicht gefunden). Ersatz ist das Container-Paket (Debian-Image mit WPE): auf dem Build-Rechner `deploy/offline/ograf-container.sh export`, auf dem Zielrechner `deploy/offline/ograf-container.sh import omp-ograf-image.tar` (bei laufendem Orchestrator); in der Oberfläche den Typ „OGraf Graphics (Container)“ (`omp-ograf-pkg`) verwenden.
 - **WPE/OGraf** (`omp-ograf`): die Pakete `gstreamer1.0-wpe`/`libwpebackend-fdo-1.0-1` sind in der Systempaket-Liste, sofern
   die Distribution sie führt; sonst fehlt OGraf-Rendering.
 - **Images mit `:latest`** (NATS, NMOS-Registry, Caddy …): das Paket friert den Stand des Bautags ein. Ein späteres Paket
