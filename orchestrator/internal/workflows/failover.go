@@ -261,7 +261,12 @@ func (s *Service) promoteStandby(wf Workflow, primaryRole, standbyRole, trigger 
 	// aktualisierte Runtime auf, muss also nach der Runtime-Mutation
 	// laufen, um auf die STANDBY-Node statt der toten Primär-Node zu
 	// zeigen. §7.7: "importiert nur den Bedienzustand" — kein Frame-Sync.
-	if saved, err := s.store.GetRoleState(wf.ID); err != nil {
+	// Live-Standby: Befehle wurden laufend mitgespiegelt (command_mirror.go) — der gesicherte Stand ist bis zu 5 s ÄLTER als der
+	// des Standby und würde ihn zurückdrehen. Nur einspielen, wenn noch ein Nachziehen aussteht (ein Befehl kam nicht an).
+	_, resyncDue := s.resyncPending.Load(wf.ID + "|" + primaryRole)
+	if def, _ := roleByName(wf, standbyRole); def.StandbyLive && !resyncDue {
+		slog.Info("workflows: promoteStandby: live standby, keeping its mirrored state", "workflow", wf.ID, "role", primaryRole)
+	} else if saved, err := s.store.GetRoleState(wf.ID); err != nil {
 		slog.Warn("workflows: promoteStandby: load role state failed", "workflow", wf.ID, "error", err)
 	} else if raw, ok := saved[primaryRole]; ok {
 		if err := s.restoreOneRoleState(wf, primaryRole, raw); err != nil {
@@ -377,6 +382,9 @@ func (s *Service) failoverTick() {
 			}
 			if senderToAlias == nil {
 				senderToAlias = s.buildSenderAliasIndex(wf)
+			}
+			if _, due := s.resyncPending.LoadAndDelete(wf.ID + "|" + role.Name); due {
+				s.resyncLiveStandby(wf, role.Name)
 			}
 			s.captureOneRoleState(wf, role.Name, senderToAlias)
 			s.checkHostOffline(wf, role.Name, standbyRole)
@@ -534,6 +542,10 @@ func (s *Service) refreshLiveStandbyInputs(wf Workflow, role string) {
 		}
 		if affected {
 			s.mirrorStandbyInbound(wf, primary)
+			if role == "" || role == r.Name {
+				// Start bzw. Neustart des Standby: Bedienzustand der Primärrolle beim nächsten Takt nachziehen
+				s.resyncPending.Store(wf.ID+"|"+primary, struct{}{})
+			}
 		}
 	}
 }

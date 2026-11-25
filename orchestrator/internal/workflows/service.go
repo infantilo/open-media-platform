@@ -344,6 +344,10 @@ type Service struct {
 	hostUnseenMu sync.Mutex
 	hostUnseen   map[string]time.Time
 	promoting    sync.Map
+	// Befehls-Spiegelung (command_mirror.go): kurzlebiger Cache Node-ID -> Standby-Ziel, und Rollen, deren Standby nachgezogen werden muss.
+	mirrorMu      sync.Mutex
+	mirrorCache   map[string]mirrorEntry
+	resyncPending sync.Map // "<Workflow>|<Primärrolle>"
 	// relocating (hostloss.go): Hosts, deren Rollen gerade wegen Ausfalls umziehen bzw. frühester nächster Versuch.
 	// standalone (hostloss_standalone.go): Umzug eigenständiger Instanzen bei Host-Ausfall (instancemigrate.Service).
 	standalone atomic.Pointer[StandaloneRelocator]

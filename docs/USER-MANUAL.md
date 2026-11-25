@@ -510,7 +510,16 @@ restores the earlier rule. Choosing **"Live standby for: …"** in the dropdown
 gives the standby the same inputs as the primary role and lets it render
 continuously; on takeover only the outputs are re-plugged. This costs the full
 CPU load of a second instance — switch it off per role by choosing
-"Standby for: …" (cold standby). For an uninterrupted output put a
+"Standby for: …" (cold standby).
+
+With a live standby, **operator commands** (methods, parameters, state) sent to
+the primary role are also sent to the standby, so its operating state follows
+continuously; on takeover the saved (up to 5 s older) state is therefore no
+longer re-applied. If a command does not reach the standby, or the standby
+restarts, it is fully caught up at the next tick (5 s). Commands arrive one
+after the other, not with a shared timestamp — a cut may take effect one frame
+earlier or later on the standby.
+ For an uninterrupted output put a
 `omp-failover` switch with the "redundancy" profile behind the pair (see the
 node table in the manual).
 

@@ -363,6 +363,7 @@ func (s *Service) rearmStandby(workflowID, primaryRole string) {
 	}
 	s.publish(fresh)
 	s.mirrorStandbyInbound(fresh, primaryRole)
+	s.resyncLiveStandby(fresh, primaryRole) // neuer Standby bekommt den aktuellen Bedienzustand der Primärrolle
 	s.publishStandbyEvent(standbyEvent{WorkflowID: workflowID, Role: primaryRole, StandbyRole: standbyRole, InstanceID: inst.ID, HostID: res.HostID, Status: "rearmed", At: time.Now()})
 	slog.Info("workflows: standby re-established", "workflow", workflowID, "role", primaryRole, "standbyRole", standbyRole, "instance", inst.ID, "host", res.HostID)
 }

@@ -499,8 +499,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/events", g.requireAuth(handleEvents(events)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/descriptor.json", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))
-	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))
-	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", g.requireVerbOnNode(authz.VerbOperate, methodObserverTap(handleNodeProxy(nodes, nodeClient, "/methods/{name}", nodeLogs), options.moduleHooks, nodes)))
+	cmdMirror, _ := workflowSvc.(CommandMirror) // Kapitel 109 Stufe C: Befehle auch an den Live-Standby
+	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", g.requireVerbOnNode(authz.VerbOperate, commandMirrorTap(handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs), cmdMirror, nodeClient)))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", g.requireVerbOnNode(authz.VerbOperate, commandMirrorTap(methodObserverTap(handleNodeProxy(nodes, nodeClient, "/methods/{name}", nodeLogs), options.moduleHooks, nodes), cmdMirror, nodeClient)))
 	// Plugin-Host (ARCHITECTURE.md §24.4, UMSETZUNG.md C19) — reine
 	// Routenregistrierung, keine neue Proxy-Logik: derselbe generische
 	// handleNodeProxy wie bei params/methods, gleiche Auth-Abstufung
@@ -542,7 +543,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/nodes/{id}/segue/audio", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/segue/audio", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/segue/peaks", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/segue/peaks", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/state", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/state", nodeLogs)))
-	mux.HandleFunc("POST /api/v1/nodes/{id}/state", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/state", nodeLogs)))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/state", g.requireVerbOnNode(authz.VerbOperate, commandMirrorTap(handleNodeProxy(nodes, nodeClient, "/state", nodeLogs), cmdMirror, nodeClient)))
 	// Benannte Node-eigene Layouts (Nutzerauftrag 2026-08-20:
 	// "mehrere layouts pro multiviewer anlegbar/aufrufbar machen") —
 	// bislang nur von omp-multiviewer-custom implementiert, aber wie

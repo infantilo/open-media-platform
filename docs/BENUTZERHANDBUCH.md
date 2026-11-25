@@ -519,6 +519,14 @@ dauernd mit; bei der Übernahme werden nur noch die Ausgänge umgesteckt. Das
 kostet die volle CPU-Last einer zweiten Instanz — je Rolle abschaltbar, indem
 du „Standby für: …“ (kalter Standby) wählst.
 
+Beim Live-Standby gehen **Bedienbefehle** (Methoden, Parameter, Zustand) an die
+Primärrolle zusätzlich an den Standby, sodass dessen Bedienzustand laufend
+folgt; bei der Übernahme wird der gesicherte (bis zu 5 s ältere) Stand deshalb
+nicht mehr eingespielt. Kommt ein Befehl beim Standby nicht an oder startet der
+Standby neu, wird er beim nächsten Takt (5 s) vollständig nachgezogen. Die
+Befehle kommen nacheinander, nicht mit gemeinsamem Zeitstempel — ein Schnitt
+kann beim Standby ein Bild früher oder später wirken.
+
 ### 4.2 Latenzbudget (Verzögerungsausgleich)
 
 Das Workflow-Formular hat ein Feld „Ziel-Latenz (Frames)"
