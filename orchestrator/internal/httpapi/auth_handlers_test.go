@@ -356,7 +356,7 @@ func TestHandleWhoamiBootstrapReportsIsAdminTrue(t *testing.T) {
 	authzStore := fakeAuthzSvc{}
 
 	rec := httptest.NewRecorder()
-	handleWhoami(authSvc, authzStore)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/whoami", nil))
+	handleWhoami(authSvc, authzStore, nil)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/whoami", nil))
 
 	var body map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
@@ -374,7 +374,7 @@ func TestHandleWhoamiReportsIsAdminFromBinding(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/whoami", nil)
 	req.Header.Set("Authorization", "Bearer valid-token")
 	rec := httptest.NewRecorder()
-	handleWhoami(authSvc, authzStore)(rec, req)
+	handleWhoami(authSvc, authzStore, nil)(rec, req)
 
 	var body map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
@@ -392,7 +392,7 @@ func TestHandleWhoamiReportsIsAdminFalseWithoutBinding(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/whoami", nil)
 	req.Header.Set("Authorization", "Bearer valid-token")
 	rec := httptest.NewRecorder()
-	handleWhoami(authSvc, authzStore)(rec, req)
+	handleWhoami(authSvc, authzStore, nil)(rec, req)
 
 	var body map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
@@ -534,5 +534,17 @@ func TestWeakPasswordIsBadRequestOnCreateAndReset(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/auth/users/bob/password", strings.NewReader(`{"password":"kurz"}`)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("reset: %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleWhoamiBootstrapBlockedFromRemote(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handleWhoami(fakeAuthSvc{userCount: 0}, fakeAuthzSvc{}, func(*http.Request) bool { return false })(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/whoami", nil))
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["bootstrapBlocked"] != true || body["isAdmin"] != false {
+		t.Errorf("body = %+v, want bootstrapBlocked=true isAdmin=false", body)
 	}
 }

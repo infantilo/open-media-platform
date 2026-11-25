@@ -2898,6 +2898,11 @@ export const en: Record<keyof typeof de, string> = {
   "sup.access.by": "by {user}",
   "sup.access.banner": "Support access — read-only, valid until {until} ({min} min left)",
   "sup.access.linkFailed": "Support link invalid",
+  "boot.blocked.title": "First-time setup is only possible locally",
+  "boot.blocked.intro": "No user exists yet. For security, the first administrator can only be created from the server itself. Choose one way:",
+  "boot.blocked.local": "Open http://localhost:8000 on the server itself or use an SSH tunnel (ssh -L 8000:localhost:8000 <host>).",
+  "boot.blocked.open": "Temporarily set OMP_BOOTSTRAP_OPEN=1, restart the orchestrator, create the admin, then remove the variable.",
+  "boot.blocked.token": "Set OMP_BOOTSTRAP_TOKEN=<secret> and send the admin creation call with the X-Bootstrap-Token header.",
 
   "fr.button": "❄ Freeze",
   "fr.button.title": "Freeze the last minutes: saves timeline, messages, measurement series and pipeline state as a package for support",

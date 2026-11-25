@@ -496,7 +496,25 @@ async function boot() {
   // Support-Link (#support=…): vor der Anmeldeprüfung einlösen, damit der Zugang gleich gilt.
   const supportError = await redeemSupportLink();
   if (supportError) alert_support_error(root, supportError);
-  const { authRequired, authenticated, username } = await whoami();
+  const { authRequired, authenticated, username, bootstrapBlocked } = await whoami();
+  if (bootstrapBlocked) {
+    const box = document.createElement("div");
+    box.setAttribute("data-role", "bootstrap-blocked");
+    box.style.cssText = "max-width:640px;margin:10vh auto;padding:24px;font:15px/1.5 system-ui,sans-serif;border:1px solid #888;border-radius:8px;";
+    const h = document.createElement("h2");
+    h.textContent = t("boot.blocked.title");
+    const ul = document.createElement("ul");
+    for (const k of ["boot.blocked.local", "boot.blocked.open", "boot.blocked.token"]) {
+      const li = document.createElement("li");
+      li.textContent = t(k);
+      ul.append(li);
+    }
+    const p = document.createElement("p");
+    p.textContent = t("boot.blocked.intro");
+    box.append(h, p, ul);
+    root.replaceChildren(box);
+    return;
+  }
   if (!authRequired || authenticated) installToastCodes();
 
   if (authRequired && !authenticated) {

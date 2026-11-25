@@ -133,7 +133,10 @@ func handleLogin(authSvc AuthService, audit AuditLogger, lockout LoginRateLimite
 // Fall (count==0) bewusst true, sonst könnte niemand je den allerersten
 // Nutzer über die UI anlegen (derselbe Bypass-Gedanke wie in
 // handleCreateUser/authGate.authenticate).
-func handleWhoami(authSvc AuthService, authzStore AuthzChecker, support ...SupportVerifier) http.HandlerFunc {
+//
+// `bootstrapBlocked`: noch kein Nutzer, aber diese Anfrage darf den Bootstrap-Modus nicht nutzen (nicht Loopback,
+// kein OMP_BOOTSTRAP_OPEN/-TOKEN) — die API antwortet dann überall 401; die Shell zeigt statt einer leeren Oberfläche einen Hinweis.
+func handleWhoami(authSvc AuthService, authzStore AuthzChecker, bootstrapAllowed func(*http.Request) bool, support ...SupportVerifier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		count, err := authSvc.UserCount(r.Context())
 		if err != nil {
@@ -141,6 +144,10 @@ func handleWhoami(authSvc AuthService, authzStore AuthzChecker, support ...Suppo
 			return
 		}
 		if count == 0 {
+			if bootstrapAllowed != nil && !bootstrapAllowed(r) {
+				writeJSON(w, http.StatusOK, map[string]any{"authRequired": false, "authenticated": false, "isAdmin": false, "bootstrapBlocked": true})
+				return
+			}
 			writeJSON(w, http.StatusOK, map[string]any{"authRequired": false, "authenticated": false, "isAdmin": true, "canConfigure": true})
 			return
 		}

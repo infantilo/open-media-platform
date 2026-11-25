@@ -2897,6 +2897,11 @@ export const de = {
   "sup.access.by": "von {user}",
   "sup.access.banner": "Support-Zugang — nur lesen, gültig bis {until} (noch {min} Min.)",
   "sup.access.linkFailed": "Support-Link ungültig",
+  "boot.blocked.title": "Erst-Einrichtung nur lokal möglich",
+  "boot.blocked.intro": "Es ist noch kein Nutzer angelegt. Aus Sicherheitsgründen darf der erste Administrator nur vom Server selbst angelegt werden. Wähle einen Weg:",
+  "boot.blocked.local": "Vom Server selbst http://localhost:8000 öffnen oder per SSH-Tunnel (ssh -L 8000:localhost:8000 <Host>).",
+  "boot.blocked.open": "Vorübergehend OMP_BOOTSTRAP_OPEN=1 setzen, Orchestrator neu starten, Admin anlegen, Variable danach entfernen.",
+  "boot.blocked.token": "OMP_BOOTSTRAP_TOKEN=<geheim> setzen und den Admin-Aufruf mit Kopfzeile X-Bootstrap-Token senden.",
 
   "fr.button": "❄ Einfrieren",
   "fr.button.title": "Die letzten Minuten einfrieren: speichert Zeitleiste, Meldungen, Messreihen und Pipeline-Zustand als Paket für den Support",

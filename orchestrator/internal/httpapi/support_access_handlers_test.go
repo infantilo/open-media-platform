@@ -313,7 +313,7 @@ func TestWhoamiReportsSupportAccess(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/auth/whoami", nil)
 	req.Header.Set("Authorization", "Bearer "+supportaccess.TokenPrefix+"ok.secret")
 	rec := httptest.NewRecorder()
-	handleWhoami(fakeAuthSvc{userCount: 1}, fakeAuthzSvc{}, store)(rec, req)
+	handleWhoami(fakeAuthSvc{userCount: 1}, fakeAuthzSvc{}, nil, store)(rec, req)
 	var out map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
 	if out["support"] != true || out["authenticated"] != true || out["username"] != "support:ok" || out["canConfigure"] != false || out["supportNote"] != "Ticket 1" {
@@ -321,7 +321,7 @@ func TestWhoamiReportsSupportAccess(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer "+supportaccess.TokenPrefix+"old.secret")
 	rec = httptest.NewRecorder()
-	handleWhoami(fakeAuthSvc{userCount: 1}, fakeAuthzSvc{}, store)(rec, req)
+	handleWhoami(fakeAuthSvc{userCount: 1}, fakeAuthzSvc{}, nil, store)(rec, req)
 	out = nil
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
 	if out["authenticated"] != false {

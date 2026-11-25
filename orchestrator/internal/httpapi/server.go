@@ -477,7 +477,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		}
 		return wrap(h)
 	}
-	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc, authzStore, supportVerifier(options.supportAccess)))
+	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc, authzStore, g.bootstrapAllowed, supportVerifier(options.supportAccess)))
 	mux.HandleFunc("POST /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleCreateUser(authSvc, authzStore)))
 	mux.HandleFunc("GET /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleListUsers(authSvc, authzStore, options.groups)))
 	mux.HandleFunc("DELETE /api/v1/auth/users/{name}", g.requireVerbGlobal(authz.VerbAdmin, afterDelete(handleDeleteUser(authSvc, authzStore, options.groups), func(r *http.Request) {

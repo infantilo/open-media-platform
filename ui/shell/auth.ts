@@ -69,6 +69,8 @@ export const sessionReady: Promise<void> = (async () => {
 export interface WhoamiResponse {
   authRequired: boolean;
   authenticated: boolean;
+  // Noch kein Nutzer, aber diese Anfrage darf den Bootstrap-Modus nicht nutzen (nicht lokal): API antwortet 401.
+  bootstrapBlocked?: boolean;
   username?: string;
   // Kapitel 11 Teil 1 (docs/END-GOAL-FEATURES.md §11.4): true bei
   // admin-Verb ODER im Bootstrap-Modus (noch kein Nutzer angelegt) —
