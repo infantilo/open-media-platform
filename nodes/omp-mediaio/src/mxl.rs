@@ -1137,6 +1137,7 @@ fn write_loop(
     let mut consecutive_eos_polls: u32 = 0;
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
+        let polled = std::time::Instant::now();
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
             Some(sample) => sample,
             // 2026-08-21 root-caused per `gdb`-Backtrace an
@@ -1229,6 +1230,11 @@ fn write_loop(
             }
             None => {
                 consecutive_eos_polls = 0;
+                // Steht die Pipeline (Fehler/EOS vor dem ersten Bild, Appsink nicht gestartet), kehrt `try_pull_sample`
+                // sofort zurück: ohne Pause lief dieser Thread dauerhaft mit 100 % CPU (Befund 2026-11-26).
+                if polled.elapsed() < std::time::Duration::from_millis(20) {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
                 continue;
             }
         };
@@ -1743,6 +1749,7 @@ fn write_audio_loop(
     let mut consecutive_eos_polls: u32 = 0;
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
+        let polled = std::time::Instant::now();
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
             Some(sample) => sample,
             // Gleicher Fund/gleiche Begründung wie in `write_loop` oben,
@@ -1764,6 +1771,11 @@ fn write_audio_loop(
             }
             None => {
                 consecutive_eos_polls = 0;
+                // Steht die Pipeline (Fehler/EOS vor dem ersten Bild, Appsink nicht gestartet), kehrt `try_pull_sample`
+                // sofort zurück: ohne Pause lief dieser Thread dauerhaft mit 100 % CPU (Befund 2026-11-26).
+                if polled.elapsed() < std::time::Duration::from_millis(20) {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
                 continue;
             }
         };
