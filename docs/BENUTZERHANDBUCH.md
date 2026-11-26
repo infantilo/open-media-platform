@@ -1149,6 +1149,8 @@ Das künftige Dateiformat der Produktion ist **AVC-Intra Class 100** in **1080/5
 
 Diese Funktionen gehören zum Node **Playout-Automation** (Panel-Abschnitt **Fremdliste / Mitlauf**, Einstellung **Sendefreigabe** unter *Ziele*).
 
+**Mehrere Kanäle in einem Workflow.** Jede Playout-Automation steuert die Player und den Bildmischer, deren Rollenname mit ihrem eigenen beginnt, z. B. `channel-a` → `channel-a-player-1`, `channel-a-player-2`, `channel-a-mixer`.
+
 **Playlist laden, anhängen, speichern.** Über der Playlist: **Speichern** lädt die komplette Liste als Datei `<Channel>-<Datum>-<Zeit>.omp-playlist.json` in den Download-Ordner des Browsers (mit allen Eigenschaften: Startarten, Übergänge, Child Events, Audio, Asset-Bezug, Sprungziele). **Laden …** ersetzt die aktuelle Playlist durch eine solche Datei (Rückfrage, wenn die Liste nicht leer ist; die Player werden nicht angefasst, ein laufendes Event wird im As-Run als unterbrochen vermerkt). **Anhängen …** hängt die Events der Datei hinten an. Eine fehlerhafte Datei wird vollständig abgelehnt. Beispiele: `docs/examples/playlists/`.
 
 **Fremdlisten importieren.** *Liste importieren …* öffnet eine Sendeliste eines anderen Automationssystems (Adapter `mpl3`, XML-Sendeliste). Vor dem Übernehmen zeigt eine **Vorschau**, wie viele Sendeevents entstehen, wie viele schon gelaufen sind (werden ausgelassen), was nur *angenähert* (z. B. Überblendung „Fade Cut“ wird zu „Mix“) und was *nicht übernommen* wird (z. B. Logo-/Grafik-Kinder ohne Zuordnung). Dann: **Anhängen** oder **Playlist ersetzen**. Zuordnungen stehen in der Plugin-Konfiguration `foreign-mpl3` (`mediaTemplate`, `liveMap`, `childMap`, `skipDone`, `requireRelease`). Die Liste wird nur gelesen — das Fremdformat ist kein internes Format.

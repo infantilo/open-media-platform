@@ -1136,6 +1136,8 @@ The future file format of production is **AVC-Intra Class 100** in **1080/50p** 
 
 These functions belong to the node **Playout automation** (panel section **Foreign list / follow**, setting **Broadcast release** under *Targets*).
 
+**Several channels in one workflow.** Each playout automation controls the players and the video mixer whose role name starts with its own, e.g. `channel-a` → `channel-a-player-1`, `channel-a-player-2`, `channel-a-mixer`.
+
 **Loading, appending and saving playlists.** Above the playlist: **Save** downloads the complete list as `<channel>-<date>-<time>.omp-playlist.json` into the browser's download folder (with all properties: start types, transitions, child events, audio, asset references, jump targets). **Load …** replaces the current playlist with such a file (confirmation if the list is not empty; the players are not touched, a running event is recorded as interrupted in the as-run log). **Append …** adds the events of a file to the end. A faulty file is rejected as a whole. Examples: `docs/examples/playlists/`.
 
 **Importing foreign lists.** *Import list …* opens a broadcast list from another automation system (adapter `mpl3`, XML broadcast list). Before adopting it, a **preview** shows how many broadcast events arise, how many have already run (are omitted), what is only *approximated* (e.g. crossfade "Fade Cut" becomes "Mix") and what is *not adopted* (e.g. logo/graphic children without assignment). Then: **Append** or **Replace playlist**. Mappings are in the plugin configuration `foreign-mpl3` (`mediaTemplate`, `liveMap`, `childMap`, `skipDone`, `requireRelease`). The list is only read — the foreign format is not an internal format.
