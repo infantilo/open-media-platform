@@ -10,10 +10,11 @@ import (
 
 // scriptedRequester antwortet je Aktion ("start"/"stop") mit einem einstellbaren Ergebnis und zählt die Kommandos.
 type scriptedRequester struct {
-	mu      sync.Mutex
-	stopErr error
-	stops   int
-	starts  int
+	lastStart remoteCommand
+	mu        sync.Mutex
+	stopErr   error
+	stops     int
+	starts    int
 }
 
 func (r *scriptedRequester) RequestBytes(subject string, data []byte, timeout time.Duration) ([]byte, error) {
@@ -29,6 +30,7 @@ func (r *scriptedRequester) RequestBytes(subject string, data []byte, timeout ti
 		return json.Marshal(remoteResponse{OK: true})
 	}
 	r.starts++
+	r.lastStart = cmd
 	return json.Marshal(remoteResponse{OK: true, PID: 4000 + r.starts})
 }
 
@@ -190,4 +192,21 @@ func (s *flakyPutStore) Put(inst Instance) error {
 		return errors.New("db unavailable")
 	}
 	return s.fakeInstanceStore.Put(inst)
+}
+
+// Das Dienst-Token (Kapitel 48) geht wie das Node-API-Token mit jedem Remote-Start mit, aber nie in die persistierte ExtraEnv.
+func TestStartRemoteSendsServiceToken(t *testing.T) {
+	nc := &scriptedRequester{}
+	l := newWithStore(nil, "http://registry", "nats://nats", newFakeInstanceStore(), nil, nc, nil)
+	l.SetServiceToken("svc-tok")
+	inst, err := l.Start("omp-intercom", "", "host-1", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if nc.lastStart.ServiceToken != "svc-tok" {
+		t.Fatalf("serviceToken = %q", nc.lastStart.ServiceToken)
+	}
+	if _, leaked := inst.ExtraEnv[ServiceTokenEnv]; leaked {
+		t.Fatal("token must not be stored in Instance.ExtraEnv")
+	}
 }

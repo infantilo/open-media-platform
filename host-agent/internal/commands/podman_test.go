@@ -45,12 +45,12 @@ func TestPodmanStartStopNoExitEvent(t *testing.T) {
 	dir := fakePodmanBin(t, "")
 	pub := &fakePublisher{}
 	e := NewExecutor([]catalog.Entry{podEntry}, "http://127.0.0.1:8010", "nats://127.0.0.1:4222", "http://127.0.0.1:8000", "h1", pub)
-	resp := e.Handle(Request{Action: "start", Type: "svc", InstanceID: "i1", Label: "L", NodeAPIToken: "tok"})
+	resp := e.Handle(Request{Action: "start", Type: "svc", InstanceID: "i1", Label: "L", NodeAPIToken: "tok", ServiceToken: "svc-tok"})
 	if !resp.OK || resp.PID != 4242 {
 		t.Fatalf("start: %+v", resp)
 	}
 	log, _ := os.ReadFile(filepath.Join(dir, "log"))
-	for _, want := range []string{"--name omp-i1", "OMP_INSTANCE_ID=i1", "OMP_NODE_API_TOKEN=tok", "OMP_REGISTRY_URL=http://host.containers.internal:8010", "localhost/svc:1"} {
+	for _, want := range []string{"--name omp-i1", "OMP_INSTANCE_ID=i1", "OMP_NODE_API_TOKEN=tok", "OMP_SERVICE_TOKEN=svc-tok", "OMP_REGISTRY_URL=http://host.containers.internal:8010", "localhost/svc:1"} {
 		if !strings.Contains(string(log), want) {
 			t.Errorf("podman-Aufruf ohne %q:\n%s", want, log)
 		}
@@ -71,6 +71,27 @@ func TestPodmanStartStopNoExitEvent(t *testing.T) {
 	}
 	if pub.count() != 0 {
 		t.Fatalf("erwarteter Stop darf kein ExitEvent auslösen (%d)", pub.count())
+	}
+}
+
+// Prozess-Pfad: das mitgeschickte Dienst-Token (Kapitel 48) erreicht den Node und hat Vorrang vor dem aus der Umgebung des Agents.
+func TestProcessStartPassesServiceToken(t *testing.T) {
+	t.Setenv("OMP_SERVICE_TOKEN", "alt-vom-agent")
+	for _, tc := range []struct{ sent, want string }{{"neu", "neu"}, {"", "alt-vom-agent"}} {
+		out := filepath.Join(t.TempDir(), "env")
+		entry := catalog.Entry{Type: "envdump", Runner: catalog.RunnerProcess,
+			Command: []string{"/bin/sh", "-c", "echo \"$OMP_SERVICE_TOKEN\" > " + out + ".tmp && mv " + out + ".tmp " + out}}
+		e := NewExecutor([]catalog.Entry{entry}, "", "", "", "h1", &fakePublisher{})
+		if r := e.Handle(Request{Action: "start", Type: "envdump", InstanceID: "svc-" + tc.want, ServiceToken: tc.sent}); !r.OK {
+			t.Fatalf("start: %+v", r)
+		}
+		var got []byte
+		for deadline := time.Now().Add(3 * time.Second); got == nil && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			got, _ = os.ReadFile(out)
+		}
+		if strings.TrimSpace(string(got)) != tc.want {
+			t.Errorf("gesendet %q: Node sieht %q, erwartet %q", tc.sent, strings.TrimSpace(string(got)), tc.want)
+		}
 	}
 }
 

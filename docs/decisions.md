@@ -30873,3 +30873,13 @@ Live-Fund beim Host-Ausfall-Test: Wird der Standby ausdrücklich mit dem Umschal
 Befund (MCR-Event, ständiger Alarm „Signalverlust“): Der Normalizer wandelt 25 → 50 Bilder und beschreibt wegen der strikten Ursprungs-Etiketten nur jeden zweiten Index; libmxl markiert die ausgelassenen als `MXL_GRAIN_FLAG_INVALID` (0 gültige Slices). `get_complete_grain` im Rust-Wrapper wartete auf deren Vervollständigung in einer Schleife ohne Pause, bis der Ringpuffer überlief — beim Messgerät kamen ~2 statt 50 Bilder/s an. Fix: Wrapper gibt ungültige Grains zurück (`deploy/dev/mxl-patches/0003`, bestehende Installationen: `install-mxl.sh` erneut ausführen), alle Leser in `omp-mediaio` überspringen sie. Alle MXL-Nodes neu bauen. Offen: ob der Normalizer bei Ratenwandlung alle Ausgangs-Indizes füllen soll (Fremdleser sehen sonst jedes zweite Grain ungültig).
 
 Außerdem: Die globale Regel `button:hover` deckte die Klickflächen der MCR-Wand deckend zu (Bild schwarz) — Regel spezifischer gemacht. Multiviewer: `textoverlay` ohne `auto-resize`, Schriftgröße nach Leistenmaß; Kachelvideo mit quadratischen Pixeln (vorher Streifen rechts).
+
+## 2026-11-26 — Dienst-Token geht mit dem Remote-Startkommando mit
+
+Fund: Ein Workflow startete `omp-intercom` auf einem Host-Agent; dort fehlte `OMP_SERVICE_TOKEN` in der Agent-Umgebung, alle
+Aufrufe über `/api/v1/ext/intercom` endeten mit 403, Admin-Reiter und Sprechstellenliste blieben leer. Die Platzierung wählt
+den Host selbst, eine Handkonfiguration je Agent ist damit eine Stolperfalle. Neu: `serviceToken` im Startkommando (Start,
+Neustart, Wiederherstellung; Prozess und Podman), der Agent setzt `OMP_SERVICE_TOKEN` mit Vorrang vor dem geerbten Wert.
+Ersetzt die Entscheidung aus Kapitel 48 („wird nicht über das Netz mitgeschickt“). Abwägung: Die Kommandos sind signiert,
+nicht verschlüsselt; ohne NATS-TLS steht das Token wie schon `OMP_NODE_API_TOKEN` im Klartext auf der Leitung. Alte Agents
+ignorieren das Feld. Wirksam erst mit neu gebautem Orchestrator und Host-Agent und nach Neustart der betroffenen Nodes.
