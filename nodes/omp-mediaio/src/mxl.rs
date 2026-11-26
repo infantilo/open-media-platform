@@ -212,6 +212,11 @@ fn strict_origin_labels() -> bool {
     std::env::var("OMP_MXL_STRICT_ORIGIN").map_or(true, |v| v != "0")
 }
 
+/// Grain, das der Schreiber nie befüllt hat (Index übersprungen): Nutzdaten stammen von früher.
+pub(crate) fn grain_invalid(flags: u32) -> bool {
+    flags & mxl_sys::MXL_GRAIN_FLAG_INVALID != 0
+}
+
 pub fn sync_group_enabled() -> bool {
     std::env::var("OMP_MXL_SYNCGROUP").is_ok_and(|v| v == "1")
 }
@@ -2435,6 +2440,12 @@ fn read_loop(
                     }
                     continue;
                 }
+                // Vom Schreiber ausgelassener Index (z. B. 25 → 50 Bilder: nur jeder zweite Platz beschrieben): libmxl
+                // markiert ihn ungültig, die Nutzdaten sind alt. Überspringen, `videorate` wiederholt das letzte Bild.
+                if grain_invalid(grain.flags) {
+                    index += 1;
+                    continue;
+                }
                 let pts = if timebase {
                     match index_pts(context, app_src, grain_rate, index, period_ns, &mut latency, &mut last_pts, latency_member.as_ref()) {
                         IndexPts::Push(pts) => Some(pts),
@@ -2553,6 +2564,7 @@ fn read_loop(
                     held = None;
                     if let Some(Ok(g)) = grain_reader.as_ref().map(|r| r.get_grain_non_blocking(h))
                         && g.index == h
+                        && !grain_invalid(g.flags)
                     {
                         last_pts = None;
                         let _ = app_src.push_buffer(gst::Buffer::from_slice(g.payload.to_vec()));
@@ -4045,6 +4057,10 @@ impl MxlDataInput {
                         last_ok = std::time::Instant::now();
                         if grain.index != index {
                             index = if grain.index < index { index + 1 } else { context.instance.get_current_index(&rate) };
+                            continue;
+                        }
+                        if grain_invalid(grain.flags) {
+                            index += 1;
                             continue;
                         }
                         // Teil-Grains überspringen wir bewusst nicht aus: ein Daten-Grain hat eine Slice.

@@ -30867,3 +30867,9 @@ Spiegelung im Orchestrator-Proxy (`httpapi.commandMirrorTap`) statt in den Nodes
 ## Nachtrag 2026-11-25: Standby nie auf dem Host der Primärrolle (Kapitel 109)
 
 Live-Fund beim Host-Ausfall-Test: Wird der Standby ausdrücklich mit dem Umschalter verdrahtet, bildete er mit seiner Primärrolle einen MXL-Verbund und lief auf demselben Host. Fix: Verbindungen eines Standby binden nicht (`roleLinks`), und Primär/Standby bekommen automatisch ein gemeinsames RedundancyGroup-Tag (`withStandbyRedundancy`, beim Anlegen/Ändern). Bestehende, früher gespeicherte Workflows bekommen das Tag erst beim nächsten Speichern.
+
+## Nachtrag 2026-11-26: Ungültige MXL-Grains blockierten blockierende Leser; MCR-Wand und Multiviewer-Beschriftung
+
+Befund (MCR-Event, ständiger Alarm „Signalverlust“): Der Normalizer wandelt 25 → 50 Bilder und beschreibt wegen der strikten Ursprungs-Etiketten nur jeden zweiten Index; libmxl markiert die ausgelassenen als `MXL_GRAIN_FLAG_INVALID` (0 gültige Slices). `get_complete_grain` im Rust-Wrapper wartete auf deren Vervollständigung in einer Schleife ohne Pause, bis der Ringpuffer überlief — beim Messgerät kamen ~2 statt 50 Bilder/s an. Fix: Wrapper gibt ungültige Grains zurück (`deploy/dev/mxl-patches/0003`, bestehende Installationen: `install-mxl.sh` erneut ausführen), alle Leser in `omp-mediaio` überspringen sie. Alle MXL-Nodes neu bauen. Offen: ob der Normalizer bei Ratenwandlung alle Ausgangs-Indizes füllen soll (Fremdleser sehen sonst jedes zweite Grain ungültig).
+
+Außerdem: Die globale Regel `button:hover` deckte die Klickflächen der MCR-Wand deckend zu (Bild schwarz) — Regel spezifischer gemacht. Multiviewer: `textoverlay` ohne `auto-resize`, Schriftgröße nach Leistenmaß; Kachelvideo mit quadratischen Pixeln (vorher Streifen rechts).

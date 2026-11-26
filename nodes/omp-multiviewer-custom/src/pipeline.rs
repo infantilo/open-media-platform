@@ -347,6 +347,17 @@ const LABEL_STRIP_PX: u32 = 44;
 /// eigenem Schwarz-Hintergrund zwischen Kacheln abhebt).
 const LABEL_BG_COLOR: u32 = 0xFF16181B;
 
+/// Schrift der Label-Leiste in Pixeln: so groß, dass alle Zeilen in die Höhe und die längste Zeile in die Breite passt.
+fn label_font(text: &str, width: u32, height: u32) -> String {
+    let lines = text.lines().count().max(1) as u32;
+    let chars = text.lines().map(|l| l.chars().count()).max().unwrap_or(1).max(1) as u32;
+    // Zeilenhöhe inkl. Umriss/Schatten ≈ 1,6 × Schriftgröße (am gerenderten Bild gemessen: 13 px passt zweizeilig in 44 px)
+    let by_height = height * 10 / (lines * 16);
+    // fette Sans: mittlere Zeichenbreite ≈ 0,62 × Schriftgröße
+    let by_width = width.saturating_sub(8) * 100 / (chars * 62);
+    format!("Sans Bold {}px", by_height.min(by_width).clamp(7, 24))
+}
+
 /// Baut die eigentliche Kachel: bei zugewiesener Quelle den echten
 /// MXL-Videopfad, sonst eine Platzhalter-Kachel — in beiden Fällen mit
 /// einer eigenen Label-Leiste UNTERHALB des Bildes (Quellen-Label immer,
@@ -393,6 +404,9 @@ fn build_tile(
                 gst::Caps::builder("video/x-raw")
                     .field("width", inner_width as i32)
                     .field("height", video_height as i32)
+                    // Quadratische Pixel: sonst passt `videoscale` das Pixelseitenverhältnis an, der Compositor zieht die
+                    // Kachel dann nicht auf volle Breite (Bild linksbündig, rechts ein Streifen Tally-Rahmen).
+                    .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
                     .build(),
             )
             .build()
@@ -454,11 +468,12 @@ fn build_tile(
     // EINEM `textoverlay` (Mehrzeilentext per `\n`), horizontal UND
     // vertikal innerhalb der Leiste zentriert.
     let source_label_text = pip.source_label.as_deref().unwrap_or("— kein Signal —");
-    let (label_text, font_desc) = if pip.umd.trim().is_empty() {
-        (source_label_text.to_string(), "Sans Bold 14")
+    let label_text = if pip.umd.trim().is_empty() {
+        source_label_text.to_string()
     } else {
-        (format!("{source_label_text}\n{}", pip.umd), "Sans Bold 11")
+        format!("{source_label_text}\n{}", pip.umd)
     };
+    let font_desc = label_font(&label_text, inner_width, label_height);
 
     let label_bg = gst::ElementFactory::make("videotestsrc")
         .property("is-live", true)
@@ -479,7 +494,11 @@ fn build_tile(
         .map_err(|e| format!("capsfilter (label, pip {}): {e}", pip.id))?;
     let label_overlay = gst::ElementFactory::make("textoverlay")
         .property("text", label_text.as_str())
-        .property("font-desc", font_desc)
+        .property("font-desc", font_desc.as_str())
+        // Ohne dies skaliert `textoverlay` die Schrift mit Bildbreite/640 — auf breiten Kacheln lief der Text aus der Leiste.
+        .property("auto-resize", false)
+        .property("xpad", 4i32)
+        .property("ypad", 0i32)
         .build()
         .map_err(|e| format!("textoverlay (label, pip {}): {e}", pip.id))?;
     // GEnums sind nur zur Laufzeit aufgelöst (`gstreamer enum properties
