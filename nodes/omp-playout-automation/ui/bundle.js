@@ -88,6 +88,17 @@ const T = (() => {
       "fo.items": "{n} Sendeevents",
       "fo.skippedDone": "{n} bereits gelaufen (ausgelassen)",
       "fo.append": "Anhängen",
+      "pl.load": "Laden …",
+      "pl.loadTip": "Playlist aus Datei laden (ersetzt die aktuelle Liste)",
+      "pl.append": "Anhängen …",
+      "pl.appendTip": "Playlist aus Datei an die aktuelle Liste anhängen",
+      "pl.save": "Speichern",
+      "pl.saveTip": "Aktuelle Playlist als Datei herunterladen",
+      "pl.askReplace": "Die aktuelle Playlist ({n} Events) durch „{file}“ ersetzen?",
+      "pl.replaceGo": "Ersetzen",
+      "pl.loaded": "Playlist geladen: {file}",
+      "pl.appended": "Angehängt: {file}",
+      "pl.empty": "Die Playlist ist leer — nichts zu speichern.",
       "fo.replace": "Playlist ersetzen",
       "fo.cancel": "Abbrechen",
       "fo.done": "{n} Events übernommen",
@@ -461,6 +472,17 @@ const T = (() => {
       "fo.items": "{n} playout events",
       "fo.skippedDone": "{n} already played (left out)",
       "fo.append": "Append",
+      "pl.load": "Load …",
+      "pl.loadTip": "Load a playlist from a file (replaces the current list)",
+      "pl.append": "Append …",
+      "pl.appendTip": "Append a playlist file to the current list",
+      "pl.save": "Save",
+      "pl.saveTip": "Download the current playlist as a file",
+      "pl.askReplace": "Replace the current playlist ({n} events) with “{file}”?",
+      "pl.replaceGo": "Replace",
+      "pl.loaded": "Playlist loaded: {file}",
+      "pl.appended": "Appended: {file}",
+      "pl.empty": "The playlist is empty — nothing to save.",
       "fo.replace": "Replace playlist",
       "fo.cancel": "Cancel",
       "fo.done": "{n} events imported",
@@ -1817,8 +1839,41 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       tlBtn.classList.toggle("on", tlOn); tlEl.style.display = tlOn ? "" : "none"; tlWinSel.style.display = tlOn ? "" : "none";
       renderTimeline();
     } }, `▤ ${T("tlBtn")}`);
+    // ---- Playlist-Datei: Laden / Anhängen / Speichern ---------------------
+    let plMode = "replace";
+    const plPick = h("input", { type: "file", accept: ".json,application/json", style: "display:none", onchange: async (e) => {
+      const f = e.target.files[0];
+      e.target.value = "";
+      if (!f) return;
+      const mode = plMode;
+      const documentJson = await f.text();
+      const count = ((await getParam("items")) || []).length;
+      if (mode === "replace" && count && !(await confirmDialog(T("pl.askReplace", { n: count, file: f.name }), T("pl.replaceGo")))) return;
+      const err = await tryCall("playlist.import", { documentJson, mode });
+      showBanner(err || T(mode === "replace" ? "pl.loaded" : "pl.appended", { file: f.name }), !err);
+      poll();
+    } });
+    const pickPlaylist = (mode) => { plMode = mode; plPick.click(); };
+    const savePlaylist = async () => {
+      let doc = null;
+      try { doc = JSON.parse(await getParam("playlistDocument")); } catch { /* unten gemeldet */ }
+      if (!doc?.items?.length) return showBanner(T("pl.empty"));
+      const name = String((await getParam("channelName")) || "playlist").replace(/[^\p{L}\p{N}_-]+/gu, "-");
+      const d = new Date(), p = (n) => String(n).padStart(2, "0");
+      const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+      const url = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: "application/json" }));
+      const link = h("a", { href: url, download: `${name}-${stamp}.omp-playlist.json` });
+      shadow.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    };
+    const plFileBtns = [plPick,
+      h("button", { title: T("pl.loadTip"), onclick: () => pickPlaylist("replace") }, T("pl.load")),
+      h("button", { title: T("pl.appendTip"), onclick: () => pickPlaylist("append") }, T("pl.append")),
+      h("button", { title: T("pl.saveTip"), onclick: () => savePlaylist() }, T("pl.save"))];
     const plMain = h("div", { class: "pl-main" },
-      h("div", { class: "pl-tools", style: "position:relative" }, searchInput, tlBtn, tlWinSel, colsBtn, colsPop),
+      h("div", { class: "pl-tools", style: "position:relative" }, searchInput, ...plFileBtns, tlBtn, tlWinSel, colsBtn, colsPop),
       tlEl, hdr, listEl, emptyEl);
     const playlistSec = h("details", { class: "sec", open: true },
       h("summary", {}, T("sec.playlist")),

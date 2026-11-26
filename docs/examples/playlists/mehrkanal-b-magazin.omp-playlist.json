@@ -1,0 +1,184 @@
+{
+  "format": "omp-playlist",
+  "version": 1,
+  "items": [
+    {
+      "id": "i1",
+      "meta": {
+        "label": "Kennung Kanal B",
+        "media": {
+          "kind": "test_pattern",
+          "pattern": "ball",
+          "tone_frequency": 600.0
+        },
+        "duration_ms": 10000,
+        "start_type": "sequence",
+        "fixtime_hms": null,
+        "transition": "cut",
+        "transition_rate_frames": null,
+        "children": []
+      }
+    },
+    {
+      "id": "i2",
+      "meta": {
+        "label": "Beitrag (lang)",
+        "media": {
+          "kind": "file",
+          "path": "ab_lang.mxf"
+        },
+        "duration_ms": 60000,
+        "start_type": "sequence",
+        "fixtime_hms": null,
+        "transition": "mix",
+        "transition_rate_frames": null,
+        "children": []
+      }
+    },
+    {
+      "id": "i3",
+      "meta": {
+        "label": "Mehrsprachen-Beitrag ST/AD/OT",
+        "media": {
+          "kind": "file",
+          "path": "CMC_AUDIOMAPPING_ST-AD-OT.mxf"
+        },
+        "duration_ms": 30000,
+        "start_type": "sequence",
+        "fixtime_hms": null,
+        "transition": "mix",
+        "transition_rate_frames": null,
+        "children": []
+      }
+    },
+    {
+      "id": "i4",
+      "meta": {
+        "label": "Trailer ET26043T",
+        "media": {
+          "kind": "file",
+          "path": "ET26043T.mxf"
+        },
+        "duration_ms": 10000,
+        "start_type": "sequence",
+        "fixtime_hms": null,
+        "transition": "cut",
+        "transition_rate_frames": null,
+        "children": []
+      }
+    },
+    {
+      "id": "i5",
+      "meta": {
+        "label": "12-Kanal-Demo",
+        "media": {
+          "kind": "file",
+          "path": "ORF-Demo-12ch.mxf"
+        },
+        "duration_ms": 10000,
+        "start_type": "sequence",
+        "fixtime_hms": null,
+        "transition": "cut",
+        "transition_rate_frames": null,
+        "children": []
+      }
+    },
+    {
+      "id": "i6",
+      "meta": {
+        "label": "Schwarz",
+        "media": {
+          "kind": "test_pattern",
+          "pattern": "black",
+          "tone_frequency": 0.0
+        },
+        "duration_ms": 2000,
+        "start_type": "sequence",
+        "fixtime_hms": null,
+        "transition": "cut",
+        "transition_rate_frames": null,
+        "children": []
+      }
+    },
+    {
+      "id": "i7",
+      "meta": {
+        "label": "ZIB Wetter",
+        "media": {
+          "kind": "file",
+          "path": "260502ZIB1WETTER.mxf"
+        },
+        "duration_ms": 86000,
+        "start_type": "sequence",
+        "fixtime_hms": null,
+        "transition": "mix",
+        "transition_rate_frames": null,
+        "children": []
+      }
+    },
+    {
+      "id": "i8",
+      "meta": {
+        "label": "Beitrag EH22113E",
+        "media": {
+          "kind": "file",
+          "path": "EH22113E.mxf"
+        },
+        "duration_ms": 27640,
+        "start_type": "sequence",
+        "fixtime_hms": null,
+        "transition": "cut",
+        "transition_rate_frames": null,
+        "children": []
+      }
+    },
+    {
+      "id": "i9",
+      "meta": {
+        "label": "Trailer ET251134",
+        "media": {
+          "kind": "file",
+          "path": "ET251134.mxf"
+        },
+        "duration_ms": 25000,
+        "start_type": "sequence",
+        "fixtime_hms": null,
+        "transition": "cut",
+        "transition_rate_frames": null,
+        "children": []
+      }
+    },
+    {
+      "id": "i10",
+      "meta": {
+        "label": "Sendung 0142 (1803 SDG)",
+        "media": {
+          "kind": "file",
+          "path": "01421803-SDG.mxf"
+        },
+        "duration_ms": 257279,
+        "start_type": "sequence",
+        "fixtime_hms": null,
+        "transition": "mix",
+        "transition_rate_frames": null,
+        "children": []
+      }
+    },
+    {
+      "id": "i11",
+      "meta": {
+        "label": "Schleife",
+        "media": {
+          "kind": "jump",
+          "target_id": "i2"
+        },
+        "duration_ms": 0,
+        "start_type": "sequence",
+        "fixtime_hms": null,
+        "transition": "cut",
+        "transition_rate_frames": null,
+        "children": []
+      }
+    }
+  ]
+}

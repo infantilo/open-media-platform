@@ -26,7 +26,7 @@ type AsRunStore interface {
 // operatorActions sind die Node-Methoden, die als manueller Eingriff protokolliert werden.
 var operatorActions = map[string]bool{
 	"take": true, "next": true, "nextLive": true, "cue": true, "stop": true, "remove": true, "load": true,
-	"append": true, "appendAsset": true, "updateItem": true, "moveItem": true, "setStartType": true,
+	"append": true, "appendAsset": true, "playlist.import": true, "updateItem": true, "moveItem": true, "setStartType": true,
 	"setTransition": true, "setChildren": true, "setAudio": true, "setMediaRef": true, "sendTrigger": true,
 	"cart.fire": true, "cart.return": true, "cart.define": true, "cart.update": true, "cart.remove": true,
 }
