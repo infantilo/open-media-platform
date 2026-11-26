@@ -156,7 +156,7 @@ impl Store {
     }
 
     fn guest_out(req: &RouteRequest, g: &admin::Guest) -> Value {
-        let url = service::panel_url(
+        let url = service::guest_url(
             req.header(service::H_NODE_BASE).unwrap_or(""),
             req.header(service::H_REQUEST_HOST).unwrap_or(""),
             &g.token,
