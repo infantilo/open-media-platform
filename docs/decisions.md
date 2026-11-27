@@ -30900,3 +30900,11 @@ Instanzen mit vorgemerktem Stop (Host nicht erreichbar) wurden als laufend angez
 Neu `DELETE /api/v1/instances/{id}?forget=true` (nur bei vorgemerktem Stop, sonst 409, Rückfrage in der Oberfläche) für
 dauerhaft weggefallene Hosts. Preis: Läuft die Instanz dort doch noch, läuft sie unverwaltet weiter. Ein gewöhnliches
 Stoppen vergisst wie bisher nur nach Bestätigung des Hosts (Kapitel 100).
+
+## 2026-11-27 — Zustandsdateien atomar schreiben
+
+Die Zustandsdatei des Host-Agents wurde direkt überschrieben; ein Stromausfall beim Schreiben hätte eine abgeschnittene
+Datei hinterlassen, mit der der Agent nicht mehr startet. Sie, die Paket- und Versions-Metadaten des Orchestrators sowie
+Verlauf, Status und Rücksprung-Index des Supervisors werden jetzt über temporäre Datei, fsync und Umbenennen ersetzt.
+Je Go-Modul eine eigene kleine Funktion (keine neue Modulabhängigkeit). Nicht umgesetzt: Sicherungskopie `.bak` beim
+Lesen; eine bereits defekte Datei wird weiterhin als Fehler gemeldet. Stromausfall selbst nicht nachgestellt.

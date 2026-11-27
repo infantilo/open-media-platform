@@ -20,6 +20,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/fsutil"
 	"github.com/infantilo/openmediaplatform/update"
 )
 
@@ -145,7 +146,7 @@ func (s *Service) Import(r io.Reader) (Entry, error) {
 		SHA256: pkg.SHA256, Size: pkg.Size, UploadedAt: time.Now().UTC(), Manifest: pkg.Manifest,
 	}
 	meta, _ := json.MarshalIndent(e, "", "  ")
-	if err := os.WriteFile(filepath.Join(s.dir, id+".json"), meta, 0o640); err != nil {
+	if err := fsutil.WriteFileAtomic(filepath.Join(s.dir, id+".json"), meta, 0o640); err != nil {
 		_ = os.Remove(final)
 		return Entry{}, err
 	}
