@@ -236,6 +236,11 @@ In the **Actions** column every row has three buttons:
 
 Both are reserved for administrators.
 
+**"Stop pending"** is shown for instances on a remote host that was unreachable when they were stopped. Whether they are
+still running there is unknown; the stop is carried out as soon as the host reports again. Instead of the three buttons the
+row offers **Remove entry** (after a confirmation) — meant only for hosts that are gone for good: if the instance is still
+running there, it keeps running unmanaged.
+
 After a **system update** (section 7, "System update") an
 instance carries the mark **"outdated"** if its program was
 replaced by the update but the running process still executes the old version.

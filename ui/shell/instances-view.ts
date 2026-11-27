@@ -33,6 +33,8 @@ interface LauncherInstance {
   pid: number;
   hostId?: string;
   crashed?: boolean;
+  /** Stop angefordert, Host nicht erreichbar: ob die Instanz dort noch läuft, ist unbekannt. */
+  stopPending?: boolean;
   // Binary seit dem Prozessstart ersetzt (System-Update) — läuft mit altem Stand.
   outdated?: boolean;
   crashMessage?: string;
@@ -138,6 +140,23 @@ class InstancesView extends HTMLElement {
       this.querySelector("[data-edit]")?.remove();
       this.#render(this.#instances, this.#hosts);
       this.querySelector<HTMLElement>("[data-edit]")?.focus();
+      return;
+    }
+    if (action === "discard") {
+      if (!inst) return;
+      const host = this.#hosts.find((h) => h.id === inst.hostId)?.label || inst.hostId || "";
+      if (!(await confirmDialog(t("inst.confirmDiscard", { p0: inst.label, p1: host }), { confirmLabel: t("inst.discard") }))) return;
+      try {
+        const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(id)}?forget=true`, { method: "DELETE" });
+        if (!res.ok) {
+          showToast(t("inst.discardFailed", { p0: (await res.text()) || res.status }));
+          return;
+        }
+      } catch (err) {
+        showToast(t("inst.discardFailed", { p0: String(err) }));
+        return;
+      }
+      this.#poll();
       return;
     }
     if (action === "restart") {
@@ -283,7 +302,9 @@ class InstancesView extends HTMLElement {
         const editRename = this.#editing?.id === inst.id && this.#editing.mode === "rename";
         const editMigrate = this.#editing?.id === inst.id && this.#editing.mode === "migrate";
         const hostLabel = inst.hostId ? hosts.find((h) => h.id === inst.hostId)?.label || inst.hostId : "lokal";
-        const status = inst.crashed
+        const status = inst.stopPending
+          ? `<span class="omp-badge omp-badge-error" title="${t("inst.stopPendingTitle")}">${t("inst.stopPending")}</span>`
+          : inst.crashed
           ? `<span class="omp-badge omp-badge-error">${t("inst.aba7a7")}</span>`
           : `<span class="omp-badge omp-badge-running">${t("inst.d4a100")}</span>` +
             (inst.outdated
@@ -311,7 +332,11 @@ class InstancesView extends HTMLElement {
           <td style="padding:2px 8px;">${formatRss(inst.rssBytes)}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${inst.pid}</td>
           <td style="padding:2px 8px;">${restarts}</td>
-          <td style="padding:2px 8px;white-space:nowrap;"><button data-action="rename" data-id="${escapeAttr(inst.id)}" title="${t("inst.renameTitle")}">${t("inst.rename")}</button> <button data-action="restart" data-id="${escapeAttr(inst.id)}" title="${t("inst.restartTitle")}">${t("inst.restart")}</button> <button data-action="migrate" data-id="${escapeAttr(inst.id)}" title="${t("inst.migrateTitle")}">${t("inst.migrate")}</button></td>
+          <td style="padding:2px 8px;white-space:nowrap;">${
+            inst.stopPending
+              ? `<button data-action="discard" data-id="${escapeAttr(inst.id)}" title="${t("inst.discardTitle")}">${t("inst.discard")}</button>`
+              : `<button data-action="rename" data-id="${escapeAttr(inst.id)}" title="${t("inst.renameTitle")}">${t("inst.rename")}</button> <button data-action="restart" data-id="${escapeAttr(inst.id)}" title="${t("inst.restartTitle")}">${t("inst.restart")}</button> <button data-action="migrate" data-id="${escapeAttr(inst.id)}" title="${t("inst.migrateTitle")}">${t("inst.migrate")}</button>`
+          }</td>
         </tr>`;
       })
       .join("");

@@ -240,6 +240,11 @@ In der Spalte **Aktionen** hat jede Zeile drei Knöpfe:
 
 Beides ist Administratoren vorbehalten.
 
+**„Stop vorgemerkt“** steht bei Instanzen auf einem Remote-Host, der beim Stoppen nicht erreichbar war. Ob sie dort noch
+laufen, ist unbekannt; der Stop wird nachgeholt, sobald der Host sich wieder meldet. Statt der drei Knöpfe gibt es dann
+**Eintrag entfernen** (nach Rückfrage) — nur für Hosts gedacht, die dauerhaft weg sind: Läuft die Instanz dort doch noch,
+läuft sie unverwaltet weiter.
+
 Nach einem **System-Update** (Abschnitt 7, „System-Update") trägt eine
 Instanz das Kennzeichen **„veraltet"**, wenn ihr Programm durch das Update
 ersetzt wurde, der laufende Prozess aber noch den alten Stand ausführt.

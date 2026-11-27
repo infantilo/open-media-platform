@@ -210,3 +210,34 @@ func TestStartRemoteSendsServiceToken(t *testing.T) {
 		t.Fatal("token must not be stored in Instance.ExtraEnv")
 	}
 }
+
+// TestDiscardOnlyRemovesStopPendingInstances — "Eintrag entfernen" gilt nur für entfernte Instanzen mit vorgemerktem
+// Stop; eine normal laufende darf so nicht aus der Buchführung verschwinden.
+func TestDiscardOnlyRemovesStopPendingInstances(t *testing.T) {
+	nc := &scriptedRequester{}
+	store := newFakeInstanceStore()
+	l := newWithStore(nil, "http://registry", "nats://nats", store, nil, nc, nil)
+	inst, err := l.Start("omp-source", "", "host-1", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := l.Discard(inst.ID); !errors.Is(err, ErrNotStopPending) {
+		t.Fatalf("Discard() of a running instance = %v, want ErrNotStopPending", err)
+	}
+	nc.setStopErr(errors.New("nats: no responders"))
+	if err := l.Stop(inst.ID); !errors.Is(err, ErrStopDeferred) {
+		t.Fatalf("Stop() error = %v, want ErrStopDeferred", err)
+	}
+	if err := l.Discard(inst.ID); err != nil {
+		t.Fatalf("Discard() error = %v", err)
+	}
+	if _, ok := l.Get(inst.ID); ok {
+		t.Fatal("discarded instance is still tracked")
+	}
+	if _, ok := store.data[inst.ID]; ok {
+		t.Fatal("discarded instance is still stored")
+	}
+	if err := l.Discard(inst.ID); !errors.Is(err, ErrUnknownInstance) {
+		t.Fatalf("second Discard() = %v, want ErrUnknownInstance", err)
+	}
+}

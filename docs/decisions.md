@@ -30883,3 +30883,20 @@ Neustart, Wiederherstellung; Prozess und Podman), der Agent setzt `OMP_SERVICE_T
 Ersetzt die Entscheidung aus Kapitel 48 („wird nicht über das Netz mitgeschickt“). Abwägung: Die Kommandos sind signiert,
 nicht verschlüsselt; ohne NATS-TLS steht das Token wie schon `OMP_NODE_API_TOKEN` im Klartext auf der Leitung. Alte Agents
 ignorieren das Feld. Wirksam erst mit neu gebautem Orchestrator und Host-Agent und nach Neustart der betroffenen Nodes.
+
+## 2026-11-27 — OGraf: Befehle erst nach der Bereit-Meldung der Harness-Seite
+
+Fund (Demo „OGraf folgt PIPs“): Nach dem Workflow-Start meldete der Grafik-Node die Ebene als eingeblendet und die
+Bindungen als aktiv, Fill und Key waren aber leer und die Seite meldete keine Zonen. Ursache (aus Code und Befund
+abgeleitet): Der erste `wpesrc`-Puffer galt als „Seite bereit“, kann aber vor dem verzögert ausgeführten Modul-Skript
+kommen; das beim Zustands-Einspielen sofort folgende `window.omp.show` ging dann ohne Meldung verloren. Neu: Die Seite
+schickt `POST /ograf-ready` an den Harness-Server, erst dann (und nach dem ersten Bild) führt der Node Befehle aus und
+pausiert im Leerlauf. Bleibt die Meldung 20 s aus, geht es mit Warnung weiter. Offen: Ein fehlgeschlagenes Laden einer
+Vorlage auf der Seite bleibt weiterhin ohne Rückmeldung an den Node.
+
+## 2026-11-27 — Instanzliste: „Stop vorgemerkt“ und Eintrag ohne Host-Bestätigung entfernen
+
+Instanzen mit vorgemerktem Stop (Host nicht erreichbar) wurden als laufend angezeigt. Sie heißen jetzt „Stop vorgemerkt“.
+Neu `DELETE /api/v1/instances/{id}?forget=true` (nur bei vorgemerktem Stop, sonst 409, Rückfrage in der Oberfläche) für
+dauerhaft weggefallene Hosts. Preis: Läuft die Instanz dort doch noch, läuft sie unverwaltet weiter. Ein gewöhnliches
+Stoppen vergisst wie bisher nur nach Bestätigung des Hosts (Kapitel 100).

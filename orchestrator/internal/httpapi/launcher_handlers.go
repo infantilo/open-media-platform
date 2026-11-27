@@ -409,6 +409,9 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 	}
 }
 
+// instanceDiscarder ist der optionale Teil des Launchers für „Eintrag entfernen“ (launcher.Launcher.Discard).
+type instanceDiscarder interface{ Discard(id string) error }
+
 // handleDeleteInstance liefert DELETE /api/v1/instances/<id>. Gibt einen
 // per handlePostInstance geclaimten I/O-Port wieder frei (Nutzerfund
 // 2026-08-20, s. dortige Doku) — best effort wie UpdateInstanceID, ein
@@ -418,12 +421,27 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStor
 func handleDeleteInstance(svc LauncherService, ioPortStore IOPortInventoryStore, bridges BridgeCleaner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		// ?forget=true: Eintrag mit vorgemerktem Stop ohne Bestätigung des Hosts entfernen (Host dauerhaft weg).
+		stop := svc.Stop
+		if r.URL.Query().Get("forget") == "true" {
+			d, ok := svc.(instanceDiscarder)
+			if !ok {
+				http.Error(w, "discarding instances is not supported", http.StatusNotImplemented)
+				return
+			}
+			// erst entfernen: bei Ablehnung bleiben Brücken und Port-Belegung unangetastet
+			if err := d.Discard(id); err != nil {
+				writeLauncherError(w, err)
+				return
+			}
+			stop = func(string) error { return nil }
+		}
 		if bridges != nil {
 			if n := bridges.RemoveBridgesOf(r.Context(), id); n > 0 {
 				slog.Info("launcher: Host-Brücken der Instanz entfernt", "instance", id, "members", n)
 			}
 		}
-		if err := svc.Stop(id); errors.Is(err, launcher.ErrStopDeferred) {
+		if err := stop(id); errors.Is(err, launcher.ErrStopDeferred) {
 			// Host nicht erreichbar: der Stop ist vorgemerkt und wird nachgeholt (Instance.stopPending). Der I/O-Port
 			// bleibt bis dahin belegt — die Instanz kann dort noch laufen.
 			writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true, "deferred": true})
@@ -554,6 +572,8 @@ func writeLauncherError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, launcher.ErrUnknownType), errors.Is(err, launcher.ErrUnknownInstance):
 		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, launcher.ErrNotStopPending):
+		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, launcher.ErrUnsupportedRunner), errors.Is(err, launcher.ErrInvalidStartOption):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, launcher.ErrRemoteUnavailable):

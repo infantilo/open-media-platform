@@ -104,6 +104,8 @@ var (
 	// antwortete: der Stop ist vorgemerkt (Instance.StopPending) und wird nachgeholt, statt die Instanz zu
 	// vergessen. Aufrufer dürfen das als "wird erledigt" werten.
 	ErrStopDeferred = errors.New("launcher: stop deferred until the host is reachable again")
+	// ErrNotStopPending: Discard gilt nur für entfernte Instanzen, deren Stop noch aussteht.
+	ErrNotStopPending = errors.New("launcher: instance has no pending stop, stop it first")
 )
 
 // stopGracePeriod ist die Wartezeit zwischen SIGTERM und SIGKILL beim
@@ -2445,6 +2447,25 @@ func (l *Launcher) forget(id string) {
 	if err := l.store.Delete(id); err != nil {
 		slog.Warn("launcher: failed to persist instance state", "error", err)
 	}
+}
+
+// Discard entfernt den Eintrag einer entfernten Instanz mit vorgemerktem Stop, ohne auf die Bestätigung ihres Hosts zu
+// warten (Bedienerentscheidung für dauerhaft weggefallene Hosts). Läuft sie dort doch noch, führt der Orchestrator sie
+// danach nicht mehr und stoppt sie auch nicht nach. Andere Instanzen: ErrNotStopPending.
+func (l *Launcher) Discard(id string) error {
+	inst, ok := l.Get(id)
+	if !ok {
+		inst, ok = l.adoptRemoteFromStore(id)
+	}
+	if !ok {
+		return ErrUnknownInstance
+	}
+	if inst.HostID == "" || !inst.StopPending {
+		return ErrNotStopPending
+	}
+	slog.Warn("launcher: stop-pending instance discarded without confirmation from its host", "id", id, "host_id", inst.HostID, "type", inst.Type, "label", inst.Label)
+	l.forget(id)
+	return nil
 }
 
 // RetryPendingStops holt vorgemerkte Stops (Instance.StopPending) für hostID nach. Aufruf, sobald der Host wieder
