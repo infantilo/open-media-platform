@@ -1104,8 +1104,9 @@ verwaltet sie: ansehen, einem Asset zuordnen, hochladen, löschen und wiederhers
 - **Papierkorb:** je Ort die gelöschten Dateien mit Restzeit; **Wiederherstellen** (überschreibt nie eine vorhandene Datei), **Endgültig löschen** und **Papierkorb leeren** (Recht `files.admin`).
 - **Einstellungen** (`files.admin`) liegen in der **Administration → Plattform → Betrieb → Dateien**: Aufbewahrung im Papierkorb (Tage, 0 = sofort endgültig), **Notfallgrenze** (freier Platz in GB oder Prozent),
   Schutzfrist für frisch Gelöschtes, **Sperrfenster** vor und nach der Sendung, „solange verplant, bleibt gesperrt“ sowie die Prüf- und Pflegeintervalle; je Ort lassen sich Papierkorb-Tage, Sperrfenster und
-  Notfallgrenze überschreiben, dazu Rolle und Schreibschutz. **Ort hinzufügen:** Name, Host (leer = Orchestrator-Rechner), absoluter Pfad, Rolle. Ein Host-Agent kann die Wurzeln, die er bedient, per
-  `OMP_FILE_ROOTS` (Doppelpunkt-getrennt) einschränken; liegt ein Ort außerhalb, meldet er „nicht erreichbar … nicht freigegeben“.
+  Notfallgrenze überschreiben, dazu Rolle und Schreibschutz. **Ort hinzufügen:** Name, Host (leer = Orchestrator-Rechner), absoluter Pfad, Rolle. Ein Host-Agent bedient nur Verzeichnisse, die an ihm freigegeben sind:
+  `OMP_FILE_ROOTS` (Doppelpunkt-getrennt, absolute Pfade), ersatzweise `OMP_MEDIA_MOUNTS`. Ist beides nicht gesetzt oder liegt ein Ort außerhalb, meldet er „nicht erreichbar … nicht freigegeben“.
+  Verzeichnisse mit der Zustandsdatei oder dem Katalog des Agents sind immer gesperrt.
 - **Gemeinsamer Speicher (z. B. Isilon):** Beim Anlegen „Gemeinsamer Speicher“ ankreuzen und die Hosts wählen, die ihn unter **demselben Pfad** eingehängt haben (der Orchestrator-Rechner zählt als Host). Die
   Reihenfolge der Häkchen ist die Vorzugsreihenfolge: der erste wird zuerst befragt, fällt er aus oder hängt sein Mount, übernimmt der nächste (der zuletzt erfolgreiche bleibt vorn). Der Ort erscheint **einmal**
   im Explorer, mit dem gerade bedienenden Host. „Hosts …“ ändert die Liste später. Upload geht nur, wenn der Orchestrator-Rechner einer der Hosts ist.

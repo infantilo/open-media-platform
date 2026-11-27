@@ -1091,8 +1091,9 @@ manages them: view, assign to an asset, upload, delete and restore. It needs the
 - **Recycle bin:** per location the deleted files with remaining time; **Restore** (never overwrites an existing file), **Delete permanently** and **Empty recycle bin** (right `files.admin`).
 - **Settings** (`files.admin`) are in **Administration → Platform → Operation → Files**: retention in the recycle bin (days, 0 = permanently at once), **emergency limit** (free space in GB or percent),
   grace period for freshly deleted items, **lock window** before and after the broadcast, "stays locked as long as scheduled" as well as the check and maintenance intervals; per location the recycle bin days, lock window and
-  emergency limit can be overridden, plus role and write protection. **Add location:** name, host (empty = orchestrator machine), absolute path, role. A host agent can restrict the roots it serves with
-  `OMP_FILE_ROOTS` (colon-separated); if a location lies outside, it reports "unreachable … not released".
+  emergency limit can be overridden, plus role and write protection. **Add location:** name, host (empty = orchestrator machine), absolute path, role. A host agent only serves directories released on it:
+  `OMP_FILE_ROOTS` (colon-separated absolute paths), otherwise `OMP_MEDIA_MOUNTS`. If neither is set, or a location lies outside, it reports "unreachable … not released".
+  Directories holding the agent's state file or catalog are always blocked.
 - **Shared storage (e.g. Isilon):** when creating, tick "Shared storage" and choose the hosts that have it mounted under the **same path** (the orchestrator machine counts as a host). The
   order of the ticks is the order of preference: the first is asked first, if it fails or its mount hangs, the next takes over (the last successful one stays in front). The location appears **once**
   in the explorer, with the host currently serving. "Hosts …" changes the list later. Upload works only if the orchestrator machine is one of the hosts.

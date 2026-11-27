@@ -249,6 +249,8 @@ type Executor struct {
 	nodeOptions map[string][]nodeoptions.Option
 
 	jobs *jobs.Runner
+	// protected: Pfade, die Dateioperationen nie erreichen (SetProtectedPaths).
+	protected []string
 
 	mu        sync.Mutex
 	instances map[string]*runningInstance

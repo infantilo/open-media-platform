@@ -294,6 +294,12 @@ func main() {
 	defer nc.Close()
 
 	executor := commands.NewExecutor(cat, registryURL, natsURL, orchestratorURL, st.HostID, nc)
+	// Zustand (Kommandoschlüssel) und Katalog (bestimmt, was gestartet wird) sind für Dateioperationen tabu.
+	catalogDir := ""
+	if catalogPath != "" {
+		catalogDir = filepath.Dir(catalogPath)
+	}
+	executor.SetProtectedPaths(statePath, catalogDir)
 	// Kapitel 29: agent-lokales Optionsschema (Sicherheitsgrenze: der Host entscheidet, welche
 	// Variablen der Orchestrator pro Node-Typ setzen darf). Fehlt die Datei, bleibt alles wie früher.
 	optionsPath := envOr("OMP_HOST_AGENT_NODE_OPTIONS", filepath.Join(filepath.Dir(catalogPath), "node-options.json"))

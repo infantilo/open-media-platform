@@ -30920,3 +30920,11 @@ Schlüssel. Neue Hosts bekommen den Schlüssel unverändert mit der Registrierun
 Ein eigener Weg, über den sich ein Alt-Host den Schlüssel authentifiziert abholt, fehlt (der Agent hat nach der
 Registrierung kein Geheimnis außer dem Schlüssel selbst). Offen: Die Registrierung selbst ist nur so geschützt wie die
 Verbindung zum Orchestrator (`http://` möglich).
+
+## 2026-11-27 — Host-Agent: Dateioperationen nur in freigegebenen Verzeichnissen
+
+Ohne `OMP_FILE_ROOTS` bearbeitete ein Host-Agent jedes angefragte Verzeichnis. Neu: Freigabe über `OMP_FILE_ROOTS`,
+ersatzweise `OMP_MEDIA_MOUNTS`; ohne beides keine Dateioperation. Zustandsdatei und Katalogverzeichnis des Agents sind
+immer gesperrt. `start-hosts.sh` gibt die Medienverzeichnisse der Entwicklungsumgebung frei.
+**Folge beim Update:** Auf Remote-Hosts ohne diese Variablen sind Orte danach „nicht erreichbar“, bis eine gesetzt ist.
+Gilt nicht für Orte auf dem Orchestrator-Rechner (dort führt der Orchestrator die Operationen selbst aus).
