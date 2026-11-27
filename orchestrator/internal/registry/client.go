@@ -418,7 +418,7 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 		}
 
 		for _, d := range devicesByNode[n.ID] {
-			view.Devices = append(view.Devices, DeviceView{ID: d.ID, Label: d.Label})
+			view.Devices = append(view.Devices, DeviceView{ID: d.ID, Label: d.Label, ConnectionAPI: connectionAPI(d)})
 
 			for _, s := range sendersByDevice[d.ID] {
 				format := ""
@@ -450,6 +450,26 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 // dem ersten IS-04-"api.endpoints"-Eintrag (Standardfeld jeder Node-
 // Resource) — Grundlage für den generischen Parameter-/Methoden-Proxy
 // (A8), ohne dass der Orchestrator etwas über den Node-Typ wüsste.
+// connectionVersions sind die IS-05-Versionen, die is05.Client spricht,
+// bevorzugte zuerst. Die PATCH- und GET-Bodies sind in beiden gleich
+// (docs/decisions.md Nachtrag 189); Geräte anderer Hersteller bieten oft
+// nur v1.1 an (z. B. Blackmagic 2110 IP Mini BiDirect: v1.0 und v1.1).
+var connectionVersions = []string{"v1.2", "v1.1"}
+
+// connectionAPI wählt aus den "controls" eines Device die IS-05-Wurzel
+// in der höchsten Version, die is05.Client spricht. Leer, wenn das Device
+// keine solche meldet.
+func connectionAPI(d is04Device) string {
+	for _, version := range connectionVersions {
+		for _, c := range d.Controls {
+			if c.Type == "urn:x-nmos:control:sr-ctrl/"+version {
+				return strings.TrimSuffix(c.Href, "/")
+			}
+		}
+	}
+	return ""
+}
+
 func apiBaseURL(n is04Node) string {
 	if len(n.API.Endpoints) == 0 {
 		return ""

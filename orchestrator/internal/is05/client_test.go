@@ -87,3 +87,25 @@ func TestPatchSenderStagedPropagatesTraceHeaders(t *testing.T) {
 		t.Errorf("%s header = %q, want %q", tracing.HeaderTraceID, gotTrace, "trace-3")
 	}
 }
+
+// TestPatchStagedUsesGivenConnectionAPI: der Client hängt nur
+// "/single/..." an die übergebene Wurzel an, die Version kommt vom
+// Aufrufer (für ein v1.1-Device also .../v1.1/single/...).
+func TestPatchStagedUsesGivenConnectionAPI(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	c := NewClient(nil)
+	senderID := "sender-1"
+	if err := c.PatchStaged(context.Background(), server.URL+"/x-nmos/connection/v1.1", "receiver-1", &senderID, true); err != nil {
+		t.Fatalf("PatchStaged() error = %v", err)
+	}
+
+	if gotPath != "/x-nmos/connection/v1.1/single/receivers/receiver-1/staged" {
+		t.Errorf("path = %q", gotPath)
+	}
+}

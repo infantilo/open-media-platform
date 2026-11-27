@@ -334,3 +334,57 @@ func TestTopLevelID(t *testing.T) {
 		t.Error("verschachtelte id darf nicht gelten")
 	}
 }
+
+// TestConnectionAPIPrefersHighestAdvertisedVersion: ein Device, das IS-05
+// in v1.0 und v1.1 meldet (wie der Blackmagic 2110 IP Mini BiDirect),
+// wird über v1.1 angesprochen, eines mit v1.1 und v1.2 über v1.2.
+func TestConnectionAPIPrefersHighestAdvertisedVersion(t *testing.T) {
+	v11Only := is04Device{ID: "dev-1", Controls: []is04Control{
+		{Href: "http://10.0.0.4:8090/x-nmos/connection/v1.0", Type: "urn:x-nmos:control:sr-ctrl/v1.0"},
+		{Href: "http://10.0.0.4:8090/x-nmos/connection/v1.1", Type: "urn:x-nmos:control:sr-ctrl/v1.1"},
+	}}
+	both := is04Device{ID: "dev-2", Controls: []is04Control{
+		{Href: "http://10.0.0.5:3212/x-nmos/connection/v1.1/", Type: "urn:x-nmos:control:sr-ctrl/v1.1"},
+		{Href: "http://10.0.0.5:3212/x-nmos/connection/v1.2/", Type: "urn:x-nmos:control:sr-ctrl/v1.2"},
+	}}
+
+	if got := connectionAPI(v11Only); got != "http://10.0.0.4:8090/x-nmos/connection/v1.1" {
+		t.Errorf("connectionAPI(v1.0+v1.1) = %q", got)
+	}
+	if got := connectionAPI(both); got != "http://10.0.0.5:3212/x-nmos/connection/v1.2" {
+		t.Errorf("connectionAPI(v1.1+v1.2) = %q", got)
+	}
+	if got := connectionAPI(is04Device{ID: "dev-3"}); got != "" {
+		t.Errorf("connectionAPI(ohne controls) = %q, want leer", got)
+	}
+}
+
+// TestNodeViewConnectionAPIFallsBackToNodeEndpoint: ein Receiver auf
+// einem Device ohne "controls" (OMP-eigene Nodes) wird wie bisher über
+// Node-Endpoint + v1.2 angesprochen, einer mit "controls" über die
+// gemeldete Wurzel.
+func TestNodeViewConnectionAPIFallsBackToNodeEndpoint(t *testing.T) {
+	nodes := []is04Node{{
+		ID:  "node-1",
+		API: is04NodeAPI{Endpoints: []is04NodeEndpoint{{Host: "127.0.0.1", Port: 9001, Protocol: "http"}}},
+	}}
+	devices := []is04Device{
+		{ID: "dev-omp", NodeID: "node-1"},
+		{ID: "dev-ext", NodeID: "node-1", Controls: []is04Control{
+			{Href: "http://127.0.0.1:8090/x-nmos/connection/v1.1", Type: "urn:x-nmos:control:sr-ctrl/v1.1"},
+		}},
+	}
+	receivers := []is04Receiver{
+		{ID: "recv-omp", DeviceID: "dev-omp"},
+		{ID: "recv-ext", DeviceID: "dev-ext"},
+	}
+
+	view := buildSnapshot(nodes, devices, nil, receivers, nil)[0]
+
+	if got := view.ConnectionAPI("recv-omp"); got != "http://127.0.0.1:9001/x-nmos/connection/v1.2" {
+		t.Errorf("ConnectionAPI(recv-omp) = %q", got)
+	}
+	if got := view.ConnectionAPI("recv-ext"); got != "http://127.0.0.1:8090/x-nmos/connection/v1.1" {
+		t.Errorf("ConnectionAPI(recv-ext) = %q", got)
+	}
+}
