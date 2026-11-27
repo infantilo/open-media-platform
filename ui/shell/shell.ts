@@ -504,7 +504,7 @@ async function boot() {
     const h = document.createElement("h2");
     h.textContent = t("boot.blocked.title");
     const ul = document.createElement("ul");
-    for (const k of ["boot.blocked.local", "boot.blocked.open", "boot.blocked.token"]) {
+    for (const k of ["boot.blocked.local", "boot.blocked.open", "boot.blocked.token"] as const) {
       const li = document.createElement("li");
       li.textContent = t(k);
       ul.append(li);
