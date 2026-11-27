@@ -370,6 +370,8 @@ leader retries for up to 10 minutes every 10 s. Podman instances are not restore
 
 ## 5. Backup & restore
 
+Incidents (database, NATS, cluster, host, keys): [`betrieb/INCIDENTS.md`](betrieb/INCIDENTS.md).
+
 The complete orchestrator state (users, role bindings, audit log,
 layouts, snapshots, workflows, hosts) lives in Postgres (the `omp-postgres`
 container).

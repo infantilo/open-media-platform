@@ -375,6 +375,8 @@ Leader es bis zu 10 Minuten lang alle 10 s. Podman-Instanzen werden nicht automa
 
 ## 5. Backup & Restore
 
+Verhalten bei Störungen (Datenbank, NATS, Cluster, Host, Schlüssel): [`betrieb/STOERUNGEN.md`](betrieb/STOERUNGEN.md).
+
 Der komplette Orchestrator-Zustand (Nutzer, Rollenbindungen, Audit-Log,
 Layouts, Snapshots, Workflows, Hosts) liegt in Postgres (`omp-postgres`-
 Container).
