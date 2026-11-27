@@ -30908,3 +30908,15 @@ Datei hinterlassen, mit der der Agent nicht mehr startet. Sie, die Paket- und Ve
 Verlauf, Status und Rücksprung-Index des Supervisors werden jetzt über temporäre Datei, fsync und Umbenennen ersetzt.
 Je Go-Modul eine eigene kleine Funktion (keine neue Modulabhängigkeit). Nicht umgesetzt: Sicherungskopie `.bak` beim
 Lesen; eine bereits defekte Datei wird weiterhin als Fehler gemeldet. Stromausfall selbst nicht nachgestellt.
+
+## 2026-11-27 — Host-Agent: keine unsignierten Kommandos, Schlüsselübergabe über NATS nur nach Freigabe
+
+Ein Host ohne Kommandoschlüssel führte bisher unsignierte Kommandos aus und nahm den ersten zugeschickten Schlüssel an.
+Neu: `OMP_HOST_AGENT_REQUIRE_KEY` ist Standard (nur ausdrücklich `false` schaltet ab), `provision-key` braucht
+`OMP_HOST_AGENT_ALLOW_NATS_PROVISION=1`, `rotate-key` verlangt eine NATS-Verbindung mit TLS und einen bisherigen
+Schlüssel. Neue Hosts bekommen den Schlüssel unverändert mit der Registrierung.
+
+**Folge beim Update:** Hosts ohne Schlüssel werden erst nach Neuregistrierung oder einmaliger Freigabe wieder gesteuert.
+Ein eigener Weg, über den sich ein Alt-Host den Schlüssel authentifiziert abholt, fehlt (der Agent hat nach der
+Registrierung kein Geheimnis außer dem Schlüssel selbst). Offen: Die Registrierung selbst ist nur so geschützt wie die
+Verbindung zum Orchestrator (`http://` möglich).
