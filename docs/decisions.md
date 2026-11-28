@@ -30991,3 +30991,14 @@ sehen sie beim ersten unbekannten Token bzw. nach 30 s. Das Wurzelgeheimnis blei
 Nodes aussperrt. Abgewogen: `kid` im Token (unnötig bei zwei Schlüsseln), externer Secret-Store (keine
 Festlegung auf ein Produkt). **Geprüft:** Tests gegen echtes Postgres (Umschreiben, falscher/fehlender Schlüssel,
 zwei Instanzen, Ablauf, Notfall). **Nicht geprüft:** am laufenden Orchestrator.
+
+## 2026-11-28 — Wiederherstellung auf einen Zeitpunkt (Review-Paket P9)
+
+WAL-Archivierung in ein eingehängtes Verzeichnis (`omp-pitr`, im Patroni-Image), tägliche Basissicherung mit
+Aufräumen, Wiederherstellung als Dump aus einem Wegwerf-Postgres. Abgewogen: eigenes Sicherungswerkzeug mit
+S3-Ziel (inkrementell, parallel, aber neue Abhängigkeit und Konfiguration; sinnvoll bei großen Datenbanken);
+Patroni-eigener PITR-Bootstrap (ersetzt den Cluster, riskanter, im Störfall mehr Handarbeit). Die Datenbank ist
+klein, der Dump-Weg nutzt den vorhandenen, erprobten Restore. Grundlage: PostgreSQL 16, "Continuous Archiving and
+Point-in-Time Recovery". Standard aus. **Geprüft** an einem Ein-Knoten-Patroni: Archivierung, Basissicherung, Stand
+vor einem Fehler wiederhergestellt und eingespielt, Zeitzonen, Zeit vor/nach dem Archiv, Aufräumen.
+**Nicht geprüft:** Netzlaufwerk, Wiederherstellung über einen Failover (Zeitleistenwechsel), systemd-Timer.

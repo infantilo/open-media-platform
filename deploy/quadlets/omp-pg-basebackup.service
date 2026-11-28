@@ -1,0 +1,9 @@
+# Tägliche Basissicherung für die Wiederherstellung auf einen Zeitpunkt. Auf EINEM Host einrichten (README.md).
+[Unit]
+Description=OpenMediaPlatform Postgres-Basissicherung (PITR)
+After=omp-patroni.service
+Requires=omp-patroni.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman exec omp-patroni omp-pitr backup

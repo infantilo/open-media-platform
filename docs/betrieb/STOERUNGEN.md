@@ -75,8 +75,10 @@ Beim Stoppen oder Neustarten des Dienstes `omp-host-agent` werden die von ihm ge
 - **Kommandozeile:** `make stop`, dann `make restore ARGS=.backups/omp-<Zeitstempel>.sql.gz`, mit `yes` bestätigen,
   `make start`.
 - **Nicht in der Sicherung:** Schlüsselmaterial (Update-Schlüssel, mTLS-CA) — getrennt sichern.
-- **Datenverlust:** alles seit der letzten Sicherung (Standard alle 24 h). **Offen:** Wiederherstellung auf einen
-  Zeitpunkt (keine WAL-Archivierung).
+- **Datenverlust:** alles seit der letzten Sicherung (Standard alle 24 h).
+- **Auf einen Zeitpunkt** (nur wenn die WAL-Archivierung eingerichtet ist, `deploy/quadlets/README.md`):
+  `podman exec omp-patroni omp-pitr restore "JJJJ-MM-TT hh:mm:ss+01" /tmp/stand.sql.gz`, Datei mit `podman cp`
+  holen und wie oben mit `make restore` einspielen. **Offen:** als Störfall in Produktion nicht nachgestellt.
 
 ## 8. Schlüssel wechseln
 

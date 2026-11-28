@@ -20,7 +20,8 @@ RUN apk add --no-cache python3 py3-pip py3-psycopg2 \
 COPY bootstrap.yml /home/postgres/bootstrap.yml
 COPY post-init.sh /home/postgres/post-init.sh
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /home/postgres/post-init.sh /entrypoint.sh
+COPY pitr.sh /usr/local/bin/omp-pitr
+RUN chmod +x /home/postgres/post-init.sh /entrypoint.sh /usr/local/bin/omp-pitr
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/home/postgres/bootstrap.yml"]

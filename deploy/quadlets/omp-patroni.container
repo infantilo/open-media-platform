@@ -46,6 +46,8 @@ Environment=PATRONI_POSTGRESQL_DATA_DIR=/home/postgres/pgdata
 Environment=PATRONI_SUPERUSER_USERNAME=postgres
 Environment=PATRONI_REPLICATION_USERNAME=replicator
 Volume=omp-patroni-data:/home/postgres/pgdata
+# Wiederherstellung auf einen Zeitpunkt (README.md): gemeinsames Verzeichnis aller drei Hosts einhängen, dann aktivieren.
+#Volume=/srv/omp/pg-archive:/archive:z
 PublishPort=5432:5432
 PublishPort=8008:8008
 # AutoUpdate bewusst aus: lokal gebautes Image (localhost/), nicht aus einer Registry

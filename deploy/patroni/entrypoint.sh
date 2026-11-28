@@ -27,4 +27,6 @@ if [ -d /etc/omp-certs ]; then
   chmod 600 /home/postgres/certs/*
   chown -R postgres:postgres /home/postgres/certs
 fi
+# WAL-Archiv (omp-pitr), falls eingehängt. Auf Netzlaufwerken kann chown scheitern — dann dort passend freigeben.
+if [ -d /archive ]; then chown postgres:postgres /archive 2>/dev/null || true; fi
 exec su-exec postgres patroni "$@"

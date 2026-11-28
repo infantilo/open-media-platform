@@ -76,8 +76,10 @@ Stopping or restarting the `omp-host-agent` service also ends the nodes it start
 - **Command line:** `make stop`, then `make restore ARGS=.backups/omp-<timestamp>.sql.gz`, confirm with `yes`,
   `make start`.
 - **Not in the backup:** key material (update keys, mTLS CA) — back it up separately.
-- **Data loss:** everything since the last backup (default every 24 h). **Open:** point-in-time recovery (no WAL
-  archiving).
+- **Data loss:** everything since the last backup (default every 24 h).
+- **To a point in time** (only if WAL archiving is set up, `deploy/quadlets/README.md`):
+  `podman exec omp-patroni omp-pitr restore "YYYY-MM-DD hh:mm:ss+01" /tmp/state.sql.gz`, fetch the file with
+  `podman cp` and restore it with `make restore` as above. **Open:** not rehearsed as an incident in production.
 
 ## 8. Changing keys
 

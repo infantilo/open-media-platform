@@ -56,3 +56,34 @@ Datenbank behält ihr Passwort: `ALTER ROLE omp PASSWORD '…'` und `OMP_POSTGRE
 
 **Grenzen:** Die Postgres-Verbindungen selbst (Port 5432, Replikation) sind weiterhin unverschlüsselt; Port 5432
 nur im internen Netz erreichbar machen.
+
+## Wiederherstellung auf einen Zeitpunkt (PITR)
+
+Ohne diese Einrichtung reicht eine Wiederherstellung nur bis zur letzten Sicherung. Voraussetzung ist ein Image aus
+dem aktuellen `deploy/patroni` (`podman build -t localhost/omp-patroni:latest -f deploy/patroni/Dockerfile deploy/patroni`).
+
+1. **Ablage:** ein Verzeichnis, das alle drei Datenbank-Hosts sehen und das nicht auf deren Systemplatten liegt
+   (Netzlaufwerk). In `omp-patroni.container` die Zeile `Volume=…:/archive` aktivieren, `systemctl daemon-reload`,
+   Knoten nacheinander neu starten. Der Benutzer `postgres` (UID 70 im Container) muss dort schreiben dürfen.
+2. **Archivierung einschalten** (einmal, im Container; braucht einen Neustart von Postgres):
+   ```sh
+   patronictl -c /home/postgres/bootstrap.yml edit-config --force -p archive_mode=on \
+     -p "archive_command=/usr/local/bin/omp-pitr archive %p %f" -p archive_timeout=60 omp-postgres
+   patronictl -c /home/postgres/bootstrap.yml restart --force omp-postgres
+   ```
+3. **Basissicherung** sofort (`podman exec omp-patroni omp-pitr backup`) und täglich: `omp-pg-basebackup.service`
+   und `.timer` nach `/etc/systemd/system/`, `systemctl enable --now omp-pg-basebackup.timer`. Aufbewahrt werden
+   7 Stück (`OMP_PG_BASE_KEEP`) samt den dafür nötigen Segmenten.
+4. **Überwachen:** `select * from pg_stat_archiver;` — wächst `failed_count`, sammelt Postgres WAL auf der eigenen
+   Platte, bis sie voll ist. Freien Platz in der Ablage überwachen.
+
+**Wiederherstellen** (der laufende Verbund bleibt dabei unberührt):
+
+```sh
+podman exec omp-patroni omp-pitr restore "2026-11-28 14:05:00+01" /tmp/stand.sql.gz
+podman cp omp-patroni:/tmp/stand.sql.gz .backups/
+```
+
+Die Datei dann wie jede Sicherung zurückspielen (`docs/betrieb/STOERUNGEN.md`, Abschnitt 7). Datenverlust ohne
+Ausfall der Ablage: höchstens die letzte Minute (`archive_timeout`). Die Ablage enthält den vollständigen
+Datenbankinhalt unverschlüsselt — Zugriff beschränken.
