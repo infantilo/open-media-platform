@@ -31019,5 +31019,5 @@ Jetzt endet der Kontext aller Anfragen nach 1 s, Frist 3 s, Stop-Skript wartet b
 - Nicht geprüft: Quadlets (NATS, etcd, Patroni, Basissicherung) unter systemd; Umstellung eines Altbestands;
   Token je Host auf mehreren Rechnern und im Orchestrator-Cluster; Wiederherstellung auf einen Zeitpunkt über einen
   Failover und auf einem Netzlaufwerk.
-- Am laufenden System ansehen: Workflow „OGraf folgt PIPs (Demo)“ zeigt nach Stop/Start die PIP-Wand ohne Zutun;
-  `make nodes` einmal vollständig bauen.
+- Am laufenden System ansehen: Workflow „OGraf folgt PIPs (Demo)“ zeigt nach Stop/Start die PIP-Wand ohne Zutun.
+  (`make nodes` wurde am 28.11. mit Release v0.12.0 vollständig gebaut.)
