@@ -29,9 +29,20 @@ type is04NodeEndpoint struct {
 }
 
 type is04Device struct {
-	ID     string `json:"id"`
-	Label  string `json:"label"`
-	NodeID string `json:"node_id"`
+	ID       string        `json:"id"`
+	Label    string        `json:"label"`
+	NodeID   string        `json:"node_id"`
+	Controls []is04Control `json:"controls"`
+}
+
+// is04Control ist ein Eintrag aus "controls" eines IS-04-Device
+// (device.json, IS-04 v1.3): über ihn meldet ein Device, unter welcher
+// Adresse es welche Steuer-API anbietet. Für IS-05 ist der Typ
+// "urn:x-nmos:control:sr-ctrl/<Version>" (IS-05 v1.2, "Interoperability –
+// IS-04").
+type is04Control struct {
+	Href string `json:"href"`
+	Type string `json:"type"`
 }
 
 type is04Sender struct {
@@ -132,6 +143,38 @@ type BuildInfo struct {
 type DeviceView struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
+	// ConnectionAPI ist die versionierte IS-05-Wurzel, die das Device in
+	// seinen "controls" meldet (z. B. "http://10.0.0.4:8090/x-nmos/
+	// connection/v1.1"); leer, wenn es keine passende meldet.
+	ConnectionAPI string `json:"connection_api,omitempty"`
+}
+
+// ConnectionAPI liefert die IS-05-Wurzel für den Sender oder Receiver
+// portID dieser Node: die vom Device gemeldete, sonst die bisherige
+// Annahme "Node-API-Endpoint + /x-nmos/connection/v1.2" (OMP-eigene Nodes
+// melden keine "controls", bedienen aber v1.2, docs/decisions.md
+// Nachtrag 189). Leer, wenn die Node keinen API-Endpoint meldet.
+func (n NodeView) ConnectionAPI(portID string) string {
+	deviceID := ""
+	for _, s := range n.Senders {
+		if s.ID == portID {
+			deviceID = s.DeviceID
+		}
+	}
+	for _, r := range n.Receivers {
+		if r.ID == portID {
+			deviceID = r.DeviceID
+		}
+	}
+	for _, d := range n.Devices {
+		if d.ID == deviceID && d.ConnectionAPI != "" {
+			return d.ConnectionAPI
+		}
+	}
+	if n.APIBaseURL == "" {
+		return ""
+	}
+	return n.APIBaseURL + "/x-nmos/connection/v1.2"
 }
 
 // SenderView ist die normalisierte Sicht auf einen IS-04-Sender inkl. des

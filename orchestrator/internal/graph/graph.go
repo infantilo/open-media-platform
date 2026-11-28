@@ -101,9 +101,9 @@ type NodeLister interface {
 // als Interface gehalten, damit Service-Tests ohne echte HTTP-Aufrufe
 // auskommen.
 type is05Client interface {
-	GetActive(ctx context.Context, baseURL, receiverID string) (is05.ActiveResource, error)
-	PatchStaged(ctx context.Context, baseURL, receiverID string, senderID *string, masterEnable bool) error
-	PatchSenderStaged(ctx context.Context, baseURL, senderID string, masterEnable bool) error
+	GetActive(ctx context.Context, connectionAPI, receiverID string) (is05.ActiveResource, error)
+	PatchStaged(ctx context.Context, connectionAPI, receiverID string, senderID *string, masterEnable bool) error
+	PatchSenderStaged(ctx context.Context, connectionAPI, senderID string, masterEnable bool) error
 }
 
 // EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
@@ -250,7 +250,7 @@ func (s *Service) HandleNodeEvent(ctx context.Context, eventType string, node re
 			return
 		}
 		for _, r := range node.Receivers {
-			active, err := s.is05.GetActive(ctx, node.APIBaseURL, r.ID)
+			active, err := s.is05.GetActive(ctx, node.ConnectionAPI(r.ID), r.ID)
 			if err != nil {
 				slog.Warn("is05 GetActive failed for newly added node", "receiver", r.ID, "error", err)
 				continue
@@ -296,7 +296,7 @@ func (s *Service) Rewire(ctx context.Context, senderID string) int {
 			continue
 		}
 		sender := senderID
-		if err := s.is05.PatchStaged(ctx, node.APIBaseURL, e.ToReceiver, &sender, true); err != nil {
+		if err := s.is05.PatchStaged(ctx, node.ConnectionAPI(e.ToReceiver), e.ToReceiver, &sender, true); err != nil {
 			slog.Warn("graph rewire: receiver reactivation failed", "receiver", e.ToReceiver, "sender", senderID, "error", err)
 			s.publishLog(ctx, "warn", fmt.Sprintf("flow of sender %s changed; reactivating receiver %s failed: %v", senderID, e.ToReceiver, err), node.ID)
 			continue
@@ -410,13 +410,13 @@ func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) er
 	}
 
 	sender := fromSender
-	if err := s.is05.PatchStaged(ctx, receiverNode.APIBaseURL, toReceiver, &sender, true); err != nil {
+	if err := s.is05.PatchStaged(ctx, receiverNode.ConnectionAPI(toReceiver), toReceiver, &sender, true); err != nil {
 		s.publishLog(ctx, "error", fmt.Sprintf("is05 PatchStaged failed: %v", err), receiverNode.ID)
 		return err
 	}
 
 	if senderFound && senderNode.APIBaseURL != "" {
-		if err := s.is05.PatchSenderStaged(ctx, senderNode.APIBaseURL, fromSender, true); err != nil {
+		if err := s.is05.PatchSenderStaged(ctx, senderNode.ConnectionAPI(fromSender), fromSender, true); err != nil {
 			slog.Warn("is05 PatchSenderStaged failed (node may not implement a sender-side connection API)",
 				"sender", fromSender, "error", err)
 			s.publishLog(ctx, "warn",
@@ -451,14 +451,14 @@ func (s *Service) Disconnect(ctx context.Context, receiverID string) error {
 		previousSenderID = edge.FromSender
 	}
 
-	if err := s.is05.PatchStaged(ctx, node.APIBaseURL, receiverID, nil, false); err != nil {
+	if err := s.is05.PatchStaged(ctx, node.ConnectionAPI(receiverID), receiverID, nil, false); err != nil {
 		s.publishLog(ctx, "error", fmt.Sprintf("is05 PatchStaged (disconnect) failed: %v", err), node.ID)
 		return err
 	}
 
 	if previousSenderID != "" {
 		if senderNode, ok := findNodeByPort(views, previousSenderID); ok && senderNode.APIBaseURL != "" {
-			if err := s.is05.PatchSenderStaged(ctx, senderNode.APIBaseURL, previousSenderID, false); err != nil {
+			if err := s.is05.PatchSenderStaged(ctx, senderNode.ConnectionAPI(previousSenderID), previousSenderID, false); err != nil {
 				slog.Warn("is05 PatchSenderStaged failed on disconnect (node may not implement a sender-side connection API)",
 					"sender", previousSenderID, "error", err)
 				s.publishLog(ctx, "warn",
@@ -484,7 +484,7 @@ func (s *Service) buildEdgesMap(ctx context.Context, views []registry.NodeView) 
 			continue
 		}
 		for _, r := range v.Receivers {
-			active, err := s.is05.GetActive(ctx, v.APIBaseURL, r.ID)
+			active, err := s.is05.GetActive(ctx, v.ConnectionAPI(r.ID), r.ID)
 			if err != nil {
 				slog.Warn("is05 GetActive failed", "receiver", r.ID, "error", err)
 				continue
