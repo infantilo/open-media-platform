@@ -3,7 +3,7 @@
 // ohne zentrale Instanz). Feldnamen geprüft gegen AMWA-TV/is-05 (Branch
 // v1.1.x, APIs/schemas/receiver-*.json, sender-stage-schema.json,
 // activation-schema.json). Die Aufrufer geben die versionierte Wurzel
-// mit (registry.NodeView.ConnectionAPI): die Version, die das Device in
+// mit (registry.NodeView.ConnectionAPIs): die Version, die das Device in
 // seinen IS-04-"controls" meldet (v1.2 bevorzugt), ohne Meldung v1.2 wie bisher
 // (Nachtrag 191). Die Bodies sind in v1.1 und v1.2 gleich (Nachtrag 189).
 package is05
@@ -12,7 +12,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/tracing"
@@ -39,20 +41,45 @@ func NewClient(httpClient *http.Client) *Client {
 	return &Client{httpClient: httpClient}
 }
 
-// GetActive liest den active-Zustand eines Receivers.
-func (c *Client) GetActive(ctx context.Context, connectionAPI, receiverID string) (ActiveResource, error) {
-	url := fmt.Sprintf("%s/single/receivers/%s/active", connectionAPI, receiverID)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return ActiveResource{}, err
+// do schickt die Anfrage an die erste erreichbare Wurzel. Ausgewichen wird
+// nur, wenn keine Antwort kam (Verbindungsfehler/Zeitüberschreitung) — eine
+// HTTP-Antwort, auch eine Ablehnung, gilt. Die PATCH-Anfragen (sofortige
+// Aktivierung desselben Zustands) dürfen dabei wiederholt werden.
+func (c *Client) do(ctx context.Context, method string, connectionAPIs []string, path string, body []byte) (*http.Response, string, error) {
+	lastErr := errors.New("is05: no connection API address")
+	for _, root := range connectionAPIs {
+		url := root + path
+		var reader io.Reader
+		if body != nil {
+			reader = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, url, reader)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		// ARCHITECTURE.md §25.1: trägt einen laufenden Trace weiter (oder
+		// beginnt einen neuen), damit ein fehlschlagender IS-05-Aufruf im
+		// Diagnose-Cockpit mit dem auslösenden Vorgang korreliert werden kann.
+		tracing.SetHeaders(req, ctx)
+		resp, err := c.httpClient.Do(req)
+		if err == nil {
+			return resp, url, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			break
+		}
 	}
-	// ARCHITECTURE.md §25.1: trägt einen laufenden Trace weiter (oder
-	// beginnt einen neuen), damit ein fehlschlagender IS-05-Aufruf im
-	// Diagnose-Cockpit mit dem auslösenden Vorgang korreliert werden kann.
-	tracing.SetHeaders(req, ctx)
+	return nil, "", lastErr
+}
 
-	resp, err := c.httpClient.Do(req)
+// GetActive liest den active-Zustand eines Receivers.
+func (c *Client) GetActive(ctx context.Context, connectionAPIs []string, receiverID string) (ActiveResource, error) {
+	resp, url, err := c.do(ctx, http.MethodGet, connectionAPIs, "/single/receivers/"+receiverID+"/active", nil)
 	if err != nil {
 		return ActiveResource{}, err
 	}
@@ -72,9 +99,7 @@ func (c *Client) GetActive(ctx context.Context, connectionAPI, receiverID string
 // PatchStaged verbindet (senderID != nil) oder trennt (senderID == nil)
 // einen Receiver, mit sofortiger Aktivierung
 // (activation.mode = "activate_immediate").
-func (c *Client) PatchStaged(ctx context.Context, connectionAPI, receiverID string, senderID *string, masterEnable bool) error {
-	url := fmt.Sprintf("%s/single/receivers/%s/staged", connectionAPI, receiverID)
-
+func (c *Client) PatchStaged(ctx context.Context, connectionAPIs []string, receiverID string, senderID *string, masterEnable bool) error {
 	body, err := json.Marshal(map[string]any{
 		"sender_id":     senderID,
 		"master_enable": masterEnable,
@@ -84,14 +109,7 @@ func (c *Client) PatchStaged(ctx context.Context, connectionAPI, receiverID stri
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	tracing.SetHeaders(req, ctx)
-
-	resp, err := c.httpClient.Do(req)
+	resp, url, err := c.do(ctx, http.MethodPatch, connectionAPIs, "/single/receivers/"+receiverID+"/staged", body)
 	if err != nil {
 		return err
 	}
@@ -111,9 +129,7 @@ func (c *Client) PatchStaged(ctx context.Context, connectionAPI, receiverID stri
 // jeder Node implementiert eine eigene Sender-Connection-API (z. B. der
 // Mock-Node, der nur Receiver-seitig antwortet, Schritt A7/B1) — Aufrufer
 // behandeln einen Fehler hier als nicht fatal.
-func (c *Client) PatchSenderStaged(ctx context.Context, connectionAPI, senderID string, masterEnable bool) error {
-	url := fmt.Sprintf("%s/single/senders/%s/staged", connectionAPI, senderID)
-
+func (c *Client) PatchSenderStaged(ctx context.Context, connectionAPIs []string, senderID string, masterEnable bool) error {
 	body, err := json.Marshal(map[string]any{
 		"master_enable": masterEnable,
 		"activation":    map[string]any{"mode": "activate_immediate"},
@@ -122,14 +138,7 @@ func (c *Client) PatchSenderStaged(ctx context.Context, connectionAPI, senderID 
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	tracing.SetHeaders(req, ctx)
-
-	resp, err := c.httpClient.Do(req)
+	resp, url, err := c.do(ctx, http.MethodPatch, connectionAPIs, "/single/senders/"+senderID+"/staged", body)
 	if err != nil {
 		return err
 	}

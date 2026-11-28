@@ -133,12 +133,12 @@ func newFakeIS05Client() *fakeIS05Client {
 	}
 }
 
-func (f *fakeIS05Client) GetActive(ctx context.Context, baseURL, receiverID string) (is05.ActiveResource, error) {
+func (f *fakeIS05Client) GetActive(ctx context.Context, connectionAPIs []string, receiverID string) (is05.ActiveResource, error) {
 	f.getActiveCalls++
 	return f.active[receiverID], nil
 }
 
-func (f *fakeIS05Client) PatchStaged(ctx context.Context, baseURL, receiverID string, senderID *string, masterEnable bool) error {
+func (f *fakeIS05Client) PatchStaged(ctx context.Context, connectionAPIs []string, receiverID string, senderID *string, masterEnable bool) error {
 	if f.receiverErr[receiverID] {
 		return fmt.Errorf("fake: receiver %s unreachable", receiverID)
 	}
@@ -150,7 +150,7 @@ func (f *fakeIS05Client) PatchStaged(ctx context.Context, baseURL, receiverID st
 	return nil
 }
 
-func (f *fakeIS05Client) PatchSenderStaged(ctx context.Context, baseURL, senderID string, masterEnable bool) error {
+func (f *fakeIS05Client) PatchSenderStaged(ctx context.Context, connectionAPIs []string, senderID string, masterEnable bool) error {
 	if f.senderErr[senderID] {
 		return fmt.Errorf("fake: sender %s has no connection API", senderID)
 	}

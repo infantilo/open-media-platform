@@ -21,7 +21,7 @@ func TestPatchStagedPropagatesTraceHeaders(t *testing.T) {
 	ctx := tracing.WithTrace(context.Background(), "trace-1", "span-1")
 	c := NewClient(nil)
 	senderID := "sender-1"
-	if err := c.PatchStaged(ctx, server.URL, "receiver-1", &senderID, true); err != nil {
+	if err := c.PatchStaged(ctx, []string{server.URL + "/x-nmos/connection/v1.2"}, "receiver-1", &senderID, true); err != nil {
 		t.Fatalf("PatchStaged() error = %v", err)
 	}
 
@@ -42,7 +42,7 @@ func TestPatchStagedGeneratesTraceWhenContextHasNone(t *testing.T) {
 	defer server.Close()
 
 	c := NewClient(nil)
-	if err := c.PatchStaged(context.Background(), server.URL, "receiver-1", nil, false); err != nil {
+	if err := c.PatchStaged(context.Background(), []string{server.URL + "/x-nmos/connection/v1.2"}, "receiver-1", nil, false); err != nil {
 		t.Fatalf("PatchStaged() error = %v", err)
 	}
 	if gotTrace == "" {
@@ -62,7 +62,7 @@ func TestGetActivePropagatesTraceHeaders(t *testing.T) {
 
 	ctx := tracing.WithTrace(context.Background(), "trace-2", "span-2")
 	c := NewClient(nil)
-	if _, err := c.GetActive(ctx, server.URL, "receiver-1"); err != nil {
+	if _, err := c.GetActive(ctx, []string{server.URL + "/x-nmos/connection/v1.2"}, "receiver-1"); err != nil {
 		t.Fatalf("GetActive() error = %v", err)
 	}
 	if gotTrace != "trace-2" {
@@ -80,7 +80,7 @@ func TestPatchSenderStagedPropagatesTraceHeaders(t *testing.T) {
 
 	ctx := tracing.WithTrace(context.Background(), "trace-3", "span-3")
 	c := NewClient(nil)
-	if err := c.PatchSenderStaged(ctx, server.URL, "sender-1", true); err != nil {
+	if err := c.PatchSenderStaged(ctx, []string{server.URL + "/x-nmos/connection/v1.2"}, "sender-1", true); err != nil {
 		t.Fatalf("PatchSenderStaged() error = %v", err)
 	}
 	if gotTrace != "trace-3" {
@@ -101,11 +101,38 @@ func TestPatchStagedUsesGivenConnectionAPI(t *testing.T) {
 
 	c := NewClient(nil)
 	senderID := "sender-1"
-	if err := c.PatchStaged(context.Background(), server.URL+"/x-nmos/connection/v1.1", "receiver-1", &senderID, true); err != nil {
+	if err := c.PatchStaged(context.Background(), []string{server.URL + "/x-nmos/connection/v1.1"}, "receiver-1", &senderID, true); err != nil {
 		t.Fatalf("PatchStaged() error = %v", err)
 	}
 
 	if gotPath != "/x-nmos/connection/v1.1/single/receivers/receiver-1/staged" {
 		t.Errorf("path = %q", gotPath)
+	}
+}
+
+// TestPatchStagedFallsBackOnlyWithoutAnswer: eine nicht erreichbare Adresse
+// wird übersprungen, eine ablehnende Antwort dagegen gilt.
+func TestPatchStagedFallsBackOnlyWithoutAnswer(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+
+	calls := 0
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusLocked)
+	}))
+	defer refusing.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("nach einer HTTP-Antwort darf nicht ausgewichen werden")
+	}))
+	defer second.Close()
+
+	err := NewClient(nil).PatchStaged(context.Background(), []string{deadURL, refusing.URL, second.URL}, "receiver-1", nil, false)
+	if err == nil || calls != 1 {
+		t.Errorf("err = %v, calls = %d; want Ablehnung der ersten erreichbaren Adresse", err, calls)
+	}
+	if err := NewClient(nil).PatchSenderStaged(context.Background(), nil, "sender-1", true); err == nil {
+		t.Error("ohne Adresse muss ein Fehler kommen")
 	}
 }

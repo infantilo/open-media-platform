@@ -143,18 +143,19 @@ type BuildInfo struct {
 type DeviceView struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
-	// ConnectionAPI ist die versionierte IS-05-Wurzel, die das Device in
+	// ConnectionAPIs sind die versionierten IS-05-Wurzeln, die das Device in
 	// seinen "controls" meldet (z. B. "http://10.0.0.4:8090/x-nmos/
-	// connection/v1.1"); leer, wenn es keine passende meldet.
-	ConnectionAPI string `json:"connection_api,omitempty"`
+	// connection/v1.1"), bevorzugte zuerst; leer, wenn es keine passende
+	// meldet.
+	ConnectionAPIs []string `json:"connection_apis,omitempty"`
 }
 
-// ConnectionAPI liefert die IS-05-Wurzel für den Sender oder Receiver
-// portID dieser Node: die vom Device gemeldete, sonst die bisherige
+// ConnectionAPIs liefert die IS-05-Wurzeln für den Sender oder Receiver
+// portID dieser Node: die vom Device gemeldeten, sonst die bisherige
 // Annahme "Node-API-Endpoint + /x-nmos/connection/v1.2" (OMP-eigene Nodes
 // melden keine "controls", bedienen aber v1.2, docs/decisions.md
 // Nachtrag 189). Leer, wenn die Node keinen API-Endpoint meldet.
-func (n NodeView) ConnectionAPI(portID string) string {
+func (n NodeView) ConnectionAPIs(portID string) []string {
 	deviceID := ""
 	for _, s := range n.Senders {
 		if s.ID == portID {
@@ -167,14 +168,14 @@ func (n NodeView) ConnectionAPI(portID string) string {
 		}
 	}
 	for _, d := range n.Devices {
-		if d.ID == deviceID && d.ConnectionAPI != "" {
-			return d.ConnectionAPI
+		if d.ID == deviceID && len(d.ConnectionAPIs) > 0 {
+			return d.ConnectionAPIs
 		}
 	}
 	if n.APIBaseURL == "" {
-		return ""
+		return nil
 	}
-	return n.APIBaseURL + "/x-nmos/connection/v1.2"
+	return []string{n.APIBaseURL + "/x-nmos/connection/v1.2"}
 }
 
 // SenderView ist die normalisierte Sicht auf einen IS-04-Sender inkl. des

@@ -30941,3 +30941,12 @@ gab der Server Clients seine Container-Adresse weiter; der JetStream-Speicher la
 Client-Zertifikat, im Klartext; Rechte je Benutzer; Stream mit 3 Kopien; fremder Server mit Zertifikat, aber
 falschem Route-Passwort abgewiesen; Rust-Client mit Zugangsdaten aus der URL. **Nicht geprüft:** das Quadlet
 unter systemd und ein kompletter Plattformbetrieb gegen diese Konfiguration.
+
+## 2026-11-28 — IS-05-Adresse aus den "controls" des Device
+
+Beitrag von außen (PR #18): Der Orchestrator nimmt die IS-05-Wurzel aus den IS-04-"controls"
+(`urn:x-nmos:control:sr-ctrl/<version>`, v1.2 vor v1.1; AMWA IS-05 v1.1.2, "Interoperability – IS-04"), ohne
+passenden Eintrag wie bisher Node-Endpoint + v1.2. Nachgezogen: `href` zählt nur als absolute http/https-Adresse
+ohne Zugangsdaten, Query und Fragment; mehrere Einträge derselben Version werden der Reihe nach versucht (Adresse
+des Node-Rechners zuerst), ausgewichen wird nur ohne HTTP-Antwort. Offen: Das Node-API-Token geht auch an interne
+Fremdgeräte (Paket P5).

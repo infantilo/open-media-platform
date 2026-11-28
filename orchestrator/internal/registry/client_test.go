@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -348,14 +349,43 @@ func TestConnectionAPIPrefersHighestAdvertisedVersion(t *testing.T) {
 		{Href: "http://10.0.0.5:3212/x-nmos/connection/v1.2/", Type: "urn:x-nmos:control:sr-ctrl/v1.2"},
 	}}
 
-	if got := connectionAPI(v11Only); got != "http://10.0.0.4:8090/x-nmos/connection/v1.1" {
-		t.Errorf("connectionAPI(v1.0+v1.1) = %q", got)
+	if got := connectionAPIs(v11Only, "10.0.0.4"); !slices.Equal(got, []string{"http://10.0.0.4:8090/x-nmos/connection/v1.1"}) {
+		t.Errorf("connectionAPIs(v1.0+v1.1) = %q", got)
 	}
-	if got := connectionAPI(both); got != "http://10.0.0.5:3212/x-nmos/connection/v1.2" {
-		t.Errorf("connectionAPI(v1.1+v1.2) = %q", got)
+	if got := connectionAPIs(both, "10.0.0.5"); !slices.Equal(got, []string{"http://10.0.0.5:3212/x-nmos/connection/v1.2"}) {
+		t.Errorf("connectionAPIs(v1.1+v1.2) = %q", got)
 	}
-	if got := connectionAPI(is04Device{ID: "dev-3"}); got != "" {
-		t.Errorf("connectionAPI(ohne controls) = %q, want leer", got)
+	if got := connectionAPIs(is04Device{ID: "dev-3"}, ""); got != nil {
+		t.Errorf("connectionAPIs(ohne controls) = %q, want leer", got)
+	}
+}
+
+// TestConnectionAPIsKeepsAllAddressesNodeHostFirst: je Schnittstelle ein
+// Eintrag — alle bleiben, der auf dem Node-Rechner zuerst.
+func TestConnectionAPIsKeepsAllAddressesNodeHostFirst(t *testing.T) {
+	const typ = "urn:x-nmos:control:sr-ctrl/v1.1"
+	d := is04Device{Controls: []is04Control{
+		{Href: "http://192.168.1.4/x-nmos/connection/v1.1/", Type: typ},
+		{Href: "https://10.0.0.4/x-nmos/connection/v1.1", Type: typ},
+	}}
+	want := []string{"https://10.0.0.4/x-nmos/connection/v1.1", "http://192.168.1.4/x-nmos/connection/v1.1"}
+	if got := connectionAPIs(d, "10.0.0.4"); !slices.Equal(got, want) {
+		t.Errorf("connectionAPIs() = %q, want %q", got, want)
+	}
+}
+
+// TestConnectionAPIsRejectsUnusableHref: Adressen, die den angehängten Pfad
+// abschneiden oder kein HTTP sind, zählen nicht; eine ältere brauchbare
+// Version wird dann genommen.
+func TestConnectionAPIsRejectsUnusableHref(t *testing.T) {
+	for _, href := range []string{"", "/x-nmos/connection/v1.2", "ftp://10.0.0.4/x", "http:///x", "http://10.0.0.4/x?a=", "http://10.0.0.4/x#", "http://u:p@10.0.0.4/x", "http://[::1/x"} {
+		d := is04Device{Controls: []is04Control{
+			{Href: href, Type: "urn:x-nmos:control:sr-ctrl/v1.2"},
+			{Href: "http://10.0.0.4/x-nmos/connection/v1.1", Type: "urn:x-nmos:control:sr-ctrl/v1.1"},
+		}}
+		if got := connectionAPIs(d, ""); !slices.Equal(got, []string{"http://10.0.0.4/x-nmos/connection/v1.1"}) {
+			t.Errorf("connectionAPIs(%q) = %q", href, got)
+		}
 	}
 }
 
@@ -381,10 +411,10 @@ func TestNodeViewConnectionAPIFallsBackToNodeEndpoint(t *testing.T) {
 
 	view := buildSnapshot(nodes, devices, nil, receivers, nil)[0]
 
-	if got := view.ConnectionAPI("recv-omp"); got != "http://127.0.0.1:9001/x-nmos/connection/v1.2" {
-		t.Errorf("ConnectionAPI(recv-omp) = %q", got)
+	if got := view.ConnectionAPIs("recv-omp"); !slices.Equal(got, []string{"http://127.0.0.1:9001/x-nmos/connection/v1.2"}) {
+		t.Errorf("ConnectionAPIs(recv-omp) = %q", got)
 	}
-	if got := view.ConnectionAPI("recv-ext"); got != "http://127.0.0.1:8090/x-nmos/connection/v1.1" {
-		t.Errorf("ConnectionAPI(recv-ext) = %q", got)
+	if got := view.ConnectionAPIs("recv-ext"); !slices.Equal(got, []string{"http://127.0.0.1:8090/x-nmos/connection/v1.1"}) {
+		t.Errorf("ConnectionAPIs(recv-ext) = %q", got)
 	}
 }

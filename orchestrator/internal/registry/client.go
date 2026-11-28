@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -418,7 +419,7 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 		}
 
 		for _, d := range devicesByNode[n.ID] {
-			view.Devices = append(view.Devices, DeviceView{ID: d.ID, Label: d.Label, ConnectionAPI: connectionAPI(d)})
+			view.Devices = append(view.Devices, DeviceView{ID: d.ID, Label: d.Label, ConnectionAPIs: connectionAPIs(d, nodeHost(n))})
 
 			for _, s := range sendersByDevice[d.ID] {
 				format := ""
@@ -456,18 +457,54 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 // nur v1.1 an (z. B. Blackmagic 2110 IP Mini BiDirect: v1.0 und v1.1).
 var connectionVersions = []string{"v1.2", "v1.1"}
 
-// connectionAPI wählt aus den "controls" eines Device die IS-05-Wurzel
-// in der höchsten Version, die is05.Client spricht. Leer, wenn das Device
-// keine solche meldet.
-func connectionAPI(d is04Device) string {
+// connectionAPIs wählt aus den "controls" eines Device die IS-05-Wurzeln
+// der höchsten Version, die is05.Client spricht. Mehrere Einträge einer
+// Version (z. B. je Netzwerkschnittstelle) bleiben alle erhalten, die
+// Adresse auf demselben Rechner wie der Node-API-Endpoint zuerst — der
+// Client weicht der Reihe nach aus. Leer, wenn das Device keine brauchbare
+// meldet.
+func connectionAPIs(d is04Device, nodeHost string) []string {
 	for _, version := range connectionVersions {
+		var preferred, others []string
 		for _, c := range d.Controls {
-			if c.Type == "urn:x-nmos:control:sr-ctrl/"+version {
-				return strings.TrimSuffix(c.Href, "/")
+			if c.Type != "urn:x-nmos:control:sr-ctrl/"+version {
+				continue
+			}
+			href, host, ok := controlHref(c.Href)
+			if !ok {
+				continue
+			}
+			if host == nodeHost {
+				preferred = append(preferred, href)
+			} else {
+				others = append(others, href)
 			}
 		}
+		if found := append(preferred, others...); len(found) > 0 {
+			return found
+		}
 	}
-	return ""
+	return nil
+}
+
+// controlHref prüft eine vom Device gemeldete Adresse: absolut, http oder
+// https, ohne Zugangsdaten, Query und Fragment — an sie wird ein Pfad
+// angehängt, "?" oder "#" würden ihn abschneiden. Liefert sie ohne
+// abschließenden Schrägstrich, dazu den Rechnernamen.
+func controlHref(href string) (string, string, bool) {
+	u, err := url.Parse(href)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || strings.ContainsAny(href, "?#") {
+		return "", "", false
+	}
+	return strings.TrimRight(href, "/"), u.Hostname(), true
+}
+
+// nodeHost ist der Rechnername des ersten Node-API-Endpoints ("" ohne Endpoint).
+func nodeHost(n is04Node) string {
+	if len(n.API.Endpoints) == 0 {
+		return ""
+	}
+	return n.API.Endpoints[0].Host
 }
 
 func apiBaseURL(n is04Node) string {
