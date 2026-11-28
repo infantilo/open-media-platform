@@ -373,14 +373,14 @@ status:
 		echo "Orchestrator: nicht gestartet (make start)"; \
 	fi
 	@for n in 1 2 3; do \
-		podman container exists omp-nats-$$n && echo "NATS-Knoten $$n: läuft" || echo "NATS-Knoten $$n: gestoppt"; \
+		[ "$$(podman inspect -f \'{{.State.Running}}\' omp-nats-$$n 2>/dev/null)" = true ] && echo "NATS-Knoten $$n: läuft" || echo "NATS-Knoten $$n: gestoppt"; \
 	done
-	@podman container exists omp-nmos-registry && echo "NMOS-Registry: läuft" || echo "NMOS-Registry: gestoppt"
+	@[ "$$(podman inspect -f \'{{.State.Running}}\' omp-nmos-registry 2>/dev/null)" = true ] && echo "NMOS-Registry: läuft" || echo "NMOS-Registry: gestoppt"
 	@for n in 1 2 3; do \
-		podman container exists omp-etcd-$$n && echo "etcd-Knoten $$n: läuft" || echo "etcd-Knoten $$n: gestoppt"; \
+		[ "$$(podman inspect -f \'{{.State.Running}}\' omp-etcd-$$n 2>/dev/null)" = true ] && echo "etcd-Knoten $$n: läuft" || echo "etcd-Knoten $$n: gestoppt"; \
 	done
 	@for n in 1 2 3; do \
-		if podman container exists omp-patroni-$$n; then \
+		if [ "$$(podman inspect -f \'{{.State.Running}}\' omp-patroni-$$n 2>/dev/null)" = true ]; then \
 			case $$n in 1) PORT=8008 ;; 2) PORT=8018 ;; 3) PORT=8028 ;; esac; \
 			ROLE=$$(curl -s http://127.0.0.1:$$PORT/patroni 2>/dev/null | grep -o '"role": *"[^"]*"' | cut -d'"' -f4); \
 			echo "Postgres-Knoten $$n: läuft (Rolle: $${ROLE:-unbekannt})"; \
@@ -388,9 +388,9 @@ status:
 			echo "Postgres-Knoten $$n: gestoppt"; \
 		fi; \
 	done
-	@podman container exists omp-step-ca && echo "step-ca: läuft" || echo "step-ca: gestoppt (optional, siehe 'make mtls-up')"
-	@podman container exists omp-caddy && echo "Caddy-Reverse-Proxy: läuft, https://localhost:8443" || echo "Caddy-Reverse-Proxy: gestoppt (optional, siehe 'make proxy-up')"
-	@podman container exists omp-s3 && echo "S3 (SeaweedFS): running, http://localhost:9000" || echo "S3 (SeaweedFS): stopped (optional, see 'make s3-up')"
+	@[ "$$(podman inspect -f \'{{.State.Running}}\' omp-step-ca 2>/dev/null)" = true ] && echo "step-ca: läuft" || echo "step-ca: gestoppt (optional, siehe 'make mtls-up')"
+	@[ "$$(podman inspect -f \'{{.State.Running}}\' omp-caddy 2>/dev/null)" = true ] && echo "Caddy-Reverse-Proxy: läuft, https://localhost:8443" || echo "Caddy-Reverse-Proxy: gestoppt (optional, siehe 'make proxy-up')"
+	@[ "$$(podman inspect -f \'{{.State.Running}}\' omp-s3 2>/dev/null)" = true ] && echo "S3 (SeaweedFS): running, http://localhost:9000" || echo "S3 (SeaweedFS): stopped (optional, see 'make s3-up')"
 	@if [ -f .run/supervisor.pid ] && kill -0 "$$(cat .run/supervisor.pid)" 2>/dev/null; then \
 		echo "Supervisor (Backup/Restore): läuft (PID $$(cat .run/supervisor.pid))"; \
 	else \
