@@ -59,8 +59,20 @@ pub struct Config {
     pub key_flow_id: String,
     pub label: String,
     pub harness_url: String,
+    /// Setzt der Harness-Server, sobald die Seite `POST /ograf-ready` schickt (`window.omp` existiert).
+    pub script_ready: Arc<AtomicBool>,
     pub width: u32,
     pub height: u32,
+}
+
+/// So lange wird nach dem ersten Bild höchstens auf die Meldung der Seite gewartet; danach gehen Befehle trotzdem raus
+/// (mit Warnung), damit eine ausbleibende Meldung den Node nicht stumm legt.
+const SCRIPT_READY_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Darf `run-javascript` aufgerufen werden? `first_frame` allein genügt nicht: `wpesrc` kann (leere) Bilder liefern,
+/// bevor das Modul-Skript der Seite lief — ein Befehl dann geht ohne Fehlermeldung verloren.
+fn page_accepts_commands(first_frame: bool, script_ready: bool, since_first_frame: Duration) -> bool {
+    first_frame && (script_ready || since_first_frame >= SCRIPT_READY_TIMEOUT)
 }
 
 pub enum Command {
@@ -566,13 +578,8 @@ impl Pipeline {
         let page_ready_probe = page_ready.clone();
         let tee_sink_pad = tee.static_pad("sink").expect("tee has a sink pad");
         tee_sink_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
-            // Der erste Puffer, der den `tee` erreicht, beweist, dass
-            // `wpesrc` die Harness-Seite tatsächlich gerendert hat (die
-            // Seite definiert `window.omp` synchron beim Laden, s.
-            // `ui/harness.html`) — Grundlage für die Bereitschafts-Sonde
-            // in `run()` unten, die `run-javascript` erst danach
-            // aufruft (sonst liefe der allererste `show()`-Aufruf nach
-            // dem Node-Start ins Leere).
+            // Erster Puffer am `tee`: `wpesrc` liefert Bilder (Grundlage für `media_ready`). Er beweist NICHT,
+            // dass das Skript der Seite schon lief — darauf wartet `run()` gesondert (`page_accepts_commands`).
             page_ready_probe.store(true, Ordering::Relaxed);
             gst::PadProbeReturn::Ok
         });
@@ -792,6 +799,8 @@ pub fn run(
     // `run-javascript` ist fire-and-forget, ein zu früher Aufruf ginge
     // sonst kommentarlos ins Leere (`window.omp` existiert noch nicht).
     let mut pending: Option<Command> = None;
+    let mut first_frame_at: Option<std::time::Instant> = None;
+    let mut accepts = false;
     // Nutzerauftrag "ograf burns cpu" (s. `transition_pipeline`-Doku):
     // spiegelt den tatsächlichen Playing/Paused-Zustand der Pipeline,
     // damit Show/Hide idempotent bleiben (ein zweites `hide()` in Folge
@@ -821,6 +830,17 @@ pub fn run(
 
         if pending.is_none() {
             pending = commands_rx.recv_timeout(Duration::from_millis(200)).ok();
+        } else if !accepts {
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        if !accepts && pipeline.page_ready.load(Ordering::Relaxed) {
+            let since = first_frame_at.get_or_insert_with(std::time::Instant::now).elapsed();
+            let script_ready = config.script_ready.load(Ordering::Relaxed);
+            accepts = page_accepts_commands(true, script_ready, since);
+            if accepts && !script_ready {
+                eprintln!("omp-ograf: Harness-Seite hat sich nicht bereit gemeldet, Befehle gehen trotzdem raus");
+            }
         }
 
         if let Some(command) = pending.take() {
@@ -831,7 +851,7 @@ pub fn run(
                 }
                 other => other,
             };
-            if pipeline.page_ready.load(Ordering::Relaxed) {
+            if accepts {
                 match &command {
                     Command::Show { layer_id, template_id, dir, main, data } => {
                         on_air.insert(layer_id.clone());
@@ -914,10 +934,10 @@ pub fn run(
             } else {
                 pending = Some(command);
             }
-        } else if !keepalive && rendering && !ever_shown && pipeline.page_ready.load(Ordering::Relaxed) {
+        } else if !keepalive && rendering && !ever_shown && accepts {
             // Nie etwas gezeigt worden — die Harness-Seite hat bereits
             // ihren (leeren/transparenten) Startzustand gerendert
-            // (`page_ready`), kein Warte-Frame nötig wie bei `Hide`
+            // (`accepts`), kein Warte-Frame nötig wie bei `Hide`
             // oben: der zuletzt geflossene Frame IST bereits der
             // korrekte Leerlaufzustand.
             if let Err(e) = transition_pipeline(&pipeline.pipeline, gst::State::Paused, 5) {
@@ -932,6 +952,21 @@ pub fn run(
     drop(bus_watch_guard);
     main_loop.quit();
     let _ = main_loop_thread.join();
+}
+
+#[cfg(test)]
+mod ready_tests {
+    use super::*;
+
+    #[test]
+    fn commands_wait_for_the_page_script_with_a_fallback() {
+        let early = Duration::from_secs(1);
+        assert!(!page_accepts_commands(false, true, early));
+        // erstes Bild allein reicht nicht: so ging das Einblenden beim Workflow-Start verloren
+        assert!(!page_accepts_commands(true, false, early));
+        assert!(page_accepts_commands(true, true, Duration::ZERO));
+        assert!(page_accepts_commands(true, false, SCRIPT_READY_TIMEOUT));
+    }
 }
 
 #[cfg(test)]

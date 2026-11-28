@@ -36,8 +36,11 @@ pub fn authorized(want: Option<&str>, headers: &[(String, String)]) -> bool {
 /// Pfade, die immer offen sind (ohne Query).
 pub fn always_open(method: &str, path: &str) -> bool {
     let bare = path.split('?').next().unwrap_or(path);
+    // Punkt-Segmente (auch kodiert) machen aus dem offenen Präfix nie einen offenen Pfad. Der Server löst sie heute nicht
+    // auf; die Prüfung hält das auch dann, wenn ein Handler oder ein vorgeschalteter Proxy es täte.
+    let dotted = bare.split('/').any(|seg| matches!(seg.to_ascii_lowercase().replace("%2e", ".").as_str(), "." | "..")) || bare.to_ascii_lowercase().contains("%2f");
     method.eq_ignore_ascii_case("OPTIONS")
-        || (method.eq_ignore_ascii_case("GET") && (bare == "/https-info" || bare == "/x-nmos" || bare.starts_with("/x-nmos/")))
+        || (method.eq_ignore_ascii_case("GET") && !dotted && (bare == "/https-info" || bare == "/x-nmos" || bare.starts_with("/x-nmos/")))
 }
 
 /// Hängt das Token (falls gesetzt) an eine ausgehende `ureq`-Anfrage an Nodes.
@@ -79,5 +82,10 @@ mod tests {
         assert!(!always_open("GET", "/params/x"));
         assert!(!always_open("POST", "/methods/x"));
         assert!(!always_open("GET", "/descriptor.json"));
+        for path in ["/x-nmos/../params", "/x-nmos/%2e%2e/params", "/x-nmos/.%2E/params", "/x-nmos/./node", "/x-nmos/..%2fparams"] {
+            assert!(!always_open("GET", path), "{path}");
+        }
+        // Punkte in Namen und in der Anfrage bleiben erlaubt
+        assert!(always_open("GET", "/x-nmos/connection/v1.1/single/senders/s/transportfile?x=../y"));
     }
 }

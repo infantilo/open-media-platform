@@ -353,13 +353,28 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       if (icRow.hidden === show) icRow.hidden = !show;
     };
 
+    // Der Intercom-Dienst kennt nur den Namen, unter dem der Bediener den Orchestrator erreicht. Arbeitet er über `localhost`,
+    // wäre das für das Handy das Handy selbst: dann gilt der Rechnername aus der Basis-URL des Einladungslinks.
+    const isLoopback = (h) => h === "localhost" || h === "[::1]" || h.startsWith("127.");
+    const reachableFrom = (base, target) => {
+      try {
+        const b = new URL(base);
+        const t = new URL(target);
+        if (!isLoopback(t.hostname) || isLoopback(b.hostname)) return target;
+        t.hostname = b.hostname;
+        return t.toString();
+      } catch {
+        return target;
+      }
+    };
+
     const inviteLink = (token) => {
       const base = baseUrlInput.value.trim().replace(/\/+$/, "");
       let url = `${base}/?token=${encodeURIComponent(token)}`;
       const pair = findPair(token);
       if (pair) {
         if (pair.monitorBase) url += `&monitorBase=${encodeURIComponent(pair.monitorBase)}&monitorToken=${encodeURIComponent(pair.monitorToken)}`;
-        if (pair.icUrl) url += `&icUrl=${encodeURIComponent(pair.icUrl)}`;
+        if (pair.icUrl) url += `&icUrl=${encodeURIComponent(reachableFrom(base, pair.icUrl))}`;
       }
       return url;
     };

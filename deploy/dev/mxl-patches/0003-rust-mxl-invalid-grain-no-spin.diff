@@ -1,0 +1,17 @@
+diff --git a/rust/mxl/src/grain/reader.rs b/rust/mxl/src/grain/reader.rs
+--- a/rust/mxl/src/grain/reader.rs
++++ b/rust/mxl/src/grain/reader.rs
+@@ -66,8 +66,12 @@
+                     &mut payload_ptr,
+                 ))?;
+             }
+-            if grain_info.validSlices != grain_info.totalSlices {
++            if grain_info.validSlices != grain_info.totalSlices
++                && grain_info.flags & mxl_sys::MXL_GRAIN_FLAG_INVALID == 0
++            {
+                 // We don't need partial grains. Wait for the grain to be complete.
++                // An invalid grain (index skipped by the writer) never completes: it is
++                // returned as is, the caller has to check `flags`.
+                 continue;
+             }
+             if payload_ptr.is_null() {

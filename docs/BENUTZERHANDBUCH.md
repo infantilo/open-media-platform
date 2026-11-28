@@ -240,6 +240,11 @@ In der Spalte **Aktionen** hat jede Zeile drei Knöpfe:
 
 Beides ist Administratoren vorbehalten.
 
+**„Stop vorgemerkt“** steht bei Instanzen auf einem Remote-Host, der beim Stoppen nicht erreichbar war. Ob sie dort noch
+laufen, ist unbekannt; der Stop wird nachgeholt, sobald der Host sich wieder meldet. Statt der drei Knöpfe gibt es dann
+**Eintrag entfernen** (nach Rückfrage) — nur für Hosts gedacht, die dauerhaft weg sind: Läuft die Instanz dort doch noch,
+läuft sie unverwaltet weiter.
+
 Nach einem **System-Update** (Abschnitt 7, „System-Update") trägt eine
 Instanz das Kennzeichen **„veraltet"**, wenn ihr Programm durch das Update
 ersetzt wurde, der laufende Prozess aber noch den alten Stand ausführt.
@@ -1099,8 +1104,9 @@ verwaltet sie: ansehen, einem Asset zuordnen, hochladen, löschen und wiederhers
 - **Papierkorb:** je Ort die gelöschten Dateien mit Restzeit; **Wiederherstellen** (überschreibt nie eine vorhandene Datei), **Endgültig löschen** und **Papierkorb leeren** (Recht `files.admin`).
 - **Einstellungen** (`files.admin`) liegen in der **Administration → Plattform → Betrieb → Dateien**: Aufbewahrung im Papierkorb (Tage, 0 = sofort endgültig), **Notfallgrenze** (freier Platz in GB oder Prozent),
   Schutzfrist für frisch Gelöschtes, **Sperrfenster** vor und nach der Sendung, „solange verplant, bleibt gesperrt“ sowie die Prüf- und Pflegeintervalle; je Ort lassen sich Papierkorb-Tage, Sperrfenster und
-  Notfallgrenze überschreiben, dazu Rolle und Schreibschutz. **Ort hinzufügen:** Name, Host (leer = Orchestrator-Rechner), absoluter Pfad, Rolle. Ein Host-Agent kann die Wurzeln, die er bedient, per
-  `OMP_FILE_ROOTS` (Doppelpunkt-getrennt) einschränken; liegt ein Ort außerhalb, meldet er „nicht erreichbar … nicht freigegeben“.
+  Notfallgrenze überschreiben, dazu Rolle und Schreibschutz. **Ort hinzufügen:** Name, Host (leer = Orchestrator-Rechner), absoluter Pfad, Rolle. Ein Host-Agent bedient nur Verzeichnisse, die an ihm freigegeben sind:
+  `OMP_FILE_ROOTS` (Doppelpunkt-getrennt, absolute Pfade), ersatzweise `OMP_MEDIA_MOUNTS`. Ist beides nicht gesetzt oder liegt ein Ort außerhalb, meldet er „nicht erreichbar … nicht freigegeben“.
+  Verzeichnisse mit der Zustandsdatei oder dem Katalog des Agents sind immer gesperrt.
 - **Gemeinsamer Speicher (z. B. Isilon):** Beim Anlegen „Gemeinsamer Speicher“ ankreuzen und die Hosts wählen, die ihn unter **demselben Pfad** eingehängt haben (der Orchestrator-Rechner zählt als Host). Die
   Reihenfolge der Häkchen ist die Vorzugsreihenfolge: der erste wird zuerst befragt, fällt er aus oder hängt sein Mount, übernimmt der nächste (der zuletzt erfolgreiche bleibt vorn). Der Ort erscheint **einmal**
   im Explorer, mit dem gerade bedienenden Host. „Hosts …“ ändert die Liste später. Upload geht nur, wenn der Orchestrator-Rechner einer der Hosts ist.
@@ -1148,6 +1154,10 @@ Das künftige Dateiformat der Produktion ist **AVC-Intra Class 100** in **1080/5
 **Optik, Zähler, Timeline.** Das Panel hat die dunkle **Konsole-2-Optik** der Mischer. Die angehakten **Zähler** (nächstes Live-, Fix-, manuelles Event, Event ohne Quelle) bleiben sichtbar, auch wenn es kein passendes Event gibt — dann steht „… : —“ abgedunkelt da. Über **▤ Timeline** über der Playlist blendest du eine **Zeitleiste** ein (Fenster 5–120 min, im Browser gemerkt): die Events als Blöcke ab der Sendeposition (roter Strich = jetzt; grün = On Air, gelb = Cued, magenta = Live), darunter ihre **Child Events** als violette Balken (grün = aktiv, rot = fehlgeschlagen). Klick wählt das Event bzw. öffnet das Child im Editor. Child Events mit absoluter Zeit stehen nicht auf der Achse.
 
 Diese Funktionen gehören zum Node **Playout-Automation** (Panel-Abschnitt **Fremdliste / Mitlauf**, Einstellung **Sendefreigabe** unter *Ziele*).
+
+**Mehrere Kanäle in einem Workflow.** Jede Playout-Automation steuert die Player und den Bildmischer, deren Rollenname mit ihrem eigenen beginnt, z. B. `channel-a` → `channel-a-player-1`, `channel-a-player-2`, `channel-a-mixer`.
+
+**Playlist laden, anhängen, speichern.** Über der Playlist: **Speichern** lädt die komplette Liste als Datei `<Channel>-<Datum>-<Zeit>.omp-playlist.json` in den Download-Ordner des Browsers (mit allen Eigenschaften: Startarten, Übergänge, Child Events, Audio, Asset-Bezug, Sprungziele). **Laden …** ersetzt die aktuelle Playlist durch eine solche Datei (Rückfrage, wenn die Liste nicht leer ist; die Player werden nicht angefasst, ein laufendes Event wird im As-Run als unterbrochen vermerkt). **Anhängen …** hängt die Events der Datei hinten an. Eine fehlerhafte Datei wird vollständig abgelehnt. Beispiele: `docs/examples/playlists/`.
 
 **Fremdlisten importieren.** *Liste importieren …* öffnet eine Sendeliste eines anderen Automationssystems (Adapter `mpl3`, XML-Sendeliste). Vor dem Übernehmen zeigt eine **Vorschau**, wie viele Sendeevents entstehen, wie viele schon gelaufen sind (werden ausgelassen), was nur *angenähert* (z. B. Überblendung „Fade Cut“ wird zu „Mix“) und was *nicht übernommen* wird (z. B. Logo-/Grafik-Kinder ohne Zuordnung). Dann: **Anhängen** oder **Playlist ersetzen**. Zuordnungen stehen in der Plugin-Konfiguration `foreign-mpl3` (`mediaTemplate`, `liveMap`, `childMap`, `skipDone`, `requireRelease`). Die Liste wird nur gelesen — das Fremdformat ist kein internes Format.
 
@@ -3117,7 +3127,7 @@ Der Tab **MCR** ist der Arbeitsplatz des Hauptkontrollraums. Er hat fünf Seiten
 
 **Quelle einer Leitung.** Beim Hinzufügen einer Leitung wählen Sie „Neu starten“ (OMP startet den passenden Eingang) oder „Vorhandener Node“: dann erscheinen die laufenden Nodes mit Sendern, etwa dedizierte SRT- oder ST-2110-Nodes. Bild- und Ton-Flow wählen Sie einzeln oder lassen sie automatisch bestimmen. Der Normalizer wird beim Start des Events mit dem gewählten Node verbunden.
 
-**Überwachung (Multiview-Wand).** Die erste Seite des Tabs zeigt alle laufenden Events, Tests und die nächsten geplanten Events (nächste 24 Stunden). Events mit Fehlern oder Warnungen erscheinen automatisch zuerst und größer, mit Bild des Multiviewers; ruhige Events bleiben klein und kosten kaum Rechenleistung. Mit dem Knopf „▣“ lässt sich das Bild eines Events dauerhaft zeigen (höchstens drei Bilder gleichzeitig, jedes Bild hält einen Multiviewer am Laufen). Ein Klick auf eine Leitung öffnet ein Menü: **Abhören** legt den Ton der Leitung auf den Abhörplatz, **Auf Messgerät** zeigt Waveform und Vektorskop der Leitung. Die Abhör- und Messstation startet beim ersten Gebrauch und endet nach 15 Minuten ohne Nutzung.
+**Überwachung (Multiview-Wand).** Die erste Seite des Tabs zeigt alle laufenden Events, Tests und die nächsten geplanten Events (nächste 24 Stunden). Events mit Fehlern oder Warnungen erscheinen automatisch zuerst und größer, mit Bild des Multiviewers; ruhige Events bleiben klein und kosten kaum Rechenleistung. Mit dem Knopf „▣“ lässt sich das Bild eines Events dauerhaft zeigen (höchstens drei Bilder gleichzeitig, jedes Bild hält einen Multiviewer am Laufen). Ist kein Bild zu sehen (anderer Reiter, verdeckter Browser-Tab, kleine Kachel), endet der Multiviewer nach etwa 45 Sekunden und gibt die Rechenleistung frei; die Prüfungen und Alarme laufen weiter. Beim erneuten Anzeigen startet er wieder, das Bild erscheint nach wenigen Sekunden. Ein Klick auf eine Leitung öffnet ein Menü: **Abhören** legt den Ton der Leitung auf den Abhörplatz, **Auf Messgerät** zeigt Waveform und Vektorskop der Leitung. Die Abhör- und Messstation startet beim ersten Gebrauch und endet nach 15 Minuten ohne Nutzung.
 
 **Rechte und Rollen je Event.** Wer ein Event sieht und was die Person daran tun darf, hängt von zwei Dingen ab. Global: „Alle Events ansehen“ (`mcr.view`, nur lesen), „Event bedienen“ (`mcr.live`, alle Events testen, auf Sendung schalten, Ausgleich) und „Events und Leitungen verwalten“ (`mcr.manage`, alles, auch Mitglieder eintragen); jedes Recht schließt das davor ein. Je Event: **Mitglieder** mit einer Rolle — **Leitung** (alles am Event außer den Mitgliedern; die Verantwortlichen gelten als Leitung), **Technik** (Geplant ↔ Test, Messen, A/V-Ausgleich, Alarme quittieren, Alarm-PiP, Abhören und Messgerät), **Ansicht** (nur ansehen) und **Kommentator** (nur die eigene Sprechstelle im Intercom, in der Verwaltung kein Zugriff). Wer ein Event nicht sehen darf, bekommt es gar nicht angezeigt; wer es sieht, aber eine Handlung nicht darf, bekommt eine Fehlermeldung. Mitglieder tragen Administratoren im Event-Dialog ein. Leitung und Technik dürfen außerdem die Nodes des Event-Workflows bedienen, Ansicht darf sie ansehen; diese Freigabe endet mit dem Event. Die Zugriffsregeln für Quellen werden dabei nicht verändert.
 

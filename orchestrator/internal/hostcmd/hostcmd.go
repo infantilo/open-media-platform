@@ -174,7 +174,8 @@ func (s *Signer) EnsureProvisioned(hostID string, timeout time.Duration) {
 
 // provision übergibt dem Agent den Schlüssel (unsigniert, der Agent nimmt ihn nur ohne eigenen an). Antwort „already
 // provisioned“ heißt: der Agent hat einen Schlüssel — es gilt der in der Datenbank (stimmt er nicht, scheitern Kommandos sichtbar
-// mit „unauthorized“; Abhilfe: Host neu registrieren). Ein Alt-Agent kennt die Aktion nicht und bleibt unsigniert erreichbar.
+// mit „unauthorized“; Abhilfe: Host neu registrieren). Ein Alt-Agent kennt die Aktion nicht und bleibt unsigniert erreichbar;
+// ein aktueller Agent ohne Schlüssel lehnt sie ab, solange dort OMP_HOST_AGENT_ALLOW_NATS_PROVISION nicht gesetzt ist.
 func (s *Signer) provision(hostID, subject, key string, timeout time.Duration) {
 	s.mu.Lock()
 	if s.lastTry == nil {
@@ -207,5 +208,5 @@ func (s *Signer) provision(hostID, subject, key string, timeout time.Duration) {
 		}
 		return
 	}
-	slog.Info("hostcmd: host agent did not accept a command key (older agent?) — commands stay unauthenticated on that host", "host", hostID, "reply", resp.Error)
+	slog.Warn("hostcmd: host agent did not accept a command key — a current agent then refuses all commands (see reply), an older one stays unauthenticated", "host", hostID, "reply", resp.Error)
 }

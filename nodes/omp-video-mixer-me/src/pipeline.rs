@@ -1898,6 +1898,68 @@ struct LevelPipeline {
     flowed: Arc<AtomicBool>,
     /// Letztes PGM-Bild (Quelle für Freezes).
     last_frame: Arc<Mutex<Option<gst::Sample>>>,
+    /// Zahl der erzeugten PGM-Bilder (Stillstands-Wächter, s. `StallWatch`).
+    frames: Arc<AtomicU64>,
+}
+
+/// Mindestzeit ohne neues PGM-Bild, ab der die Pipeline neu gebaut wird.
+const STALL_LIMIT: Duration = Duration::from_secs(8);
+/// Nach so vielen Bildern am Stück gilt ein Neubau als erfolgreich (Wartezeit wieder Grundwert).
+const STALL_HEALTHY_FRAMES: u64 = 250;
+
+/// Erkennt eine stehende Ausgabe (Nutzerbefund 2026-11-26 und 2026-11-10: PGM Head-Index 0, Mischer-Monitor dauerhaft
+/// schwarz, weil nach einem Pipeline-Fehler beim Kaltstart niemand neu baute). Reine Entscheidungslogik ohne GStreamer.
+/// Jeder erfolglose Neubau verdoppelt die Wartezeit (bis 8-fach), damit ein dauerhafter Fehler nicht im Sekundentakt baut.
+#[derive(Default)]
+struct StallWatch {
+    /// Bildzähler je Ebene beim letzten Fortschritt und dessen Zeitpunkt.
+    seen: Vec<(u64, Instant)>,
+    retries: u32,
+}
+
+impl StallWatch {
+    /// `true`, wenn mindestens eine Ebene seit Ablauf der Wartezeit kein neues Bild erzeugt hat. Setzt sich dann zurück.
+    fn stalled(&mut self, counts: &[u64], now: Instant) -> bool {
+        if self.seen.len() != counts.len() {
+            self.seen = counts.iter().map(|&c| (c, now)).collect();
+            return false;
+        }
+        let limit = STALL_LIMIT * (1 << self.retries.min(3));
+        let mut stalled = false;
+        for (seen, &count) in self.seen.iter_mut().zip(counts) {
+            if count != seen.0 {
+                *seen = (count, now);
+            } else if now.duration_since(seen.1) >= limit {
+                stalled = true;
+            }
+        }
+        if stalled {
+            self.retries += 1;
+            self.seen.clear();
+        } else if counts.iter().all(|&c| c >= STALL_HEALTHY_FRAMES) {
+            self.retries = 0;
+        }
+        stalled
+    }
+
+    /// Nach einem Neubau aus anderem Grund: neue Zähler, neue Wartezeit.
+    fn reset(&mut self) {
+        self.seen.clear();
+    }
+}
+
+/// Leert den Bus der Pipeline und liefert die Fehlermeldungen. Ohne diesen Abruf blieben GStreamer-Fehler unsichtbar
+/// (und alle Meldungen sammelten sich unbegrenzt in der Bus-Warteschlange).
+fn drain_bus_errors(pipeline: &gst::Pipeline) -> Vec<String> {
+    let mut errors = Vec::new();
+    let Some(bus) = pipeline.bus() else { return errors };
+    while let Some(msg) = bus.pop() {
+        if let gst::MessageView::Error(e) = msg.view() {
+            let source = msg.src().map(|s| s.path_string().to_string()).unwrap_or_default();
+            errors.push(format!("GStreamer: {source}: {} ({})", e.error(), e.debug().unwrap_or_default()));
+        }
+    }
+    errors
 }
 
 /// Der volle gebaute Pipeline-Zustand: EIN geteiltes `gst::Pipeline`-
@@ -2366,6 +2428,7 @@ fn apply_dve_box(pad: &gst::Pad, box_: &DveBox) {
 /// Eingang öffnet (Mastereben-Routing), sonst schlägt `get_flow_def`
 /// fehl — daher zwei getrennte Ebenen-Durchläufe statt einem.
 struct PartialLevel {
+    frames: Arc<AtomicU64>,
     isel: gst::Element,
     isel_bg: gst::Element,
     /// (Selektor, Schwarz-Pad, Compositor-Pad, Transform-Element) je Slot, Pads der Quellen kommen später.
@@ -2745,10 +2808,13 @@ fn build(
         }
         // Letztes PGM-Bild dieser Ebene (nur eine Referenz, kein Kopieren) — Quelle für `freeze.capture`.
         let last_frame: Arc<Mutex<Option<gst::Sample>>> = Arc::new(Mutex::new(None));
+        let frames = Arc::new(AtomicU64::new(0));
         if let Some(pad) = comp_out_caps.static_pad("src") {
             let slot = last_frame.clone();
+            let count = frames.clone();
             let caps_pad = pad.clone();
             pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+                count.fetch_add(1, Ordering::Relaxed);
                 if let (Some(buf), Some(caps)) = (info.buffer(), caps_pad.current_caps()) {
                     *slot.lock().expect("lock poisoned") = Some(gst::Sample::builder().buffer(buf).caps(&caps).build());
                 }
@@ -2789,6 +2855,7 @@ fn build(
             keyer_flow,
             flowed,
             last_frame,
+            frames,
         });
     }
 
@@ -2867,6 +2934,7 @@ fn build(
             keyer_flow: partial.keyer_flow,
             flowed: partial.flowed,
             last_frame: partial.last_frame,
+            frames: partial.frames,
         });
     }
 
@@ -3496,12 +3564,32 @@ pub fn run(
                 }
                     }};
     }
+    let mut stall_watch = StallWatch::default();
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
         // Nachtrag 130/131).
         heartbeat.fetch_add(1, Ordering::Relaxed);
         if shutdown.load(Ordering::Relaxed) {
             break;
+        }
+        let mut stalled = false;
+        if let Some(p) = &active {
+            for error in drain_bus_errors(&p.pipeline) {
+                let _ = tx.send(Event::Error(error));
+            }
+            let counts: Vec<u64> = p.levels.iter().map(|l| l.frames.load(Ordering::Relaxed)).collect();
+            stalled = stall_watch.stalled(&counts, Instant::now());
+        } else {
+            stall_watch.reset();
+        }
+        if stalled {
+            let _ = tx.send(Event::Error("PGM-Ausgabe steht — Pipeline wird neu gebaut".into()));
+            handovers.clear();
+            zombies.clear();
+            handover_pending.store(0, Ordering::Release);
+            rebuild_for_keyer!();
+            // Alle Eingänge erneut prüfen: der Wiederholungstakt lädt fehlende nach und überspringt vorhandene.
+            missing_inputs = current_inputs.iter().map(|i| i.sender_id.clone()).collect();
         }
         if let Some(p) = active.as_mut() {
             let any_fading = fading.iter().any(|f| f.load(Ordering::Acquire));
@@ -4434,5 +4522,35 @@ mod fg_operator_tests {
         assert_eq!(operator_nick(&pad), "over");
         pad.set_property("alpha", 1.0f64);
         assert_eq!(operator_nick(&pad), "source", "wieder deckend → kopieren");
+    }
+}
+
+#[cfg(test)]
+mod stall_watch_tests {
+    use super::*;
+
+    #[test]
+    fn detects_stall_backs_off_and_recovers() {
+        let t = Instant::now();
+        let at = |s: u64| t + Duration::from_secs(s);
+        let mut w = StallWatch::default();
+        assert!(!w.stalled(&[0], at(0)));
+        assert!(!w.stalled(&[0], at(7)));
+        assert!(w.stalled(&[0], at(8)), "nie ein Bild: nach der Grundwartezeit neu bauen");
+        assert!(!w.stalled(&[0], at(9)));
+        assert!(!w.stalled(&[0], at(24)), "zweiter Versuch wartet doppelt so lange");
+        assert!(w.stalled(&[0], at(25)));
+        assert!(!w.stalled(&[300], at(26)));
+        assert!(!w.stalled(&[600], at(60)));
+        assert_eq!(w.retries, 0);
+        assert!(w.stalled(&[600], at(68)), "Stillstand im laufenden Betrieb");
+    }
+
+    #[test]
+    fn one_stalled_level_is_enough() {
+        let t = Instant::now();
+        let mut w = StallWatch::default();
+        assert!(!w.stalled(&[1, 1], t));
+        assert!(w.stalled(&[500, 1], t + STALL_LIMIT));
     }
 }

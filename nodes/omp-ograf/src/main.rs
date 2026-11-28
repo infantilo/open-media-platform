@@ -644,7 +644,11 @@ impl OgrafStore {
 struct HarnessOnlyStore {
     templates_root: PathBuf,
     zones: zones::ZoneStore,
+    script_ready: Arc<AtomicBool>,
 }
+
+/// Meldung der Harness-Seite, dass ihr Skript geladen ist.
+const READY_PATH: &str = "/ograf-ready";
 
 impl ParamStore for HarnessOnlyStore {
     fn descriptor(&self) -> Descriptor {
@@ -668,6 +672,10 @@ impl ParamStore for HarnessOnlyStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if method == "POST" && path == READY_PATH {
+            self.script_ready.store(true, Ordering::Relaxed);
+            return Some(RawResponse { status: 204, content_type: "text/plain", body: Vec::new() });
+        }
         zones::route(&self.zones, method, path, body).or_else(|| templates::route(&self.templates_root, method, path))
     }
 
@@ -675,7 +683,7 @@ impl ParamStore for HarnessOnlyStore {
     /// Grafik erscheint als winziger Fehlertext statt als Vorlage. Der Server lauscht nur auf 127.0.0.1 und liefert nur
     /// die statische Harness-Seite und die Vorlagendateien.
     fn public_route(&self, method: &str, path: &str) -> bool {
-        method == "GET" || (method == "POST" && path == zones::ZONES_PATH)
+        method == "GET" || (method == "POST" && (path == zones::ZONES_PATH || path == READY_PATH))
     }
 }
 
@@ -692,8 +700,12 @@ impl ParamStore for HarnessOnlyStore {
 /// sofort verbindungsfähig, auch bevor die Accept-Loop im eigenen Thread
 /// tatsächlich läuft — Verbindungen warten im Kernel-Backlog) und liefert
 /// den zugewiesenen Port zurück.
-fn spawn_harness_server(templates_root: PathBuf, zones: zones::ZoneStore) -> std::io::Result<u16> {
-    let store: Arc<dyn ParamStore> = Arc::new(HarnessOnlyStore { templates_root, zones });
+fn spawn_harness_server(
+    templates_root: PathBuf,
+    zones: zones::ZoneStore,
+    script_ready: Arc<AtomicBool>,
+) -> std::io::Result<u16> {
+    let store: Arc<dyn ParamStore> = Arc::new(HarnessOnlyStore { templates_root, zones, script_ready });
     let (port, _join_handle) = omp_node_sdk::server::spawn("127.0.0.1:0", store)?;
     Ok(port)
 }
@@ -738,7 +750,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // (gleiche Begründung wie `omp-audio-mixer::levels`), aber `wpesrc`
     // braucht die Seite schon vor dessen Start.
     let zone_store = zones::ZoneStore::default();
-    let harness_port = spawn_harness_server(templates_root.clone(), zone_store.clone())?;
+    let script_ready = Arc::new(AtomicBool::new(false));
+    let harness_port = spawn_harness_server(templates_root.clone(), zone_store.clone(), script_ready.clone())?;
     let harness_url = format!("http://127.0.0.1:{harness_port}/ograf-harness.html");
 
     let pipeline_config = pipeline::Config {
@@ -747,6 +760,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         key_flow_id: key_flow_id.clone(),
         label: label.clone(),
         harness_url,
+        script_ready,
         width: pipeline::width(),
         height: pipeline::height(),
     };
@@ -946,9 +960,15 @@ mod harness_tests {
     /// erschien nur als Fehlertext.
     #[test]
     fn harness_server_is_reachable_without_node_token() {
-        let store = HarnessOnlyStore { templates_root: PathBuf::from("."), zones: zones::ZoneStore::default() };
+        let ready = Arc::new(AtomicBool::new(false));
+        let store = HarnessOnlyStore { templates_root: PathBuf::from("."), zones: zones::ZoneStore::default(), script_ready: ready.clone() };
         assert!(store.public_route("GET", "/ograf-harness.html"));
         assert!(store.public_route("GET", "/ograf-templates/x/y.js"));
         assert!(!store.public_route("POST", "/ograf-harness.html"));
+        // die Bereit-Meldung der Seite kommt ebenfalls ohne Token an und setzt das Flag
+        assert!(store.public_route("POST", READY_PATH));
+        assert!(!ready.load(Ordering::Relaxed));
+        assert_eq!(store.extra_route("POST", READY_PATH, b"").map(|r| r.status), Some(204));
+        assert!(ready.load(Ordering::Relaxed));
     }
 }

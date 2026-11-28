@@ -9,6 +9,7 @@ export interface SortableInstance {
   pid: number;
   hostId?: string;
   crashed?: boolean;
+  stopPending?: boolean;
   outdated?: boolean;
   restartCount?: number;
   cpuPercent?: number;
@@ -21,7 +22,7 @@ export function defaultDir(key: InstanceSortKey): SortDir {
 }
 
 function statusRank(i: SortableInstance): number {
-  return i.crashed ? 0 : i.outdated ? 1 : 2;
+  return i.crashed || i.stopPending ? 0 : i.outdated ? 1 : 2;
 }
 
 /**

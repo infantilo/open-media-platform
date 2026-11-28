@@ -480,8 +480,9 @@ func (m *Module) ExecTransfer(ctx context.Context, req TransferRequest, actor st
 	g.runs[t.ID] = run
 	g.mu.Unlock()
 	m.audit(actor, "file-transfer", t.ID, "file.transfer.start", map[string]any{"mode": t.Mode, "from": plan.src.Name, "to": plan.dst.Name, "paths": req.Paths, "dstDir": req.DstDir, "files": plan.Files, "bytes": plan.TotalBytes, "forced": plan.NeedsForce, "reason": req.Reason})
+	started := *t // vor dem Start kopieren: runTransfer schreibt ab dann in t
 	go m.runTransfer(rctx, run, plan, req)
-	return *t, plan, nil
+	return started, plan, nil
 }
 
 func firstTransferWith(items []TransferItem, status string) string {

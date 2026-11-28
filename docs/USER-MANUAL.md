@@ -236,6 +236,11 @@ In the **Actions** column every row has three buttons:
 
 Both are reserved for administrators.
 
+**"Stop pending"** is shown for instances on a remote host that was unreachable when they were stopped. Whether they are
+still running there is unknown; the stop is carried out as soon as the host reports again. Instead of the three buttons the
+row offers **Remove entry** (after a confirmation) — meant only for hosts that are gone for good: if the instance is still
+running there, it keeps running unmanaged.
+
 After a **system update** (section 7, "System update") an
 instance carries the mark **"outdated"** if its program was
 replaced by the update but the running process still executes the old version.
@@ -1086,8 +1091,9 @@ manages them: view, assign to an asset, upload, delete and restore. It needs the
 - **Recycle bin:** per location the deleted files with remaining time; **Restore** (never overwrites an existing file), **Delete permanently** and **Empty recycle bin** (right `files.admin`).
 - **Settings** (`files.admin`) are in **Administration → Platform → Operation → Files**: retention in the recycle bin (days, 0 = permanently at once), **emergency limit** (free space in GB or percent),
   grace period for freshly deleted items, **lock window** before and after the broadcast, "stays locked as long as scheduled" as well as the check and maintenance intervals; per location the recycle bin days, lock window and
-  emergency limit can be overridden, plus role and write protection. **Add location:** name, host (empty = orchestrator machine), absolute path, role. A host agent can restrict the roots it serves with
-  `OMP_FILE_ROOTS` (colon-separated); if a location lies outside, it reports "unreachable … not released".
+  emergency limit can be overridden, plus role and write protection. **Add location:** name, host (empty = orchestrator machine), absolute path, role. A host agent only serves directories released on it:
+  `OMP_FILE_ROOTS` (colon-separated absolute paths), otherwise `OMP_MEDIA_MOUNTS`. If neither is set, or a location lies outside, it reports "unreachable … not released".
+  Directories holding the agent's state file or catalog are always blocked.
 - **Shared storage (e.g. Isilon):** when creating, tick "Shared storage" and choose the hosts that have it mounted under the **same path** (the orchestrator machine counts as a host). The
   order of the ticks is the order of preference: the first is asked first, if it fails or its mount hangs, the next takes over (the last successful one stays in front). The location appears **once**
   in the explorer, with the host currently serving. "Hosts …" changes the list later. Upload works only if the orchestrator machine is one of the hosts.
@@ -1135,6 +1141,10 @@ The future file format of production is **AVC-Intra Class 100** in **1080/50p** 
 **Look, counters, timeline.** The panel has the dark **console 2 look** of the mixers. The ticked **counters** (next live, fixed, manual event, event without source) stay visible even if there is no matching event — then "… : —" is shown dimmed. With **▤ Timeline** above the playlist you show a **timeline** (window 5–120 min, remembered in the browser): the events as blocks from the broadcast position (red line = now; green = on air, yellow = cued, magenta = live), below them their **child events** as violet bars (green = active, red = failed). A click selects the event or opens the child in the editor. Child events with absolute time are not on the axis.
 
 These functions belong to the node **Playout automation** (panel section **Foreign list / follow**, setting **Broadcast release** under *Targets*).
+
+**Several channels in one workflow.** Each playout automation controls the players and the video mixer whose role name starts with its own, e.g. `channel-a` → `channel-a-player-1`, `channel-a-player-2`, `channel-a-mixer`.
+
+**Loading, appending and saving playlists.** Above the playlist: **Save** downloads the complete list as `<channel>-<date>-<time>.omp-playlist.json` into the browser's download folder (with all properties: start types, transitions, child events, audio, asset references, jump targets). **Load …** replaces the current playlist with such a file (confirmation if the list is not empty; the players are not touched, a running event is recorded as interrupted in the as-run log). **Append …** adds the events of a file to the end. A faulty file is rejected as a whole. Examples: `docs/examples/playlists/`.
 
 **Importing foreign lists.** *Import list …* opens a broadcast list from another automation system (adapter `mpl3`, XML broadcast list). Before adopting it, a **preview** shows how many broadcast events arise, how many have already run (are omitted), what is only *approximated* (e.g. crossfade "Fade Cut" becomes "Mix") and what is *not adopted* (e.g. logo/graphic children without assignment). Then: **Append** or **Replace playlist**. Mappings are in the plugin configuration `foreign-mpl3` (`mediaTemplate`, `liveMap`, `childMap`, `skipDone`, `requireRelease`). The list is only read — the foreign format is not an internal format.
 
@@ -3093,7 +3103,7 @@ The tab **MCR** is the workstation of the master control room. It has five pages
 
 **Source of a line.** When adding a line you choose "Start new" (OMP starts the matching input) or "Existing node": the running nodes with senders then appear, such as dedicated SRT or ST 2110 nodes. Video and audio flow you choose individually or let them be determined automatically. The normalizer is connected to the chosen node when the event starts.
 
-**Monitoring (multiview wall).** The first page of the tab shows all running events, tests and the next planned events (next 24 hours). Events with errors or warnings automatically appear first and larger, with a multiviewer picture; quiet events stay small and cost hardly any computing power. With the button "▣" the picture of an event can be shown permanently (at most three pictures at the same time, every picture keeps a multiviewer running). A click on a line opens a menu: **Listen** puts the audio of the line on the listening station, **On scope** shows waveform and vectorscope of the line. The listen and measurement station starts at first use and ends after 15 minutes without use.
+**Monitoring (multiview wall).** The first page of the tab shows all running events, tests and the next planned events (next 24 hours). Events with errors or warnings automatically appear first and larger, with a multiviewer picture; quiet events stay small and cost hardly any computing power. With the button "▣" the picture of an event can be shown permanently (at most three pictures at the same time, every picture keeps a multiviewer running). If no picture is visible (another tab, hidden browser tab, small tile), the multiviewer ends after about 45 seconds and frees the computing power; checks and alarms keep running. When shown again it restarts and the picture appears after a few seconds. A click on a line opens a menu: **Listen** puts the audio of the line on the listening station, **On scope** shows waveform and vectorscope of the line. The listen and measurement station starts at first use and ends after 15 minutes without use.
 
 **Rights and roles per event.** Who sees an event and what the person may do on it depends on two things. Globally: "See all events" (`mcr.view`, read only), "Operate event" (`mcr.live`, test all events, go on air, compensation) and "Manage events and lines" (`mcr.manage`, everything, also entering members); each right includes the one before it. Per event: **members** with a role — **Lead** (everything on the event except the members; the responsible persons count as lead), **Engineer** (Planned ↔ Test, measure, A/V compensation, acknowledge alarms, alarm PiP, listen and scope), **Viewer** (view only) and **Commentator** (only the own station in the intercom, no access in the administration). Whoever may not see an event does not get it displayed at all; whoever sees it but may not do an action gets an error message. Administrators enter members in the event dialog. Lead and Engineer may additionally operate the nodes of the event workflow, Viewer may look at them; this release ends with the event. The access rules for sources are not changed in the process.
 
