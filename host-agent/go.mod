@@ -2,7 +2,7 @@ module github.com/infantilo/openmediaplatform/host-agent
 
 go 1.26.11
 
-require github.com/nats-io/nats.go v1.55.0
+require github.com/nats-io/nats.go v1.56.0
 
 require (
 	github.com/infantilo/openmediaplatform/jobwire v0.0.0
