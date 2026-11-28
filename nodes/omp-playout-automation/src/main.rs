@@ -6126,15 +6126,7 @@ async fn trigger_loop(store: Arc<AutomationStore>, nats_url: String) {
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         }
-        let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect().max_reconnects(None).name("omp-playout-trigger");
-        if let Some(ca) = &tls.ca_file {
-            opts = opts.add_root_certificates(ca.into());
-        }
-        if let (Some(cert), Some(key)) = (&tls.cert_file, &tls.key_file) {
-            opts = opts.add_client_certificate(cert.into(), key.into()).require_tls(true);
-        }
-        let addrs: Vec<String> = nats_url.split(',').map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()).collect();
-        let client = match opts.connect(addrs).await {
+        let client = match omp_node_sdk::health::connect_client(&nats_url, &tls, "omp-playout-trigger").await {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("omp-playout-automation: NATS-Verbindung für Channel-Trigger fehlgeschlagen: {e}");

@@ -563,6 +563,13 @@ rollback copies and history, default `.updates/`),
 
 **Signed host commands.** The orchestrator signs every command to a host agent (HMAC, key per host). New hosts receive the key at registration; the agent rejects unsigned, expired or repeated commands. A host **without** a key (registered before signing was introduced) executes **no** commands. Remedy: register the host again (remove `state.json`, new bootstrap token) or start the agent once with `OMP_HOST_AGENT_ALLOW_NATS_PROVISION=1` — the orchestrator then sends the key over NATS; the first sender wins, so only do this in a trusted network and remove the variable afterwards. `OMP_HOST_AGENT_REQUIRE_KEY=false` allows unsigned commands (development only). If an agent has a wrong key (commands fail with "unauthorized"), register the host again (or remove `cmdKey` from its `state.json` and allow provisioning once as above). To rotate a host's key: `POST /api/v1/admin/hosts/<id>/rotate-key` (the host must be online and connected to NATS with TLS, `OMP_NATS_TLS_ENABLED=true`; otherwise the agent refuses because the new key could be read on the wire). The token secret for logins lives in the database (`app_secrets`) and is adopted at first start from `OMP_AUTH_JWT_SECRET_FILE` — all orchestrator instances of a cluster use the same one. `OMP_METRICS_TOKEN` protects `/metrics` with a bearer token.
 
+**NATS with authentication and TLS (production).** The template `deploy/quadlets/omp-nats.container` starts only
+with TLS (client and cluster port), authentication and no placeholder passwords; setup in
+`deploy/quadlets/README.md`. Credentials are part of the address (`OMP_NATS_URL=tls://user:password@host:4222`),
+`OMP_NODE_NATS_URL` gives started nodes the restricted user `node` (orchestrator and host agent; without it the
+nodes inherit the starter's credentials). Logs and UI show the address without credentials. The dev setup
+(`make up`) stays unauthenticated.
+
 **Container images and their digests.** All images are listed with tag **and** digest in `deploy/images.env`
 (`repo:tag@sha256:…`) — a moving tag therefore cannot silently deliver a different image. To refresh:
 `./deploy/dev/update-image-pins.sh` (resolves the tags anew and enters the digests into `images.env`, quadlets,

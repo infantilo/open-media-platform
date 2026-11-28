@@ -1,0 +1,56 @@
+# NATS-Produktionskonfiguration (ein Knoten eines Drei-Knoten-Clusters). Kopieren nach /etc/omp/nats/omp-nats.conf.
+# Alle $VARIABLEN kommen aus /etc/omp/nats.env (Vorlage nats.env.example); Geheimnisse stehen nicht in dieser Datei.
+# Geprüft mit dem gepinnten Server nats:2.15.1 (Anmeldung, Rechte, TLS, Cluster-Routen).
+
+server_name: $NATS_SERVER_NAME
+listen: "0.0.0.0:4222"
+# Adresse, unter der Clients diesen Knoten erreichen (sonst gibt der Server seine Container-IP an die Clients weiter).
+client_advertise: $NATS_CLIENT_ADVERTISE
+# Monitoring (ohne Anmeldung): die Unit veröffentlicht den Port nur auf 127.0.0.1.
+http: "0.0.0.0:8222"
+
+jetstream { store_dir: "/data" }
+
+# Client-Verbindungen nur mit TLS und Client-Zertifikat (OMP-Seite: OMP_NATS_TLS_ENABLED=true).
+tls {
+  cert_file: "/etc/nats/certs/server.crt"
+  key_file: "/etc/nats/certs/server.key"
+  ca_file: "/etc/nats/certs/root_ca.crt"
+  verify: true
+}
+
+authorization {
+  users: [
+    # Orchestrator: voller Zugriff.
+    { user: "orchestrator", password: $NATS_ORCHESTRATOR_PASSWORD }
+
+    # Host-Agent: empfängt Host-Kommandos, meldet Telemetrie, Ereignisse und Job-Fortschritt.
+    { user: "hostagent", password: $NATS_HOSTAGENT_PASSWORD, permissions: {
+        publish: { allow: ["omp.host.*.metrics", "omp.host.*.events", "omp-job.>", "_INBOX.>"] }
+        subscribe: { allow: ["omp.host.*.cmd", "_INBOX.>"] }
+        allow_responses: true
+    } }
+
+    # Nodes: weder Host-Kommandos lesen noch senden, keine JetStream-Verwaltung.
+    { user: "node", password: $NATS_NODE_PASSWORD, permissions: {
+        publish: { allow: ["omp.health.*", "omp.alert.*", "omp.tally.>", "omp.player.>", "omp.gpio.>", "omp.midi.>", "omp.ptz.>", "vfa.vision.>"] }
+        subscribe: { allow: ["omp.tally.>", "omp.channel.*.trigger", "vfa.vision.>", "_INBOX.>"] }
+    } }
+  ]
+}
+
+cluster {
+  name: OMP
+  listen: "0.0.0.0:6222"
+  advertise: $NATS_CLUSTER_ADVERTISE
+  # Fremde Server dürfen nicht beitreten: Anmeldung UND gegenseitiges TLS.
+  authorization { user: "route", password: $NATS_ROUTE_PASSWORD }
+  tls {
+    cert_file: "/etc/nats/certs/server.crt"
+    key_file: "/etc/nats/certs/server.key"
+    ca_file: "/etc/nats/certs/root_ca.crt"
+    verify: true
+  }
+  # Die ANDEREN beiden Knoten, je als vollständige Adresse inklusive Route-Passwort.
+  routes: [ $NATS_ROUTE_B, $NATS_ROUTE_C ]
+}

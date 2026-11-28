@@ -641,7 +641,7 @@ func main() {
 	if nc != nil {
 		launcherNATS = natsRequester{nc: nc}
 	}
-	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, launcher.NewStore(database), hub, launcherNATS, launcher.NewCatalogStore(database))
+	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NodeNatsURL, launcher.NewStore(database), hub, launcherNATS, launcher.NewCatalogStore(database))
 	nodeSettingsStore := launcher.NewNodeSettingsStore(database)
 	// ARCHITECTURE.md §24.1, UMSETZUNG.md C16: OMP_ORCHESTRATOR_URL für
 	// jede lokal gestartete Instanz — Control-Plane-Nodes nutzen sie,
@@ -1808,7 +1808,7 @@ func main() {
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,
 		"registry_url", cfg.RegistryURL,
-		"nats_url", cfg.NatsURL,
+		"nats_url", config.RedactURLs(cfg.NatsURL),
 		"ui_dir", cfg.UIDir,
 	)
 

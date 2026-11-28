@@ -247,6 +247,32 @@ fn parse_server_addrs(url: &str) -> Vec<String> {
         .collect()
 }
 
+/// Zugangsdaten aus der ersten Adresse mit `benutzer:passwort@` in `OMP_NATS_URL`. `nats.go` (Orchestrator,
+/// Host-Agent, Go-Nodes) wertet sie selbst aus, `async-nats` nicht (es sendet nur, was in den Verbindungsoptionen
+/// steht). Keine Prozent-Dekodierung: Passwörter aus URL-sicheren Zeichen wählen (z. B. hexadezimal).
+fn url_credentials(url: &str) -> Option<(String, String)> {
+    parse_server_addrs(url).iter().find_map(|addr| {
+        let rest = addr.split_once("://").map_or(addr.as_str(), |(_, r)| r);
+        let authority = rest.split('/').next().unwrap_or(rest);
+        let (userinfo, _) = authority.rsplit_once('@')?;
+        let (user, password) = userinfo.split_once(':')?;
+        Some((user.to_string(), password.to_string()))
+    })
+}
+
+/// Baut aus `url` (ggf. Komma-Liste) und `tls` eine Verbindung: Zugangsdaten aus der URL, TLS aus der
+/// Umgebung, unbegrenzte Wiederverbindung. Gemeinsam für alle NATS-Verbindungen eines Rust-Nodes.
+pub async fn connect_client(url: &str, tls: &NatsTlsConfig, name: &str) -> Result<async_nats::Client, async_nats::ConnectError> {
+    let mut opts = async_nats::ConnectOptions::new()
+        .retry_on_initial_connect()
+        .max_reconnects(None)
+        .name(name);
+    if let Some((user, password)) = url_credentials(url) {
+        opts = opts.user_and_password(user, password);
+    }
+    apply_tls(opts, tls).connect(parse_server_addrs(url)).await
+}
+
 /// Optionale mTLS-Konfiguration für die NATS-Verbindung
 /// (`ARCHITECTURE.md` §20.4 Restlücke "mTLS für die zehn echten
 /// Rust-Node-Typen") — `None`-Felder lassen `apply_tls` unten die
@@ -317,14 +343,7 @@ impl Publisher {
     /// dann selbst einen erreichbaren Server und failt automatisch auf
     /// einen anderen um, falls der verbundene Server ausfällt.
     pub async fn connect(url: &str, tls: &NatsTlsConfig) -> Result<Self, async_nats::ConnectError> {
-        let opts = apply_tls(
-            async_nats::ConnectOptions::new()
-                .retry_on_initial_connect()
-                .max_reconnects(None)
-                .name("omp-node-sdk"),
-            tls,
-        );
-        let client = opts.connect(parse_server_addrs(url)).await?;
+        let client = connect_client(url, tls, "omp-node-sdk").await?;
         Ok(Publisher { client })
     }
 
@@ -414,15 +433,7 @@ pub async fn subscribe_tally(
     url: &str,
     tls: &NatsTlsConfig,
 ) -> Result<TallySubscription, SubscribeError> {
-    let opts = apply_tls(
-        async_nats::ConnectOptions::new()
-            .retry_on_initial_connect()
-            .max_reconnects(None)
-            .name("omp-node-sdk-tally-sub"),
-        tls,
-    );
-    let client = opts
-        .connect(parse_server_addrs(url))
+    let client = connect_client(url, tls, "omp-node-sdk-tally-sub")
         .await
         .map_err(SubscribeError::Connect)?;
     let subscriber = client
@@ -496,6 +507,15 @@ impl TallySubscription {
 #[cfg(test)]
 mod parse_server_addrs_tests {
     use super::*;
+
+    #[test]
+    fn credentials_come_from_the_first_address_that_has_them() {
+        assert_eq!(url_credentials("nats://localhost:4222"), None);
+        assert_eq!(url_credentials("tls://node:geheim@a:4222"), Some(("node".into(), "geheim".into())));
+        assert_eq!(url_credentials("nats://a:4222, nats://node:p1@b:4222/"), Some(("node".into(), "p1".into())));
+        assert_eq!(url_credentials("node:p2@a:4222"), Some(("node".into(), "p2".into())));
+        assert_eq!(url_credentials("nats://token@a:4222"), None);
+    }
 
     #[test]
     fn single_address_unchanged() {

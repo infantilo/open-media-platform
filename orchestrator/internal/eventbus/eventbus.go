@@ -56,7 +56,7 @@ func Connect(url string, hub *sse.Hub, onHealth func(nodeID string), onHostMetri
 			slog.Warn("nats disconnected", "error", err)
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
-			slog.Info("nats reconnected", "url", nc.ConnectedUrl())
+			slog.Info("nats reconnected", "url", nc.ConnectedUrlRedacted())
 		}),
 	}
 	if tlsConfig != nil {

@@ -51,6 +51,9 @@ type Config struct {
 	// Code-Unterschied zum Ein-Knoten-Fall nötig, nur der Wert ändert
 	// sich. Ein einzelner Eintrag (kein Komma) funktioniert unverändert.
 	NatsURL string
+	// NodeNatsURL ist die Adresse, die gestartete Nodes als OMP_NATS_URL bekommen (OMP_NODE_NATS_URL, Standard:
+	// NatsURL). Bei NATS mit Anmeldung stehen hier die Zugangsdaten des eingeschränkten Node-Benutzers.
+	NodeNatsURL string
 	// UIDir ist das Verzeichnis, aus dem die UI-Shell statisch ausgeliefert wird.
 	UIDir string
 	// CatalogPath zeigt auf die Katalog-Datei des Instanz-Launchers
@@ -310,6 +313,7 @@ func Load() Config {
 		OrchestratorURL:    getEnv("OMP_ORCHESTRATOR_URL", "http://localhost:8000"),
 		RegistryURL:        getEnv("OMP_REGISTRY_URL", "http://127.0.0.1:8010"),
 		NatsURL:            getEnv("OMP_NATS_URL", defaultNatsURL),
+		NodeNatsURL:        getEnv("OMP_NODE_NATS_URL", getEnv("OMP_NATS_URL", defaultNatsURL)),
 		UIDir:              getEnv("OMP_UI_DIR", "../ui"),
 		CatalogPath:        getEnv("OMP_CATALOG_PATH", "../deploy/catalog.json"),
 		PostgresURL:        getEnv("OMP_POSTGRES_URL", defaultPostgresURL),
@@ -487,4 +491,19 @@ func splitList(v string) []string {
 		}
 	}
 	return out
+}
+
+// RedactURLs ersetzt Zugangsdaten in einer (ggf. kommagetrennten) Adressliste für Logs und Oberfläche.
+func RedactURLs(list string) string {
+	parts := strings.Split(list, ",")
+	for i, p := range parts {
+		scheme, rest := "", p
+		if j := strings.Index(p, "://"); j >= 0 {
+			scheme, rest = p[:j+3], p[j+3:]
+		}
+		if at := strings.LastIndex(rest, "@"); at >= 0 {
+			parts[i] = scheme + "***@" + rest[at+1:]
+		}
+	}
+	return strings.Join(parts, ",")
 }

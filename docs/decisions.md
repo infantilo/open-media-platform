@@ -30928,3 +30928,16 @@ ersatzweise `OMP_MEDIA_MOUNTS`; ohne beides keine Dateioperation. Zustandsdatei 
 immer gesperrt. `start-hosts.sh` gibt die Medienverzeichnisse der Entwicklungsumgebung frei.
 **Folge beim Update:** Auf Remote-Hosts ohne diese Variablen sind Orte danach „nicht erreichbar“, bis eine gesetzt ist.
 Gilt nicht für Orte auf dem Orchestrator-Rechner (dort führt der Orchestrator die Operationen selbst aus).
+
+## 2026-11-28 — NATS in Produktion nur mit Anmeldung und TLS (Review-Paket P3)
+
+Die Produktionsvorlage (`deploy/quadlets/omp-nats.*`) verlangt TLS mit Client-Zertifikat, drei Benutzer mit
+getrennten Rechten (`orchestrator`, `hostagent`, `node`), Anmeldung und gegenseitiges TLS auf den Cluster-Routen
+und veröffentlicht das Monitoring nur lokal. Zugangsdaten stehen in `OMP_NATS_URL`; `async-nats` wertet sie nicht
+selbst aus, deshalb übernimmt das der Node-SDK (`health::connect_client`). Neu `OMP_NODE_NATS_URL`.
+Verworfen: nkeys/JWT (zusätzliche Schlüsselverwaltung in jedem Client). Nebenbei behoben: ohne `client_advertise`
+gab der Server Clients seine Container-Adresse weiter; der JetStream-Speicher lag ohne Volume im Container.
+**Geprüft** am Server nats:2.15.1 mit eigenem Drei-Knoten-Cluster: Ablehnung ohne/mit falscher Anmeldung, ohne
+Client-Zertifikat, im Klartext; Rechte je Benutzer; Stream mit 3 Kopien; fremder Server mit Zertifikat, aber
+falschem Route-Passwort abgewiesen; Rust-Client mit Zugangsdaten aus der URL. **Nicht geprüft:** das Quadlet
+unter systemd und ein kompletter Plattformbetrieb gegen diese Konfiguration.

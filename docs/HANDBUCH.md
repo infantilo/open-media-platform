@@ -569,6 +569,13 @@ Rollback-Kopien und Verlauf, Standard `.updates/`),
 
 **Signierte Host-Kommandos.** Der Orchestrator signiert jedes Kommando an einen Host-Agent (HMAC, Schlüssel je Host). Neue Hosts bekommen den Schlüssel bei der Registrierung; der Agent lehnt unsignierte, abgelaufene oder wiederholte Kommandos ab. Ein Host **ohne** Schlüssel (registriert vor Einführung der Signatur) führt **keine** Kommandos aus. Abhilfe: den Host neu registrieren (`state.json` entfernen, neues Bootstrap-Token) oder den Agent einmalig mit `OMP_HOST_AGENT_ALLOW_NATS_PROVISION=1` starten — dann schickt der Orchestrator den Schlüssel über NATS; dabei gewinnt, wer zuerst sendet, also nur im vertrauenswürdigen Netz und die Variable danach wieder entfernen. `OMP_HOST_AGENT_REQUIRE_KEY=false` lässt unsignierte Kommandos zu (nur Entwicklung). Hat ein Agent einen falschen Schlüssel (Kommandos scheitern mit „unauthorized“), den Host neu registrieren (oder `cmdKey` aus seiner `state.json` entfernen und wie oben einmalig freigeben). Den Schlüssel eines Hosts wechseln: `POST /api/v1/admin/hosts/<id>/rotate-key` (Host muss online sein und über NATS mit TLS verbunden sein, `OMP_NATS_TLS_ENABLED=true`; sonst lehnt der Agent ab, weil der neue Schlüssel mitlesbar wäre). Das Token-Secret für Anmeldungen liegt in der Datenbank (`app_secrets`) und wird beim ersten Start aus `OMP_AUTH_JWT_SECRET_FILE` übernommen — alle Orchestrator-Instanzen eines Clusters nutzen dasselbe. `OMP_METRICS_TOKEN` schützt `/metrics` mit einem Bearer-Token.
 
+**NATS mit Anmeldung und TLS (Produktion).** Die Vorlage `deploy/quadlets/omp-nats.container` startet nur mit
+TLS (Client- und Cluster-Port), Anmeldung und ohne Platzhalter-Passwörter; Einrichtung in
+`deploy/quadlets/README.md`. Zugangsdaten stehen in der Adresse (`OMP_NATS_URL=tls://benutzer:passwort@host:4222`),
+`OMP_NODE_NATS_URL` gibt gestarteten Nodes den eingeschränkten Benutzer `node` (Orchestrator und Host-Agent;
+ohne die Variable erben die Nodes die Zugangsdaten des Starters). Logs und Oberfläche zeigen die Adresse ohne
+Zugangsdaten. Das Dev-Setup (`make up`) bleibt ohne Anmeldung.
+
 **Container-Images und ihre Digests.** Alle Images stehen mit Tag **und** Digest in `deploy/images.env`
 (`repo:tag@sha256:…`) — ein bewegtes Tag kann so nicht still ein anderes Image liefern. Auffrischen:
 `./deploy/dev/update-image-pins.sh` (löst die Tags neu auf und trägt die Digests in `images.env`, Quadlets,

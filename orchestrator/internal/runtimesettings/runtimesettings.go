@@ -268,7 +268,7 @@ func StartupInfo(c config.Config) []StartupEntry {
 		{Key: "OMP_LISTEN", Label: "Listen-Adresse", Value: c.Listen},
 		{Key: "OMP_ORCHESTRATOR_URL", Label: "Orchestrator-URL", Value: c.OrchestratorURL},
 		{Key: "OMP_REGISTRY_URL", Label: "NMOS-Registry", Value: c.RegistryURL},
-		{Key: "OMP_NATS_URL", Label: "NATS", Value: c.NatsURL},
+		{Key: "OMP_NATS_URL", Label: "NATS", Value: config.RedactURLs(c.NatsURL)},
 		{Key: "OMP_POSTGRES_URL", Label: "Datenbank", Value: set(c.PostgresURL), Secret: true},
 		{Key: "OMP_AUTH_JWT_SECRET", Label: "JWT-Secret", Value: set(c.JWTSecret + c.JWTSecretFile), Secret: true},
 		{Key: "OMP_STORAGE_SECRET_KEY", Label: "Storage-Masterschlüssel", Value: set(c.StorageSecretKey), Secret: true},

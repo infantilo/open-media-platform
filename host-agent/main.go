@@ -293,7 +293,8 @@ func main() {
 	}
 	defer nc.Close()
 
-	executor := commands.NewExecutor(cat, registryURL, natsURL, orchestratorURL, st.HostID, nc)
+	// Nodes bekommen die Node-Zugangsdaten (OMP_NODE_NATS_URL), nicht die des Agents.
+	executor := commands.NewExecutor(cat, registryURL, envOr("OMP_NODE_NATS_URL", natsURL), orchestratorURL, st.HostID, nc)
 	// Zustand (Kommandoschlüssel) und Katalog (bestimmt, was gestartet wird) sind für Dateioperationen tabu.
 	catalogDir := ""
 	if catalogPath != "" {
