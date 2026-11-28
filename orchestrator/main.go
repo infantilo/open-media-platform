@@ -658,9 +658,15 @@ func main() {
 	// Audit 2026-10-23 B1: Node-API-Token (s. internal/nodeauth). Aus dem gemeinsamen JWT-Geheimnis abgeleitet, damit alle Orchestrator-
 	// Instanzen des Clusters dasselbe Token kennen; OMP_NODE_API_TOKEN überschreibt (z. B. um es mit extern gestarteten Nodes zu teilen).
 	// Muss vor RestoreLocal stehen: die dort gestarteten Nodes bekommen es in ihre Umgebung.
+	// Review 2026-11-27 B6: mit OMP_AUTH_SECRET_WRAP_KEY_FILE liegen die Geheimnisse verschlüsselt in der Datenbank.
+	secretBox, err := auth.LoadSecretBox(os.Getenv(auth.WrapKeyEnv))
+	if err != nil {
+		slog.Error("secret wrap key unusable", "error", err)
+		os.Exit(1)
+	}
 	jwtSecret := []byte(cfg.JWTSecret)
 	if cfg.JWTSecret == "" {
-		jwtSecret, err = auth.LoadOrCreateSharedSecret(database, cfg.JWTSecretFile)
+		jwtSecret, err = auth.LoadOrCreateSharedSecret(database, cfg.JWTSecretFile, secretBox)
 		if err != nil {
 			slog.Error("jwt secret setup failed", "error", err)
 			os.Exit(1)
@@ -768,6 +774,17 @@ func main() {
 		auth.MinPasswordLength = v
 	}
 	authSvc := auth.NewService(auth.NewStore(database), jwtSecret)
+	// Signaturschlüssel rotierbar halten — nicht, wenn das Geheimnis fest per OMP_AUTH_JWT_SECRET vorgegeben ist.
+	var rotateSigningKey func(context.Context, bool) error
+	if cfg.JWTSecret == "" {
+		ring, err := auth.NewKeyRing(context.Background(), database, secretBox, jwtSecret)
+		if err != nil {
+			slog.Error("token signing keys unavailable", "error", err)
+			os.Exit(1)
+		}
+		authSvc.UseKeyRing(ring)
+		rotateSigningKey = ring.Rotate
+	}
 	authzStore := authz.NewStore(database)
 	// Active-Directory-/LDAP-Anmeldung (internal/directory): Einstellungen in der Oberfläche (Tabelle directory_config),
 	// Rückfall auf OMP_LDAP_*; Änderungen wirken sofort. Fehlkonfiguration beendet den Start nicht (lokale Konten bleiben).
@@ -1810,7 +1827,7 @@ func main() {
 	timelineSink(timeline.Event{At: time.Now(), Kind: "orchestrator.started", Severity: timeline.SevInfo, Subject: cfg.ClusterNodeID, Data: map[string]any{"version": version.Version}})
 	go timelineRec.Run(ctx, hub, timelineSink)
 	go timelineStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithAccessRules(accessRuleStore, accessEngine), httpapi.WithDirectory(dirMgr, dirMap), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithSourceNamer(mcrMod.SourceName), httpapi.WithMXLDomains(mxlDomainStore), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithHostSoftware(hostSoftwareSvc), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithAlertStatus(alertStatusFn), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, audit.NewAsyncLogger(auditStore, 16384), auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore), httpapi.WithAccessRules(accessRuleStore, accessEngine), httpapi.WithDirectory(dirMgr, dirMap), httpapi.WithSigningKeyRotator(rotateSigningKey), httpapi.WithSourceTags(sourcetags.NewStore(database)), httpapi.WithSourceNamer(mcrMod.SourceName), httpapi.WithMXLDomains(mxlDomainStore), httpapi.WithWorkflowRuns(workflowRunStore), httpapi.WithUpdates(updateSvc, supervisorClient, backupSvc), httpapi.WithUpdateDistributor(updateDist), httpapi.WithCatalogDistributor(catalogDist), httpapi.WithHostSoftware(hostSoftwareSvc), httpapi.WithClusterRollout(clusterRollout, clusterRolloutToken), httpapi.WithNodeVersions(nodeVersionStore), httpapi.WithSettings(nodeOptionStore, systemSettingsStore, startupSkipped), httpapi.WithAlertMail(alertMailStore), httpapi.WithAlertStatus(alertStatusFn), httpapi.WithLocations(locations.NewStore(database)), httpapi.WithMaintenance(maintenanceMgr), httpapi.WithProfile(profileName, profileFindings), httpapi.WithDBHealth(func(ctx context.Context) (housekeeping.Health, error) {
 		h, err := housekeeping.CheckHealth(ctx, database)
 		housekeeping.AddVolume(&h, os.Getenv("OMP_DB_VOLUME_PATH"))
 		return h, err

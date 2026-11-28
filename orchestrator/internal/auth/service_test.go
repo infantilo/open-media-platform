@@ -262,11 +262,11 @@ func TestLoadOrCreateSharedSecretSeedsFromFileAndIsSharedAcrossInstances(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := LoadOrCreateSharedSecret(database, fileA)
+	a, err := LoadOrCreateSharedSecret(database, fileA, nil)
 	if err != nil || string(a) != string(fromFile) {
 		t.Fatalf("erste Instanz übernimmt ihre Datei (bestehende Tokens bleiben gültig): %v", err)
 	}
-	b, err := LoadOrCreateSharedSecret(database, fileB)
+	b, err := LoadOrCreateSharedSecret(database, fileB, nil)
 	if err != nil || string(b) != string(a) {
 		t.Fatalf("zweite Instanz bekommt dasselbe Secret aus der Datenbank: %v", err)
 	}

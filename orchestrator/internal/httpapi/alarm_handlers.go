@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alertsink"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/freeze"
@@ -59,6 +60,7 @@ type handlerOptions struct {
 	locations           LocationStore
 	maintenance         MaintenanceService
 	hostKeyRotator      func(hostID string) error
+	signingKeyRotator   func(ctx context.Context, dropPrevious bool) error
 	mediaKPI            MediaKPIReader
 	hostSysinfo         HostSysinfoFunc
 	timeline            *timeline.Sources

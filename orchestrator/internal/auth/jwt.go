@@ -90,6 +90,7 @@ const jwtHeader = `{"alg":"HS256","typ":"JWT"}`
 // crypto/hmac, kein KDF-Design. Siehe docs/decisions.md D3 Teil 2.
 type Signer struct {
 	secret []byte
+	ring   *KeyRing // nil = fester Schlüssel secret
 }
 
 // NewSigner erstellt einen Signer mit dem gegebenen HMAC-Secret.
@@ -98,9 +99,36 @@ func NewSigner(secret []byte) *Signer {
 }
 
 func (s *Signer) sign(unsigned string) string {
-	mac := hmac.New(sha256.New, s.secret)
+	if s.ring != nil {
+		return signWith(s.ring.keys(false)[0], unsigned)
+	}
+	return signWith(s.secret, unsigned)
+}
+
+func signWith(key []byte, unsigned string) string {
+	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(unsigned))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// signedByUs prüft die Signatur gegen alle gültigen Schlüssel.
+func (s *Signer) signedByUs(unsigned, signature string) bool {
+	// subtle.ConstantTimeCompare gegen Timing-Angriffe auf den
+	// Signaturvergleich — Standard-Praxis für HMAC-Verifikation.
+	matches := func(key []byte) bool {
+		return subtle.ConstantTimeCompare([]byte(signWith(key, unsigned)), []byte(signature)) == 1
+	}
+	if s.ring == nil {
+		return matches(s.secret)
+	}
+	for _, unknown := range []bool{false, true} {
+		for _, key := range s.ring.keys(unknown) {
+			if matches(key) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // issue erstellt ein signiertes Token für den gegebenen Principal mit
@@ -145,10 +173,7 @@ func (s *Signer) verify(token string, now time.Time) (Principal, error) {
 		return Principal{}, ErrTokenInvalid
 	}
 	unsigned := parts[0] + "." + parts[1]
-	wantSig := s.sign(unsigned)
-	// subtle.ConstantTimeCompare gegen Timing-Angriffe auf den
-	// Signaturvergleich — Standard-Praxis für HMAC-Verifikation.
-	if subtle.ConstantTimeCompare([]byte(wantSig), []byte(parts[2])) != 1 {
+	if !s.signedByUs(unsigned, parts[2]) {
 		return Principal{}, ErrTokenInvalid
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])

@@ -48,6 +48,12 @@
   },
   {
     "method": "POST",
+    "path": "/api/v1/admin/auth/rotate-signing-key",
+    "auth": "verb:Admin",
+    "domain": "core"
+  },
+  {
+    "method": "POST",
     "path": "/api/v1/admin/backup",
     "auth": "verb:Admin",
     "domain": "core"

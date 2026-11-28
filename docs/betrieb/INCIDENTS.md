@@ -84,5 +84,6 @@ Stopping or restarting the `omp-host-agent` service also ends the nodes it start
 | Key | Procedure |
 |---|---|
 | Command key of a host | `POST /api/v1/admin/hosts/<id>/rotate-key`; host online and connected to NATS with TLS |
-| Login secret (JWT) and the node token derived from it | **open** — no procedure without logging out all users is documented |
+| Signing key of the login tokens | `POST /api/v1/admin/auth/rotate-signing-key` (admin). Issued tokens expire normally (up to 24 h), a second rotation ends the oldest ones at once. Suspected theft: body `{"dropPrevious":true}` — **everyone** has to log in again, service tokens of workflows become invalid (restart the workflows) |
+| Root secret (derives node and cluster tokens) | **open** — not changed by the rotation; no procedure without restarting all nodes is documented |
 | Signing key for updates | **open** |

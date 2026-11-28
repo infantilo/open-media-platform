@@ -30981,3 +30981,13 @@ weil das Umschalten alle Instanzen neu starten und neue Node- und Host-Agent-Pro
 PIP, Keyer, Grafik ein/aus). Nodes desselben Hosts teilen sich das Token. Das Dienst-Token (`OMP_SERVICE_TOKEN`)
 ist weiter für alle gleich. Extern gestartete Nodes erhalten wie bisher das Plattform-Token. Nicht live auf
 mehreren Hosts und nicht im Orchestrator-Cluster geprüft.
+
+## 2026-11-28 — Anmelde-Geheimnis verschlüsselt speichern, Signaturschlüssel rotieren (Review-Paket P7)
+
+Befund bestätigt: `auth_jwt_secret` lag im Klartext in `app_secrets` und damit in jedem `pg_dump`. Neu:
+(1) optional `OMP_AUTH_SECRET_WRAP_KEY_FILE` → AES-256-GCM, Zeilenname als Zusatzdaten; (2) eigener Signaturschlüssel
+`auth_signing_key` mit Vorgänger (gilt 24 h = längste Token-Laufzeit), Rotation per Admin-Aufruf; andere Instanzen
+sehen sie beim ersten unbekannten Token bzw. nach 30 s. Das Wurzelgeheimnis bleibt, damit eine Rotation nicht alle
+Nodes aussperrt. Abgewogen: `kid` im Token (unnötig bei zwei Schlüsseln), externer Secret-Store (keine
+Festlegung auf ein Produkt). **Geprüft:** Tests gegen echtes Postgres (Umschreiben, falscher/fehlender Schlüssel,
+zwei Instanzen, Ablauf, Notfall). **Nicht geprüft:** am laufenden Orchestrator.

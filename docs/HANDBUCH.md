@@ -581,6 +581,14 @@ am Orchestrator (auf jedem Cluster-Mitglied) gibt jedem Host ein eigenes; zwisch
 Aufrufe möglich, die sie wirklich brauchen. Vor dem Einschalten Nodes und Host-Agents aktualisieren, danach **alle
 Instanzen neu starten** — bis dahin antworten laufende Nodes dem Orchestrator mit 401. Ausschalten ebenso.
 
+**Anmelde-Geheimnis schützen und wechseln.** Mit `OMP_AUTH_SECRET_WRAP_KEY_FILE` (Datei mit mindestens 32
+Zufallszeichen, z. B. `openssl rand -hex 32 > /etc/omp/wrap.key`, 0600) speichert der Orchestrator die Geheimnisse
+verschlüsselt (AES-256-GCM) in der Datenbank; ein vorhandener Klartextwert wird beim Start umgeschrieben. **Alle**
+Cluster-Mitglieder brauchen dieselbe Datei, ohne sie startet der Orchestrator danach nicht mehr — Datei getrennt
+aufbewahren (sie liegt auch im verschlüsselten Schlüsselbündel der Sicherung, `OMP_BACKUP_PASSPHRASE`). Die lokale
+Datei `OMP_AUTH_JWT_SECRET_FILE` enthält weiter den Startwert im Klartext. Signaturschlüssel wechseln ohne
+Massen-Abmeldung: `docs/betrieb/STOERUNGEN.md` Abschnitt 8 (nicht bei fest gesetztem `OMP_AUTH_JWT_SECRET`).
+
 **Datenbank-Cluster in Produktion.** Die Quadlets für etcd und Patroni verlangen TLS mit Zertifikaten (etcd:
 Client- und Peer-Port; Patroni-REST: schreibend nur mit Zertifikat und Anmeldung) und eigene Passwörter aus
 `/etc/omp/patroni.env`, auch für die Datenbankrolle `omp` (`OMP_DB_PASSWORD`). Einrichtung und Umstellung:

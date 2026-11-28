@@ -575,6 +575,14 @@ orchestrator (on every cluster member) gives each host its own; between nodes on
 possible. Update nodes and host agents before enabling it, then **restart all instances** — until then running nodes
 answer the orchestrator with 401. The same applies when disabling it.
 
+**Protecting and rotating the login secret.** With `OMP_AUTH_SECRET_WRAP_KEY_FILE` (file with at least 32 random
+characters, e.g. `openssl rand -hex 32 > /etc/omp/wrap.key`, 0600) the orchestrator stores the secrets encrypted
+(AES-256-GCM) in the database; an existing plain value is rewritten at start. **All** cluster members need the same
+file, and without it the orchestrator no longer starts afterwards — keep a separate copy (it is also part of the
+encrypted key bundle of the backup, `OMP_BACKUP_PASSPHRASE`). The local file `OMP_AUTH_JWT_SECRET_FILE` still holds
+the initial value in plain text. Rotating the signing key without logging everyone out:
+`docs/betrieb/INCIDENTS.md` section 8 (not when `OMP_AUTH_JWT_SECRET` is set).
+
 **Database cluster in production.** The etcd and Patroni quadlets require TLS with certificates (etcd: client and
 peer port; Patroni REST: writing only with certificate and credentials) and own passwords from
 `/etc/omp/patroni.env`, including the database role `omp` (`OMP_DB_PASSWORD`). Setup and migration:

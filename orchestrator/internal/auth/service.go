@@ -76,6 +76,9 @@ func NewService(store *Store, jwtSecret []byte) *Service {
 	return &Service{store: store, signer: NewSigner(jwtSecret)}
 }
 
+// UseKeyRing signiert und prüft Tokens mit den rotierbaren Schlüsseln aus ring (vor der ersten Anfrage aufrufen).
+func (s *Service) UseKeyRing(ring *KeyRing) { s.signer.ring = ring }
+
 // UserCount liefert die Anzahl angelegter Nutzer (0 = Bootstrap-Modus).
 func (s *Service) UserCount(ctx context.Context) (int, error) {
 	s.cacheMu.Lock()

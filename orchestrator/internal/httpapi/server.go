@@ -706,6 +706,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("GET /api/v1/admin/db-health", g.requireVerbGlobal(authz.VerbAdmin, handleDBHealth(options.dbHealth)))
 	}
 	mux.HandleFunc("GET /api/v1/admin/profile", g.requireVerbGlobal(authz.VerbAdmin, handleProfile(options.profileName, options.profileFindings)))
+	mux.HandleFunc("POST /api/v1/admin/auth/rotate-signing-key", g.requireVerbGlobal(authz.VerbAdmin, handleRotateSigningKey(options.signingKeyRotator, options.domainAudit)))
 	mux.HandleFunc("POST /api/v1/admin/hosts/{id}/rotate-key", g.requireVerbGlobal(authz.VerbAdmin, handleRotateHostKey(options.hostKeyRotator, options.domainAudit)))
 	mux.HandleFunc("POST /api/v1/admin/hosts/{id}/maintenance", g.requireVerbGlobal(authz.VerbAdmin, handleSetMaintenance(hostRegistry, options.maintenance, true)))
 	mux.HandleFunc("DELETE /api/v1/admin/hosts/{id}/maintenance", g.requireVerbGlobal(authz.VerbAdmin, handleSetMaintenance(hostRegistry, options.maintenance, false)))

@@ -50,7 +50,8 @@ func LoadOrCreateSecret(path string) ([]byte, error) {
 // LoadOrCreateSharedSecret liefert das Token-Secret aus der Datenbank, damit alle Orchestrator-Instanzen eines Clusters
 // dasselbe benutzen (Audit 2026-10-23 H10). Gibt es dort noch keines, wird das der lokalen Datei übernommen (bestehende
 // Tokens bleiben gültig) bzw. neu erzeugt und eingetragen; gleichzeitige Starter einigen sich über ON CONFLICT auf einen Wert.
-func LoadOrCreateSharedSecret(db *sql.DB, filePath string) ([]byte, error) {
+// Mit box wird der Wert verschlüsselt gespeichert; ein noch im Klartext liegender wird dabei umgeschrieben.
+func LoadOrCreateSharedSecret(db *sql.DB, filePath string, box *SecretBox) ([]byte, error) {
 	const name = "auth_jwt_secret"
 	read := func() ([]byte, bool, error) {
 		var v string
@@ -61,9 +62,22 @@ func LoadOrCreateSharedSecret(db *sql.DB, filePath string) ([]byte, error) {
 		if err != nil {
 			return nil, false, err
 		}
-		b, err := hex.DecodeString(v)
+		plain, sealed, err := box.open(name, v)
+		if err != nil {
+			return nil, false, err
+		}
+		b, err := hex.DecodeString(plain)
 		if err != nil || len(b) < 16 {
 			return nil, false, fmt.Errorf("auth: app_secrets.%s is not a valid hex secret", name)
+		}
+		if !sealed && box != nil {
+			enc, err := box.seal(name, plain)
+			if err != nil {
+				return nil, false, err
+			}
+			if _, err := db.Exec(`UPDATE app_secrets SET value = $2 WHERE name = $1 AND value = $3`, name, enc, v); err != nil {
+				return nil, false, fmt.Errorf("auth: encrypt shared secret: %w", err)
+			}
 		}
 		return b, true, nil
 	}
@@ -74,7 +88,11 @@ func LoadOrCreateSharedSecret(db *sql.DB, filePath string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(`INSERT INTO app_secrets (name, value) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING`, name, hex.EncodeToString(seed)); err != nil {
+	stored, err := box.seal(name, hex.EncodeToString(seed))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(`INSERT INTO app_secrets (name, value) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING`, name, stored); err != nil {
 		return nil, fmt.Errorf("auth: store shared secret: %w", err)
 	}
 	b, ok, err := read()

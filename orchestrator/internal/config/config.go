@@ -464,6 +464,9 @@ func backupKeyFiles() []string {
 	pub := getEnv("OMP_UPDATE_PUBKEY_FILE", "../.run/update-trusted.pub")
 	runDir := filepath.Dir(pub) // dasselbe .run wie der Update-Schlüssel, damit der Pfad zur tatsächlichen Konfiguration passt
 	out := []string{jwt, filepath.Join(filepath.Dir(jwt), "service-token"), pub, filepath.Join(runDir, "mtls"), filepath.Join(runDir, "step-ca")}
+	if wrap := os.Getenv("OMP_AUTH_SECRET_WRAP_KEY_FILE"); wrap != "" {
+		out = append(out, wrap) // ohne ihn ist eine Datenbanksicherung nicht wiederherstellbar
+	}
 	if home != "" {
 		out = append(out, filepath.Join(home, ".omp-update"))
 	}

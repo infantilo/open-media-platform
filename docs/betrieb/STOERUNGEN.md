@@ -83,5 +83,6 @@ Beim Stoppen oder Neustarten des Dienstes `omp-host-agent` werden die von ihm ge
 | Schlüssel | Ablauf |
 |---|---|
 | Kommandoschlüssel eines Hosts | `POST /api/v1/admin/hosts/<id>/rotate-key`; Host online und über NATS mit TLS verbunden |
-| Anmelde-Geheimnis (JWT) und daraus abgeleitetes Node-Token | **offen** — kein Ablauf ohne Abmeldung aller Nutzer dokumentiert |
+| Signaturschlüssel der Anmelde-Token | `POST /api/v1/admin/auth/rotate-signing-key` (Admin). Ausgestellte Token laufen normal aus (bis 24 h), eine zweite Rotation beendet die ältesten sofort. Verdacht auf Diebstahl: Body `{"dropPrevious":true}` — **alle** müssen sich neu anmelden, Dienst-Token der Abläufe werden ungültig (Abläufe neu starten) |
+| Wurzelgeheimnis (daraus: Node- und Cluster-Token) | **offen** — wird von der Rotation nicht geändert; kein Ablauf ohne Neustart aller Nodes dokumentiert |
 | Signaturschlüssel für Updates | **offen** |
