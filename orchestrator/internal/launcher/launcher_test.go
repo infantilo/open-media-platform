@@ -988,7 +988,12 @@ func TestLauncherAutoRestartsCrashedInstanceInPlace(t *testing.T) {
 	var list []Instance
 	for time.Now().Before(deadline) {
 		list = l.List()
-		if len(list) == 1 && !list[0].Crashed && list[0].RestartCount > 0 && list[0].PID != inst.PID {
+		// Das Ereignis kommt erst nach der Zustandsänderung — auch darauf warten (sonst schlägt der Test unter Last fehl).
+		restarted := false
+		for _, e := range pub.snapshot() {
+			restarted = restarted || e.Type == "instance.restarted"
+		}
+		if restarted && len(list) == 1 && !list[0].Crashed && list[0].RestartCount > 0 && list[0].PID != inst.PID {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)

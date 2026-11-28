@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -25,8 +26,18 @@ func testBox(t *testing.T, key string) *SecretBox {
 	return box
 }
 
-func TestSharedSecretIsEncryptedAndKeepsItsValue(t *testing.T) {
+// emptySecrets: die Testdatenbank bleibt zwischen Läufen bestehen.
+func emptySecrets(t *testing.T) *sql.DB {
+	t.Helper()
 	database := dbtest.Open(t)
+	clean := func() { _, _ = database.Exec(`DELETE FROM app_secrets`) }
+	clean()
+	t.Cleanup(clean)
+	return database
+}
+
+func TestSharedSecretIsEncryptedAndKeepsItsValue(t *testing.T) {
+	database := emptySecrets(t)
 	file := filepath.Join(t.TempDir(), "jwt")
 	plain, err := LoadOrCreateSharedSecret(database, file, nil)
 	if err != nil {
@@ -60,7 +71,7 @@ func TestSharedSecretIsEncryptedAndKeepsItsValue(t *testing.T) {
 }
 
 func TestKeyRingRotation(t *testing.T) {
-	database := dbtest.Open(t)
+	database := emptySecrets(t)
 	ctx := context.Background()
 	box := testBox(t, strings.Repeat("c", 64))
 	root := []byte("wurzelgeheimnis-0123456789abcdef")
