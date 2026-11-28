@@ -18,4 +18,13 @@ chown -R postgres:postgres /home/postgres
 # D15) — deshalb hier für BEIDE Fälle explizit erzwungen statt sich auf
 # `initdb`/`pg_basebackup` zu verlassen.
 chmod 700 /home/postgres/pgdata
+# TLS-Material (Produktion): schreibgeschützt nach /etc/omp-certs gemountet, die Schlüssel bleiben auf dem Host
+# 0600. Patroni läuft als postgres, deshalb eine Kopie mit passendem Besitzer.
+if [ -d /etc/omp-certs ]; then
+  rm -rf /home/postgres/certs
+  mkdir -m 700 /home/postgres/certs
+  cp /etc/omp-certs/* /home/postgres/certs/
+  chmod 600 /home/postgres/certs/*
+  chown -R postgres:postgres /home/postgres/certs
+fi
 exec su-exec postgres patroni "$@"

@@ -19,31 +19,40 @@ ContainerName=omp-patroni
 # echten Hostnamen ersetzen. PATRONI_NAME muss je Host eindeutig sein
 # (z. B. "omp-patroni-<hostname>").
 #
-# Passwörter hier als Platzhalter — vor dem Deployment durch echte,
-# nicht im Repo abgelegte Secrets ersetzen (Umgebungs-Datei via
-# `EnvironmentFile=` statt einzelner `Environment=`-Zeilen, oder ein
-# Secret-Management passend zur jeweiligen Produktionsumgebung — dieses
-# Projekt legt sich hier bewusst nicht auf ein bestimmtes Tool fest,
-# gleiche Zurückhaltung wie bei anderen Produktions-Secrets in diesem
-# Verzeichnis).
+# Passwörter stehen nur in /etc/omp/patroni.env (0600, Vorlage patroni.env.example); die Zertifikate in
+# /etc/omp/patroni/ (ca.crt, server.crt, server.key — von der CA des etcd-Clusters). REST-API nur per https,
+# schreibende Aufrufe nur mit Client-Zertifikat und Anmeldung. Einrichtung: README.md.
+EnvironmentFile=/etc/omp/patroni.env
+Volume=/etc/omp/patroni:/etc/omp-certs:ro,Z
 Environment=PATRONI_NAME=omp-patroni-this-host
 Environment=PATRONI_SCOPE=omp-postgres
 Environment=PATRONI_ETCD3_HOSTS=ThisHost:2379,EtcdHostB:2379,EtcdHostC:2379
+Environment=PATRONI_ETCD3_PROTOCOL=https
+Environment=PATRONI_ETCD3_CACERT=/home/postgres/certs/ca.crt
+Environment=PATRONI_ETCD3_CERT=/home/postgres/certs/server.crt
+Environment=PATRONI_ETCD3_KEY=/home/postgres/certs/server.key
+Environment=PATRONI_RESTAPI_CERTFILE=/home/postgres/certs/server.crt
+Environment=PATRONI_RESTAPI_KEYFILE=/home/postgres/certs/server.key
+Environment=PATRONI_RESTAPI_CAFILE=/home/postgres/certs/ca.crt
+Environment=PATRONI_RESTAPI_VERIFY_CLIENT=optional
+Environment=PATRONI_CTL_CACERT=/home/postgres/certs/ca.crt
+Environment=PATRONI_CTL_CERTFILE=/home/postgres/certs/server.crt
+Environment=PATRONI_CTL_KEYFILE=/home/postgres/certs/server.key
 Environment=PATRONI_RESTAPI_LISTEN=0.0.0.0:8008
 Environment=PATRONI_RESTAPI_CONNECT_ADDRESS=ThisHost:8008
 Environment=PATRONI_POSTGRESQL_LISTEN=0.0.0.0:5432
 Environment=PATRONI_POSTGRESQL_CONNECT_ADDRESS=ThisHost:5432
 Environment=PATRONI_POSTGRESQL_DATA_DIR=/home/postgres/pgdata
 Environment=PATRONI_SUPERUSER_USERNAME=postgres
-Environment=PATRONI_SUPERUSER_PASSWORD=changeme-see-secrets-management
 Environment=PATRONI_REPLICATION_USERNAME=replicator
-Environment=PATRONI_REPLICATION_PASSWORD=changeme-see-secrets-management
 Volume=omp-patroni-data:/home/postgres/pgdata
 PublishPort=5432:5432
 PublishPort=8008:8008
 # AutoUpdate bewusst aus: lokal gebautes Image (localhost/), nicht aus einer Registry
 
 [Service]
+# Start verweigern bei Platzhaltern oder fehlendem Passwort der Anwendungsrolle.
+ExecStartPre=/bin/sh -c 'f=/etc/omp/patroni.env; test -r $$f && ! grep -v "^#" $$f | grep -q changeme && grep -q "^OMP_DB_PASSWORD=." $$f'
 Restart=always
 TimeoutStartSec=60
 

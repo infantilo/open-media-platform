@@ -576,6 +576,12 @@ TLS (Client- und Cluster-Port), Anmeldung und ohne Platzhalter-Passwörter; Einr
 ohne die Variable erben die Nodes die Zugangsdaten des Starters). Logs und Oberfläche zeigen die Adresse ohne
 Zugangsdaten. Das Dev-Setup (`make up`) bleibt ohne Anmeldung.
 
+**Datenbank-Cluster in Produktion.** Die Quadlets für etcd und Patroni verlangen TLS mit Zertifikaten (etcd:
+Client- und Peer-Port; Patroni-REST: schreibend nur mit Zertifikat und Anmeldung) und eigene Passwörter aus
+`/etc/omp/patroni.env`, auch für die Datenbankrolle `omp` (`OMP_DB_PASSWORD`). Einrichtung und Umstellung:
+`deploy/quadlets/README.md`. Orchestrator und Supervisor brauchen bei `https` die Variable
+`OMP_POSTGRES_PATRONI_CA_FILE`. Das Dev-Setup bleibt unverändert.
+
 **Container-Images und ihre Digests.** Alle Images stehen mit Tag **und** Digest in `deploy/images.env`
 (`repo:tag@sha256:…`) — ein bewegtes Tag kann so nicht still ein anderes Image liefern. Auffrischen:
 `./deploy/dev/update-image-pins.sh` (löst die Tags neu auf und trägt die Digests in `images.env`, Quadlets,

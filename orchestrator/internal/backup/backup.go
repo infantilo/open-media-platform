@@ -27,6 +27,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -75,6 +77,25 @@ type patroniClusterResponse struct {
 	Members []patroniClusterMember `json:"members"`
 }
 
+// patroniClient baut den HTTP-Client für die Patroni-REST-API. caFile (OMP_POSTGRES_PATRONI_CA_FILE) ergänzt die
+// CA für https-Adressen (Produktions-Quadlets, eigene CA des Datenbank-Clusters); leer = Systemvertrauen.
+func patroniClient(caFile string) (*http.Client, error) {
+	client := &http.Client{Timeout: 3 * time.Second}
+	if caFile == "" {
+		return client, nil
+	}
+	pem, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("patroni-ca lesen: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("patroni-ca %s: kein Zertifikat enthalten", caFile)
+	}
+	client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
+	return client, nil
+}
+
 // resolvePrimary fragt die Knoten nacheinander über deren Patroni-
 // REST-API (`GET {RestURL}/cluster`) nach der vollständigen
 // Cluster-Topologie und liefert Container-Name + lokalen Postgres-Port
@@ -83,7 +104,10 @@ type patroniClusterResponse struct {
 // erreichbar sein (Patroni synchronisiert die Topologie über die
 // gemeinsame DCS, jeder Knoten kennt den ganzen Cluster).
 func resolvePrimary(ctx context.Context, nodes []PatroniNode) (container string, port int, err error) {
-	client := &http.Client{Timeout: 3 * time.Second}
+	client, err := patroniClient(os.Getenv("OMP_POSTGRES_PATRONI_CA_FILE"))
+	if err != nil {
+		return "", 0, err
+	}
 	var errs []string
 	for _, n := range nodes {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, n.RestURL+"/cluster", nil)

@@ -32,3 +32,27 @@ sudo install -m 0600 nats.env.example /etc/omp/nats.env   # alle "changeme" erse
 
 **Grenze:** Alle Host-Agents teilen sich den Benutzer `hostagent` (ein Host kann die Kommandos anderer Hosts
 mitlesen, aber nicht senden), alle Nodes den Benutzer `node`.
+
+## Datenbank-Cluster einrichten (etcd + Patroni, je Host)
+
+- **Eigene CA** nur für diesen Cluster (jedes Zertifikat von ihr hat vollen Zugriff auf etcd). CA und Zertifikat
+  brauchen die Erweiterung `keyUsage` (CA: `keyCertSign`, `cRLSign`), sonst lehnt Patroni die CA ab; das
+  Zertifikat braucht als SAN alle Namen des Hosts und die Zwecke Server- **und** Client-Authentifizierung.
+  step-ca erfüllt das; von Hand erzeugte Zertifikate vorher mit `openssl x509 -noout -text` prüfen.
+- `/etc/omp/etcd/` und `/etc/omp/patroni/` je mit `ca.crt`, `server.crt`, `server.key` (0600).
+- `sudo install -m 0600 patroni.env.example /etc/omp/patroni.env` und alle `changeme` ersetzen. Die Unit startet
+  sonst nicht. In `omp-etcd.container`/`omp-patroni.container` weiterhin die Hostnamen ersetzen.
+- Orchestrator: `OMP_POSTGRES_URL` mit dem Passwort aus `OMP_DB_PASSWORD`; für Sicherung/Wiederherstellung
+  `OMP_POSTGRES_PATRONI_NODES=name=https://host:8008,…` und `OMP_POSTGRES_PATRONI_CA_FILE=<ca.crt>`
+  (auch beim Supervisor).
+- Prüfen: `patronictl -c /home/postgres/bootstrap.yml list` im Container; ohne Zertifikat muss
+  `curl --cacert ca.crt -X PATCH https://host:8008/config -d '{}'` mit 403 scheitern. Lesende Aufrufe
+  (`GET /cluster`, `/primary`) bleiben ohne Anmeldung.
+
+**Umstellung einer bestehenden Installation:** etcd speichert die Peer-Adressen; vor dem Wechsel auf `https://`
+sichern, je Mitglied `etcdctl member update <ID> --peer-urls=https://<host>:2380` ausführen (noch über die alten
+Adressen), dann alle drei Units tauschen und neu starten (Wartungsfenster). Die Rolle `omp` einer bestehenden
+Datenbank behält ihr Passwort: `ALTER ROLE omp PASSWORD '…'` und `OMP_POSTGRES_URL` anpassen.
+
+**Grenzen:** Die Postgres-Verbindungen selbst (Port 5432, Replikation) sind weiterhin unverschlüsselt; Port 5432
+nur im internen Netz erreichbar machen.

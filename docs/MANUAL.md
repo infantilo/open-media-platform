@@ -570,6 +570,12 @@ with TLS (client and cluster port), authentication and no placeholder passwords;
 nodes inherit the starter's credentials). Logs and UI show the address without credentials. The dev setup
 (`make up`) stays unauthenticated.
 
+**Database cluster in production.** The etcd and Patroni quadlets require TLS with certificates (etcd: client and
+peer port; Patroni REST: writing only with certificate and credentials) and own passwords from
+`/etc/omp/patroni.env`, including the database role `omp` (`OMP_DB_PASSWORD`). Setup and migration:
+`deploy/quadlets/README.md`. With `https`, orchestrator and supervisor need
+`OMP_POSTGRES_PATRONI_CA_FILE`. The dev setup is unchanged.
+
 **Container images and their digests.** All images are listed with tag **and** digest in `deploy/images.env`
 (`repo:tag@sha256:…`) — a moving tag therefore cannot silently deliver a different image. To refresh:
 `./deploy/dev/update-image-pins.sh` (resolves the tags anew and enters the digests into `images.env`, quadlets,

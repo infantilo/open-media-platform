@@ -7,5 +7,8 @@
 # Patroni ruft dieses Skript mit der Superuser-Verbindungs-URL als $1 auf
 # (PGPASSWORD ist bereits exportiert).
 set -e
-psql "$1" -c "CREATE ROLE omp WITH LOGIN CREATEDB CREATEROLE PASSWORD 'omp'"
+# Passwort der Anwendungsrolle: OMP_DB_PASSWORD (Produktion, die Unit verlangt es), sonst der Dev-Standard "omp".
+# Per psql-Variable eingesetzt, damit Sonderzeichen das SQL nicht verändern.
+printf '%s\n' "CREATE ROLE omp WITH LOGIN CREATEDB CREATEROLE PASSWORD :'pw'" |
+  psql "$1" -v ON_ERROR_STOP=1 -v pw="${OMP_DB_PASSWORD:-omp}"
 psql "$1" -c "CREATE DATABASE omp OWNER omp"

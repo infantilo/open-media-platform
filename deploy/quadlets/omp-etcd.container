@@ -14,12 +14,18 @@ ContainerName=omp-etcd
 # simulierte Ein-Maschine-Dev-Setup in Makefile postgres-up (das drei
 # disjunkte Portsätze braucht, da alle drei Knoten dort denselben Host
 # teilen).
+# Client- und Peer-Port nur mit TLS und gültigem Zertifikat der CA in /etc/omp/etcd/ (ca.crt, server.crt,
+# server.key). Diese CA nur für den Datenbank-Cluster verwenden: jedes Zertifikat von ihr hat vollen Zugriff.
+# Einrichtung: README.md in diesem Verzeichnis.
 Exec=etcd --name omp-etcd --data-dir /etcd-data \
-  --initial-advertise-peer-urls http://ThisHost:2380 --listen-peer-urls http://0.0.0.0:2380 \
-  --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://ThisHost:2379 \
+  --initial-advertise-peer-urls https://ThisHost:2380 --listen-peer-urls https://0.0.0.0:2380 \
+  --listen-client-urls https://0.0.0.0:2379 --advertise-client-urls https://ThisHost:2379 \
+  --client-cert-auth --trusted-ca-file /certs/ca.crt --cert-file /certs/server.crt --key-file /certs/server.key \
+  --peer-client-cert-auth --peer-trusted-ca-file /certs/ca.crt --peer-cert-file /certs/server.crt --peer-key-file /certs/server.key \
   --initial-cluster-token omp-etcd-cluster \
-  --initial-cluster omp-etcd=http://ThisHost:2380,EtcdHostB=http://EtcdHostB:2380,EtcdHostC=http://EtcdHostC:2380 \
+  --initial-cluster omp-etcd=https://ThisHost:2380,EtcdHostB=https://EtcdHostB:2380,EtcdHostC=https://EtcdHostC:2380 \
   --initial-cluster-state new
+Volume=/etc/omp/etcd:/certs:ro,Z
 Volume=omp-etcd-data:/etcd-data
 PublishPort=2379:2379
 PublishPort=2380:2380

@@ -30950,3 +30950,15 @@ passenden Eintrag wie bisher Node-Endpoint + v1.2. Nachgezogen: `href` zählt nu
 ohne Zugangsdaten, Query und Fragment; mehrere Einträge derselben Version werden der Reihe nach versucht (Adresse
 des Node-Rechners zuerst), ausgewichen wird nur ohne HTTP-Antwort. Offen: Das Node-API-Token geht auch an interne
 Fremdgeräte (Paket P5).
+
+## 2026-11-28 — etcd/Patroni in Produktion nur mit TLS und eigenen Passwörtern (Review-Paket P4)
+
+etcd verlangt auf Client- und Peer-Port Zertifikate; Patroni-REST nur https, schreibend mit Client-Zertifikat und
+Anmeldung (`verify_client=optional`, damit `GET /cluster` für Sicherung und Überwachung ohne Zertifikat geht).
+Passwörter in `/etc/omp/patroni.env`, Start verweigert bei Platzhaltern. Behoben: `post-init.sh` legte die Rolle
+`omp` fest mit Passwort `omp` an — jetzt `OMP_DB_PASSWORD` (Dev-Standard bleibt). Neu
+`OMP_POSTGRES_PATRONI_CA_FILE`. Variablennamen aus `patroni/config.py` der gepinnten Version 4.1.5.
+**Geprüft** mit eigenem Cluster (3× etcd 3.5.35, 3× Patroni) aus den Quadlet-Werten: Replikation, Switchover,
+Abweisung ohne Zertifikat/Anmeldung, Datenbank-Passwort mit Sonderzeichen. Dabei gefunden: eine CA ohne
+`keyUsage` lehnt Patroni ab. **Nicht geprüft:** Start unter systemd (Quadlet), Umstellung eines Altbestands.
+**Offen:** TLS für Postgres selbst.
