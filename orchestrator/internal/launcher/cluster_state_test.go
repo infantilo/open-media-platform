@@ -10,10 +10,11 @@ import (
 
 // scriptedRequester antwortet je Aktion ("start"/"stop") mit einem einstellbaren Ergebnis und zählt die Kommandos.
 type scriptedRequester struct {
-	mu      sync.Mutex
-	stopErr error
-	stops   int
-	starts  int
+	lastStart remoteCommand
+	mu        sync.Mutex
+	stopErr   error
+	stops     int
+	starts    int
 }
 
 func (r *scriptedRequester) RequestBytes(subject string, data []byte, timeout time.Duration) ([]byte, error) {
@@ -29,6 +30,7 @@ func (r *scriptedRequester) RequestBytes(subject string, data []byte, timeout ti
 		return json.Marshal(remoteResponse{OK: true})
 	}
 	r.starts++
+	r.lastStart = cmd
 	return json.Marshal(remoteResponse{OK: true, PID: 4000 + r.starts})
 }
 
@@ -190,4 +192,52 @@ func (s *flakyPutStore) Put(inst Instance) error {
 		return errors.New("db unavailable")
 	}
 	return s.fakeInstanceStore.Put(inst)
+}
+
+// Das Dienst-Token (Kapitel 48) geht wie das Node-API-Token mit jedem Remote-Start mit, aber nie in die persistierte ExtraEnv.
+func TestStartRemoteSendsServiceToken(t *testing.T) {
+	nc := &scriptedRequester{}
+	l := newWithStore(nil, "http://registry", "nats://nats", newFakeInstanceStore(), nil, nc, nil)
+	l.SetServiceToken("svc-tok")
+	inst, err := l.Start("omp-intercom", "", "host-1", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if nc.lastStart.ServiceToken != "svc-tok" {
+		t.Fatalf("serviceToken = %q", nc.lastStart.ServiceToken)
+	}
+	if _, leaked := inst.ExtraEnv[ServiceTokenEnv]; leaked {
+		t.Fatal("token must not be stored in Instance.ExtraEnv")
+	}
+}
+
+// TestDiscardOnlyRemovesStopPendingInstances — "Eintrag entfernen" gilt nur für entfernte Instanzen mit vorgemerktem
+// Stop; eine normal laufende darf so nicht aus der Buchführung verschwinden.
+func TestDiscardOnlyRemovesStopPendingInstances(t *testing.T) {
+	nc := &scriptedRequester{}
+	store := newFakeInstanceStore()
+	l := newWithStore(nil, "http://registry", "nats://nats", store, nil, nc, nil)
+	inst, err := l.Start("omp-source", "", "host-1", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := l.Discard(inst.ID); !errors.Is(err, ErrNotStopPending) {
+		t.Fatalf("Discard() of a running instance = %v, want ErrNotStopPending", err)
+	}
+	nc.setStopErr(errors.New("nats: no responders"))
+	if err := l.Stop(inst.ID); !errors.Is(err, ErrStopDeferred) {
+		t.Fatalf("Stop() error = %v, want ErrStopDeferred", err)
+	}
+	if err := l.Discard(inst.ID); err != nil {
+		t.Fatalf("Discard() error = %v", err)
+	}
+	if _, ok := l.Get(inst.ID); ok {
+		t.Fatal("discarded instance is still tracked")
+	}
+	if _, ok := store.data[inst.ID]; ok {
+		t.Fatal("discarded instance is still stored")
+	}
+	if err := l.Discard(inst.ID); !errors.Is(err, ErrUnknownInstance) {
+		t.Fatalf("second Discard() = %v, want ErrUnknownInstance", err)
+	}
 }

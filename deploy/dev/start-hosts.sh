@@ -65,6 +65,10 @@ HOSTS=(
   "host2:Regie-Host-B"
 )
 
+# Dateiverwaltung: ein Host-Agent bearbeitet nur freigegebene Verzeichnisse — in der Entwicklung dieselben
+# Medienverzeichnisse wie beim Orchestrator (start-omp.sh).
+export OMP_FILE_ROOTS="${OMP_FILE_ROOTS:-${OMP_MEDIA_MOUNTS:-$ROOT_DIR/data/media:$ROOT_DIR/data/review}}"
+
 # NATS-TLS (ARCHITECTURE.md §20.4) ist per Default aus (OMP_NATS_TLS_
 # ENABLED unten nur gesetzt, falls schon in der aufrufenden Shell
 # exportiert), gleiches Muster wie start-omp.sh's OMP_MTLS_*/OMP_NATS_

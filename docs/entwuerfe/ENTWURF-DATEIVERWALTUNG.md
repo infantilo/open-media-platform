@@ -135,7 +135,7 @@ Im Assets-Tab: Filter „Dateien“ (4) und Asset-Detail → Representation → 
 - **Orte = benannte Speicherorte (Kap. 29 Nachtrag B).** Statt einer neuen Konfiguration sind die Explorer-Wurzeln die vorhandenen `storage_locations` (Name, Host, Pfad) plus Tabelle `file_roots`
   (Rolle, schreibgeschützt, Papierkorb-Tage, Notfallgrenze, Sperrfenster). Beim ersten Start legt das Modul Medien, Review-Proxys (schreibgeschützt) und Untertitel an (`files.seeded`).
 - **Ein Host-Agent-Befehl `files`** (`jobwire.ActionFiles`, Operationen `stat/list/trash/trash-list/restore/purge/df`) statt mehrerer Aktionen; gleiche Implementierung im Agent und im Orchestrator (`jobwire/files.go`).
-  Wurzel-relative Pfade, Symlink-Ausbruch und „..“ werden abgewiesen; „Löschen“ ist ein `rename` in `<Wurzel>/.trash/<Unix-ms>/<rel>`. Optionale Freigabe-Liste je Host: `OMP_FILE_ROOTS`.
+  Wurzel-relative Pfade, Symlink-Ausbruch und „..“ werden abgewiesen; „Löschen“ ist ein `rename` in `<Wurzel>/.trash/<Unix-ms>/<rel>`. Freigabe-Liste je Host (Pflicht, ersatzweise `OMP_MEDIA_MOUNTS`): `OMP_FILE_ROOTS`.
 - **API-Pfad des Filters:** statt `?fileState=` an `/api/v1/assets` liefert `GET /api/v1/files/asset-states[?state=]` den Zustand je Asset (Zähler inklusive); die Asset-Liste filtert damit.
   Weitere Routen: `/api/v1/files/{roots,config,list,orphans,trash,trash/restore,trash/purge,delete/preview,delete,upload,check,assets,assets/{id},assets/{id}/attach}`.
 - **Sperrfenster** (E4): `lockBefore`/`lockAfter` global, je Ort und je Asset-Typ (`assetTypes` in der Konfiguration); `plannedIsHard` = „solange verplant, hart gesperrt“ (Standard an). Der Beginn einer Sendung wird aus dem Zustand des Playout-Kanals

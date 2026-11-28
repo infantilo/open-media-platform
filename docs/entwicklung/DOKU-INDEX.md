@@ -44,67 +44,67 @@ Erzeugt mit `sh docs/entwicklung/doku-index.sh`. Abschnitt gezielt lesen: Read m
 5558 Kapitel 48: Intercom-Server als eigener Dienst statt Orchestrator-Modul
 5602 Kapitel 49: Austauschbare Fachdienste — Vertrag statt Produkt
 5621 Kapitel 50: Intercom in der Handy-Kamera-Seite
-5635 Kapitel 51: Tally mit mehreren Gebern
-5650 Kapitel 52: Host-Auswahl und Lastverteilung für ffmpeg-Jobs
-5668 Kapitel 53: Flow-Editor-Suche und Administrations-Untergruppen
-5673 Kapitel 54: Wire-Format gemeinsam, Trend-Daten, Auto-Kalibrierung der Live-Reserve, Host-Topologie
-5701 Kapitel 55: Trend-Vorwarnung, Suchfeld-Fix, Rest der offenen Punkte
-5718 Kapitel 56: Netzwerkarme Platzierung — Verbünde statt Einzelrollen
-5755 Kapitel 57: Audit 2026-10-23 — Umsetzung der ersten Punkte
-5770 Kapitel 58: Audit 2026-10-23 — zweite Runde (B2 signierte Host-Kommandos, H1 SSRF, /metrics)
-5789 Kapitel 59: Audit 2026-10-23 — dritte Runde (M1 Uhr, M2 Schaltraster, M4 Passwörter, M8 geplante Siche
-5802 Kapitel 60: Audit 2026-10-23 — Lieferkette (Image-Digests, Actions per SHA)
-5811 Kapitel 61: `-race` sauber und in der CI
-5822 Kapitel 62: Audit 2026-10-23 — B1 Node-HTTP-API gesichert, M1 Uhr stellt sich selbst
-5841 Kapitel 63: Intercom-Oberfläche für hundert und mehr Sprechstellen
-5853 Kapitel 64: Audit 2026-10-23 — H7 Rechte-Cache, M8 Schlüsselbündel/Fremdziel, M11 systemd, H9 Panik-W
-5864 Kapitel 65: Audit 2026-10-23 — H5 Rücksprung bei der Instanz-Migration, H4/M10 Fencing der Host-Komman
-5876 Kapitel 66: Audit 2026-10-23 — B4/B5 Produktionsprofil
-5887 Kapitel 67: Audit 2026-10-23 — M7 externes Alarming
-5899 Kapitel 68: Audit 2026-10-23 — H1 Sitzung per HttpOnly-Cookie, CSP, CSRF-Schutz
-5911 Kapitel 69: Startdialog im Node-Katalog des Flow-Editors
-5920 Kapitel 70: Zwei Orchestratoren — Raft-Zeuge und Notausgang
-5938 Kapitel 71: Node-Oberflächen auf eigenem Ursprung
-5959 Kapitel 72: Support und Diagnose für Laien — Support-Paket und Selbsttest
-6093 Kapitel 73: Auswertung von Support-Paket und Momentaufnahme
-6103 Kapitel 74: Fremdplaylist-Import, Havarie-Mitlauf, Freigabe-Durchlauf, intuitivere Playout-UI
-6155 Kapitel 76: Capture-Hardware und Netzwerkkarten — Magewell, Elgato, AJA, SDK-Karten anderer Hersteller,
-6182 Kapitel 77: SRT aus Dateien mit Sprechererkennung
-6202 Kapitel 78: Normen vor Eigenwegen — EBUCore, R 103, R 143
-6223 Kapitel 79: HDR-Kennzeichnung, UHD-Messung, SRT mit komprimiertem Video
-6236 Kapitel 80: TLS-Acceptor ersetzt `tiny_http`-TLS, Abhängigkeiten bereinigt
-6246 Kapitel 81: Bildschirm- und Webseiten-Capture ohne Internet
-6265 Kapitel 82: Datenbank-Wartung
-6277 Kapitel 83: E-Mail-Alarmierung
-6293 Kapitel 84: Cluster-Rolling-Update + rollierender Cluster-Neustart
-6298 Kapitel 85: Verteilung importierter Microservices auf Hosts
-6350 Kapitel 86: Dateiverwaltung — Explorer, Löschen, Upload, Filter „Datei fehlt“
-6369 Kapitel 87: Mehrere PIPs, 2D-Pose, Klick-Fokus im Videomixer M/E
-6384 Kapitel 88: Workflow-Schnittstelle — benannte Ausgänge und Eingänge
-6428 Kapitel 89: Radio-Betrieb
-6471 Kapitel 90: OGraf — Layout-Zonen, Rahmen-Transitions (Paternoster), vollwertiger OGraf-Editor
-6498 Kapitel 91: Workflow-Suche, Ziehen/Verlängern/Jetzt beenden, dynamische Ereignisse als Auslöser
-6508 Kapitel 92: Active-Directory-/LDAP-Anmeldung
-6520 Kapitel 93: MIDI-Pulte — Mackie Control (iCON V1-M/P1-M mit Erweiterung), generisches Profil, Browser u
-6534 Kapitel 94: Mitgelieferte Sendevorlagen, Trenner „Wipe“, Abspann
-6549 Kapitel 95: Variablen in Child Events — Werte aus Playlist-Events in Grafik-Daten und Parameter
-6560 Kapitel 96: Mehrkanal-Platz — ein Operator betreut mehrere Playout-Channels
-6577 Kapitel 97: Eingang aufräumen — Prüfeinträge entfernen
-6589 Kapitel 99: Studio-Mischer mit niedriger Latenz — ALSA, AES67, MXL
-6619 Kapitel 100: Ausfall-Audit des Orchestrators — Absturz, Host-Ausfall, Standby, Umzug, Neustart
-6655 Kapitel 101: MXL-Flow-Ansicht mit Schreiber-Zuordnung und Rest-Erkennung
-6663 Kapitel 102: HLS-Eingang `omp-hls-source`
-6676 Kapitel 103: Getrennte MXL-Domains als Option — D1, D2, D3-Kantenprüfung, D4-Ansicht
-6688 Kapitel 103 (Fortsetzung): Domains je Workflow/Rolle, entfernte Hosts, Container-Nodes, Flow-Editor-Ansic
-6697 Kapitel 103 (Teil 3): Domain-Brücke, IS-05 `mxl_domain_id`, Auto-Anordnen, Flow-Editor-Politur
-6707 Kapitel 103 (Teil 4): offene Punkte — Sender-IS-05, Flows entfernter Hosts, Domain wechseln, Polling-Te
-6716 Kapitel 103 (Teil 5): D7 Abschottung per Sandbox, Polling in den Nodes, Fit-All-Fehler
-6728 Kapitel 104: PTZ-Kamerasteuerung `omp-ptz`
-6741 Kapitel 105: TAMS — zeitadressierter Medienspeicher: Aufnahme, Wiedergabe, optional eigener Speicher
-6783 Kapitel 106: Hauptkontrollraum (MCR / Ingest-Leitstelle) — Leitungen, Hausformat nur bei Abweichung, A/
-6962 Kapitel 107: Audio-Matrix `omp-audio-matrix` — freie Ein-/Ausgänge, Kreuzschiene, Kanal-Labels, MCR-An
-7051 Kapitel 108: Ausfallfreier Umzug über Hostgrenzen trotz MXL-Gegenstellen
-7088 Kapitel 109: Ausfallfreies Hot-Standby
+5636 Kapitel 51: Tally mit mehreren Gebern
+5651 Kapitel 52: Host-Auswahl und Lastverteilung für ffmpeg-Jobs
+5669 Kapitel 53: Flow-Editor-Suche und Administrations-Untergruppen
+5674 Kapitel 54: Wire-Format gemeinsam, Trend-Daten, Auto-Kalibrierung der Live-Reserve, Host-Topologie
+5702 Kapitel 55: Trend-Vorwarnung, Suchfeld-Fix, Rest der offenen Punkte
+5719 Kapitel 56: Netzwerkarme Platzierung — Verbünde statt Einzelrollen
+5756 Kapitel 57: Audit 2026-10-23 — Umsetzung der ersten Punkte
+5771 Kapitel 58: Audit 2026-10-23 — zweite Runde (B2 signierte Host-Kommandos, H1 SSRF, /metrics)
+5790 Kapitel 59: Audit 2026-10-23 — dritte Runde (M1 Uhr, M2 Schaltraster, M4 Passwörter, M8 geplante Siche
+5803 Kapitel 60: Audit 2026-10-23 — Lieferkette (Image-Digests, Actions per SHA)
+5812 Kapitel 61: `-race` sauber und in der CI
+5823 Kapitel 62: Audit 2026-10-23 — B1 Node-HTTP-API gesichert, M1 Uhr stellt sich selbst
+5842 Kapitel 63: Intercom-Oberfläche für hundert und mehr Sprechstellen
+5854 Kapitel 64: Audit 2026-10-23 — H7 Rechte-Cache, M8 Schlüsselbündel/Fremdziel, M11 systemd, H9 Panik-W
+5865 Kapitel 65: Audit 2026-10-23 — H5 Rücksprung bei der Instanz-Migration, H4/M10 Fencing der Host-Komman
+5877 Kapitel 66: Audit 2026-10-23 — B4/B5 Produktionsprofil
+5888 Kapitel 67: Audit 2026-10-23 — M7 externes Alarming
+5900 Kapitel 68: Audit 2026-10-23 — H1 Sitzung per HttpOnly-Cookie, CSP, CSRF-Schutz
+5912 Kapitel 69: Startdialog im Node-Katalog des Flow-Editors
+5921 Kapitel 70: Zwei Orchestratoren — Raft-Zeuge und Notausgang
+5939 Kapitel 71: Node-Oberflächen auf eigenem Ursprung
+5960 Kapitel 72: Support und Diagnose für Laien — Support-Paket und Selbsttest
+6094 Kapitel 73: Auswertung von Support-Paket und Momentaufnahme
+6104 Kapitel 74: Fremdplaylist-Import, Havarie-Mitlauf, Freigabe-Durchlauf, intuitivere Playout-UI
+6156 Kapitel 76: Capture-Hardware und Netzwerkkarten — Magewell, Elgato, AJA, SDK-Karten anderer Hersteller,
+6183 Kapitel 77: SRT aus Dateien mit Sprechererkennung
+6203 Kapitel 78: Normen vor Eigenwegen — EBUCore, R 103, R 143
+6224 Kapitel 79: HDR-Kennzeichnung, UHD-Messung, SRT mit komprimiertem Video
+6237 Kapitel 80: TLS-Acceptor ersetzt `tiny_http`-TLS, Abhängigkeiten bereinigt
+6247 Kapitel 81: Bildschirm- und Webseiten-Capture ohne Internet
+6266 Kapitel 82: Datenbank-Wartung
+6278 Kapitel 83: E-Mail-Alarmierung
+6294 Kapitel 84: Cluster-Rolling-Update + rollierender Cluster-Neustart
+6299 Kapitel 85: Verteilung importierter Microservices auf Hosts
+6351 Kapitel 86: Dateiverwaltung — Explorer, Löschen, Upload, Filter „Datei fehlt“
+6370 Kapitel 87: Mehrere PIPs, 2D-Pose, Klick-Fokus im Videomixer M/E
+6385 Kapitel 88: Workflow-Schnittstelle — benannte Ausgänge und Eingänge
+6429 Kapitel 89: Radio-Betrieb
+6472 Kapitel 90: OGraf — Layout-Zonen, Rahmen-Transitions (Paternoster), vollwertiger OGraf-Editor
+6499 Kapitel 91: Workflow-Suche, Ziehen/Verlängern/Jetzt beenden, dynamische Ereignisse als Auslöser
+6509 Kapitel 92: Active-Directory-/LDAP-Anmeldung
+6521 Kapitel 93: MIDI-Pulte — Mackie Control (iCON V1-M/P1-M mit Erweiterung), generisches Profil, Browser u
+6535 Kapitel 94: Mitgelieferte Sendevorlagen, Trenner „Wipe“, Abspann
+6550 Kapitel 95: Variablen in Child Events — Werte aus Playlist-Events in Grafik-Daten und Parameter
+6561 Kapitel 96: Mehrkanal-Platz — ein Operator betreut mehrere Playout-Channels
+6578 Kapitel 97: Eingang aufräumen — Prüfeinträge entfernen
+6590 Kapitel 99: Studio-Mischer mit niedriger Latenz — ALSA, AES67, MXL
+6620 Kapitel 100: Ausfall-Audit des Orchestrators — Absturz, Host-Ausfall, Standby, Umzug, Neustart
+6656 Kapitel 101: MXL-Flow-Ansicht mit Schreiber-Zuordnung und Rest-Erkennung
+6664 Kapitel 102: HLS-Eingang `omp-hls-source`
+6677 Kapitel 103: Getrennte MXL-Domains als Option — D1, D2, D3-Kantenprüfung, D4-Ansicht
+6689 Kapitel 103 (Fortsetzung): Domains je Workflow/Rolle, entfernte Hosts, Container-Nodes, Flow-Editor-Ansic
+6698 Kapitel 103 (Teil 3): Domain-Brücke, IS-05 `mxl_domain_id`, Auto-Anordnen, Flow-Editor-Politur
+6708 Kapitel 103 (Teil 4): offene Punkte — Sender-IS-05, Flows entfernter Hosts, Domain wechseln, Polling-Te
+6717 Kapitel 103 (Teil 5): D7 Abschottung per Sandbox, Polling in den Nodes, Fit-All-Fehler
+6729 Kapitel 104: PTZ-Kamerasteuerung `omp-ptz`
+6742 Kapitel 105: TAMS — zeitadressierter Medienspeicher: Aufnahme, Wiedergabe, optional eigener Speicher
+6784 Kapitel 106: Hauptkontrollraum (MCR / Ingest-Leitstelle) — Leitungen, Hausformat nur bei Abweichung, A/
+6963 Kapitel 107: Audio-Matrix `omp-audio-matrix` — freie Ein-/Ausgänge, Kreuzschiene, Kanal-Labels, MCR-An
+7052 Kapitel 108: Ausfallfreier Umzug über Hostgrenzen trotz MXL-Gegenstellen
+7089 Kapitel 109: Ausfallfreies Hot-Standby
 
 ## ARCHITECTURE.md
 

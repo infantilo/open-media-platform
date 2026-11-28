@@ -193,15 +193,15 @@
     },
   };
 
-  // Markiert für pipeline.rs' Bereitschafts-Sonde (page_ready), dass das
-  // Modul-Skript fertig ausgeführt ist — per Pad-Probe auf dem ersten
-  // wpesrc-Puffer beobachtet der Node ohnehin nur, dass IRGENDein Frame
-  // gerendert wurde, dieses Flag ist die zusätzliche, explizite
-  // Bestätigung "window.omp existiert" (rein informativ, aktuell von
-  // keinem Rust-Code gelesen — document.title als einfachster,
-  // per `run-javascript`-Rückfrage nicht nötiger Kanal für spätere
-  // manuelle Diagnose per CDP).
+  // Meldet dem Node, dass `window.omp` jetzt existiert. Erst danach schickt er Befehle (s. `PageState` in pipeline.rs):
+  // der erste wpesrc-Puffer kann vor diesem (verzögert ausgeführten) Modul-Skript kommen, ein `show()` davor ginge
+  // ohne Meldung verloren.
   document.title = "omp-ograf-harness-ready";
+  const reportReady = (tries) => {
+    const retry = () => { if (tries > 0) setTimeout(() => reportReady(tries - 1), 250); };
+    fetch("/ograf-ready", { method: "POST" }).then((r) => { if (!r.ok) retry(); }).catch(retry);
+  };
+  reportReady(40);
 </script>
 </body>
 </html>

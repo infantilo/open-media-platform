@@ -30867,3 +30867,64 @@ Spiegelung im Orchestrator-Proxy (`httpapi.commandMirrorTap`) statt in den Nodes
 ## Nachtrag 2026-11-25: Standby nie auf dem Host der Primärrolle (Kapitel 109)
 
 Live-Fund beim Host-Ausfall-Test: Wird der Standby ausdrücklich mit dem Umschalter verdrahtet, bildete er mit seiner Primärrolle einen MXL-Verbund und lief auf demselben Host. Fix: Verbindungen eines Standby binden nicht (`roleLinks`), und Primär/Standby bekommen automatisch ein gemeinsames RedundancyGroup-Tag (`withStandbyRedundancy`, beim Anlegen/Ändern). Bestehende, früher gespeicherte Workflows bekommen das Tag erst beim nächsten Speichern.
+
+## Nachtrag 2026-11-26: Ungültige MXL-Grains blockierten blockierende Leser; MCR-Wand und Multiviewer-Beschriftung
+
+Befund (MCR-Event, ständiger Alarm „Signalverlust“): Der Normalizer wandelt 25 → 50 Bilder und beschreibt wegen der strikten Ursprungs-Etiketten nur jeden zweiten Index; libmxl markiert die ausgelassenen als `MXL_GRAIN_FLAG_INVALID` (0 gültige Slices). `get_complete_grain` im Rust-Wrapper wartete auf deren Vervollständigung in einer Schleife ohne Pause, bis der Ringpuffer überlief — beim Messgerät kamen ~2 statt 50 Bilder/s an. Fix: Wrapper gibt ungültige Grains zurück (`deploy/dev/mxl-patches/0003`, bestehende Installationen: `install-mxl.sh` erneut ausführen), alle Leser in `omp-mediaio` überspringen sie. Alle MXL-Nodes neu bauen. Offen: ob der Normalizer bei Ratenwandlung alle Ausgangs-Indizes füllen soll (Fremdleser sehen sonst jedes zweite Grain ungültig).
+
+Außerdem: Die globale Regel `button:hover` deckte die Klickflächen der MCR-Wand deckend zu (Bild schwarz) — Regel spezifischer gemacht. Multiviewer: `textoverlay` ohne `auto-resize`, Schriftgröße nach Leistenmaß; Kachelvideo mit quadratischen Pixeln (vorher Streifen rechts).
+
+## 2026-11-26 — Dienst-Token geht mit dem Remote-Startkommando mit
+
+Fund: Ein Workflow startete `omp-intercom` auf einem Host-Agent; dort fehlte `OMP_SERVICE_TOKEN` in der Agent-Umgebung, alle
+Aufrufe über `/api/v1/ext/intercom` endeten mit 403, Admin-Reiter und Sprechstellenliste blieben leer. Die Platzierung wählt
+den Host selbst, eine Handkonfiguration je Agent ist damit eine Stolperfalle. Neu: `serviceToken` im Startkommando (Start,
+Neustart, Wiederherstellung; Prozess und Podman), der Agent setzt `OMP_SERVICE_TOKEN` mit Vorrang vor dem geerbten Wert.
+Ersetzt die Entscheidung aus Kapitel 48 („wird nicht über das Netz mitgeschickt“). Abwägung: Die Kommandos sind signiert,
+nicht verschlüsselt; ohne NATS-TLS steht das Token wie schon `OMP_NODE_API_TOKEN` im Klartext auf der Leitung. Alte Agents
+ignorieren das Feld. Wirksam erst mit neu gebautem Orchestrator und Host-Agent und nach Neustart der betroffenen Nodes.
+
+## 2026-11-27 — OGraf: Befehle erst nach der Bereit-Meldung der Harness-Seite
+
+Fund (Demo „OGraf folgt PIPs“): Nach dem Workflow-Start meldete der Grafik-Node die Ebene als eingeblendet und die
+Bindungen als aktiv, Fill und Key waren aber leer und die Seite meldete keine Zonen. Ursache (aus Code und Befund
+abgeleitet): Der erste `wpesrc`-Puffer galt als „Seite bereit“, kann aber vor dem verzögert ausgeführten Modul-Skript
+kommen; das beim Zustands-Einspielen sofort folgende `window.omp.show` ging dann ohne Meldung verloren. Neu: Die Seite
+schickt `POST /ograf-ready` an den Harness-Server, erst dann (und nach dem ersten Bild) führt der Node Befehle aus und
+pausiert im Leerlauf. Bleibt die Meldung 20 s aus, geht es mit Warnung weiter. Offen: Ein fehlgeschlagenes Laden einer
+Vorlage auf der Seite bleibt weiterhin ohne Rückmeldung an den Node.
+
+## 2026-11-27 — Instanzliste: „Stop vorgemerkt“ und Eintrag ohne Host-Bestätigung entfernen
+
+Instanzen mit vorgemerktem Stop (Host nicht erreichbar) wurden als laufend angezeigt. Sie heißen jetzt „Stop vorgemerkt“.
+Neu `DELETE /api/v1/instances/{id}?forget=true` (nur bei vorgemerktem Stop, sonst 409, Rückfrage in der Oberfläche) für
+dauerhaft weggefallene Hosts. Preis: Läuft die Instanz dort doch noch, läuft sie unverwaltet weiter. Ein gewöhnliches
+Stoppen vergisst wie bisher nur nach Bestätigung des Hosts (Kapitel 100).
+
+## 2026-11-27 — Zustandsdateien atomar schreiben
+
+Die Zustandsdatei des Host-Agents wurde direkt überschrieben; ein Stromausfall beim Schreiben hätte eine abgeschnittene
+Datei hinterlassen, mit der der Agent nicht mehr startet. Sie, die Paket- und Versions-Metadaten des Orchestrators sowie
+Verlauf, Status und Rücksprung-Index des Supervisors werden jetzt über temporäre Datei, fsync und Umbenennen ersetzt.
+Je Go-Modul eine eigene kleine Funktion (keine neue Modulabhängigkeit). Nicht umgesetzt: Sicherungskopie `.bak` beim
+Lesen; eine bereits defekte Datei wird weiterhin als Fehler gemeldet. Stromausfall selbst nicht nachgestellt.
+
+## 2026-11-27 — Host-Agent: keine unsignierten Kommandos, Schlüsselübergabe über NATS nur nach Freigabe
+
+Ein Host ohne Kommandoschlüssel führte bisher unsignierte Kommandos aus und nahm den ersten zugeschickten Schlüssel an.
+Neu: `OMP_HOST_AGENT_REQUIRE_KEY` ist Standard (nur ausdrücklich `false` schaltet ab), `provision-key` braucht
+`OMP_HOST_AGENT_ALLOW_NATS_PROVISION=1`, `rotate-key` verlangt eine NATS-Verbindung mit TLS und einen bisherigen
+Schlüssel. Neue Hosts bekommen den Schlüssel unverändert mit der Registrierung.
+
+**Folge beim Update:** Hosts ohne Schlüssel werden erst nach Neuregistrierung oder einmaliger Freigabe wieder gesteuert.
+Ein eigener Weg, über den sich ein Alt-Host den Schlüssel authentifiziert abholt, fehlt (der Agent hat nach der
+Registrierung kein Geheimnis außer dem Schlüssel selbst). Offen: Die Registrierung selbst ist nur so geschützt wie die
+Verbindung zum Orchestrator (`http://` möglich).
+
+## 2026-11-27 — Host-Agent: Dateioperationen nur in freigegebenen Verzeichnissen
+
+Ohne `OMP_FILE_ROOTS` bearbeitete ein Host-Agent jedes angefragte Verzeichnis. Neu: Freigabe über `OMP_FILE_ROOTS`,
+ersatzweise `OMP_MEDIA_MOUNTS`; ohne beides keine Dateioperation. Zustandsdatei und Katalogverzeichnis des Agents sind
+immer gesperrt. `start-hosts.sh` gibt die Medienverzeichnisse der Entwicklungsumgebung frei.
+**Folge beim Update:** Auf Remote-Hosts ohne diese Variablen sind Orte danach „nicht erreichbar“, bis eine gesetzt ist.
+Gilt nicht für Orte auf dem Orchestrator-Rechner (dort führt der Orchestrator die Operationen selbst aus).

@@ -335,7 +335,8 @@ const CSS = `
 .mcr-wall-pic { position:relative; width:100%; background:#000; border-radius:6px; overflow:hidden; }
 .mcr-wall-img { width:100%; height:100%; display:block; object-fit:contain; }
 .mcr-wall-hot { position:absolute; background:transparent; border:2px solid transparent; border-radius:4px; cursor:pointer; padding:0; }
-.mcr-wall-hot:hover { background:rgba(255,255,255,.08); border-color:var(--omp-accent-cyan); }
+/* :not(:disabled) nötig: die globale Regel button:hover/:active (design-tokens.css) ist sonst spezifischer und deckt das Bild schwarz zu */
+.mcr-wall-hot:hover:not(:disabled), .mcr-wall-hot:active:not(:disabled) { background:rgba(255,255,255,.08); border-color:var(--omp-accent-cyan); }
 .mcr-wall-chips { display:flex; flex-wrap:wrap; gap:6px; min-height:26px; }
 .mcr-wall-chip { display:inline-flex; align-items:center; gap:6px; max-width:100%; padding:3px 10px; border:1px solid var(--mcr-line); border-radius:999px; background:transparent; color:var(--omp-text); font:inherit; font-size:var(--omp-font-size-sm); }
 .mcr-wall-chip:hover { border-color:var(--omp-accent-cyan); }

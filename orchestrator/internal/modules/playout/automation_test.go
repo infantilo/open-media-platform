@@ -36,6 +36,24 @@ func TestAutomationTargetEnvDerivesTargetsFromRoles(t *testing.T) {
 	}
 }
 
+func TestAutomationTargetEnvScopesByNamePrefixWithSeveralAutomations(t *testing.T) {
+	def := workflows.Definition{Roles: []workflows.Role{
+		{Name: "ch-a", NodeType: AutomationNodeType},
+		{Name: "ch-b", NodeType: AutomationNodeType},
+		{Name: "ch-a-player-1", NodeType: "omp-channel-player"},
+		{Name: "ch-a-player-2", NodeType: "omp-channel-player"},
+		{Name: "ch-b-player-1", NodeType: "omp-channel-player"},
+		{Name: "ch-b-mixer", NodeType: "omp-video-mixer-me"},
+	}}
+	a, b := AutomationTargetEnv(def, def.Roles[0]), AutomationTargetEnv(def, def.Roles[1])
+	if a["OMP_PLAYOUT_TARGET_PLAYER_B_LABEL"] != "ch-a-player-2" || a["OMP_PLAYOUT_TARGET_MIXER_LABEL"] != "" {
+		t.Errorf("a = %v", a)
+	}
+	if b["OMP_PLAYOUT_TARGET_PLAYER_A_LABEL"] != "ch-b-player-1" || b["OMP_PLAYOUT_TARGET_MIXER_LABEL"] != "ch-b-mixer" {
+		t.Errorf("b = %v", b)
+	}
+}
+
 type fakeSvc struct {
 	hooks []workflows.RoleEnvHook
 	types []string

@@ -623,7 +623,7 @@ class OmpScopePanel extends HTMLElement {
     }
 
     const decl = twoColTable([T("scp.653c19"), T("scp.34e2d1"), T("scp.b22f04")]);
-    for (const label of [T("scp.5f23a4"), T("scp.dcb66f"), T("scp.30507b"), T("scp.45cef4"), T("scp.e32d85"), T("scp.85069b"), T("scp.2d0160"), T("scp.ebace4"), T("scp.75d289")]) {
+    for (const label of [T("scp.5f23a4"), T("scp.dcb66f"), T("scp.30507b"), T("scp.45cef4"), T("scp.e32d85"), T("scp.transfer"), T("scp.85069b"), T("scp.2d0160"), T("scp.ebace4"), T("scp.75d289")]) {
       decl.row(label, 2);
     }
 

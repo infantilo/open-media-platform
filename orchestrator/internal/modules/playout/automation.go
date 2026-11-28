@@ -3,7 +3,11 @@
 // Trigger, As-Run und Preflight folgen mit 36.8.
 package playout
 
-import "github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
+import (
+	"strings"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
+)
 
 // Automations-Ziele automatisch aus den Rollen des Workflows ableiten.
 //
@@ -13,6 +17,9 @@ import "github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 // erster Kanal-Player = Kanal A, zweiter = Kanal B, erster Bildmischer = Mischer, erster Audiomischer,
 // erste Grafik. Nur eine Vorbelegung (Umgebungsvariablen beim Start) — der Bediener kann sie im Panel
 // jederzeit ändern. Standby-Rollen zählen nicht.
+//
+// Mehrere Automationen in EINEM Workflow (Mehrkanal): Rollen, deren Name mit dem Namen der Automation beginnt
+// („channel-a“ → „channel-a-player-1“, „channel-a mixer“), gehören zu ihr; nur aus ihnen wird dann abgeleitet.
 
 // AutomationNodeType ist der Node-Typ der Playout-Automation (reiner Control-Plane-Node, steuert Player/Mischer fern).
 const AutomationNodeType = "omp-playout-automation"
@@ -29,7 +36,7 @@ func AutomationTargetEnv(def workflows.Definition, role workflows.Role) map[stri
 			env[key] = label
 		}
 	}
-	for _, r := range def.Roles {
+	for _, r := range automationRoles(def, role) {
 		if r.StandbyFor != "" {
 			continue
 		}
@@ -54,6 +61,25 @@ func AutomationTargetEnv(def workflows.Definition, role workflows.Role) map[stri
 		return nil
 	}
 	return env
+}
+
+// automationRoles liefert die Rollen, aus denen die Ziele von `automation` abgeleitet werden: bei mehreren
+// Automationen die mit ihrem Namen als Präfix (falls vorhanden), sonst alle.
+func automationRoles(def workflows.Definition, automation workflows.Role) []workflows.Role {
+	automations := 0
+	var own []workflows.Role
+	for _, r := range def.Roles {
+		if r.NodeType == AutomationNodeType && r.StandbyFor == "" {
+			automations++
+		}
+		if strings.HasPrefix(r.Name, automation.Name+"-") || strings.HasPrefix(r.Name, automation.Name+" ") {
+			own = append(own, r)
+		}
+	}
+	if automations < 2 || len(own) == 0 {
+		return def.Roles
+	}
+	return own
 }
 
 // Register hängt die Playout-Fachlichkeit an den Workflow-Dienst: Automations-Ziele als Start-Umgebung und der

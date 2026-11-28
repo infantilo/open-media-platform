@@ -414,7 +414,7 @@ func (a *api) status() http.HandlerFunc {
 			writeJSON(w, 200, map[string]any{"eventId": e.ID, "state": e.State, "lines": []any{}})
 			return
 		}
-		a.svc.Run.Watch(e.ID) // jemand sieht zu: Multiviewer der Überwachung bereithalten
+		// Kein `Watch`: der Status zeigt kein Bild. Den (teuren) Multiviewer hält nur die Wand bereit, solange sie sein Bild zeigt.
 		out, err := a.svc.Run.Status(r.Context(), a.svc, e)
 		if err != nil {
 			writeErr(w, err)
