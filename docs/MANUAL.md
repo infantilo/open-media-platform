@@ -307,7 +307,7 @@ every logged-in user is logged out without being asked.
   can be started from the GUI (instance launcher,
   `UMSETZUNG.md` C8) — provided they were built beforehand:
   ```sh
-  make nodes   # builds nodes/target/debug/{omp-source,omp-switcher,omp-viewer}
+  make nodes   # builds all catalog nodes into nodes/target/release (list taken from catalog.json)
   ```
 - Started instances appear automatically as tiles (self-registration
   via NMOS, no manual entry).
@@ -492,12 +492,12 @@ unsigned packages and is intended for development only.
 **Building a package.**
 ```sh
 make update-bundle                    # builds binaries + UI and packs them signed into dist/
-make update-bundle UPDATE_VERSION=2026.10.1 NODES_PROFILE=release
+make update-bundle UPDATE_VERSION=2026.10.1
 ```
 Included: orchestrator (with version stamp), supervisor, host agent,
 UI bundle and all node programs referenced in the catalog from
-`nodes/target/<NODES_PROFILE>`. Debug nodes add up to several GB;
-use `NODES_PROFILE=release` for packages. The version must increase
+`nodes/target/<NODES_PROFILE>` (default `release`, which is where `make nodes`
+builds all catalog nodes). The version must increase
 numerically (default: date + time). Additional options (migrations,
 minimum version, notice text) via `UPDATE_BUNDLE_ARGS` or directly with
 `cd tools/update-bundle && go run . pack -h`; `go run . verify -pub <key> <package>`

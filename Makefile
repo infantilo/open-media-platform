@@ -52,17 +52,19 @@ ui:
 # Binaries (UMSETZUNG.md C8) — separates Target von `build`, weil der
 # Launcher vorgebaute Binaries erwartet, kein `cargo run` pro Start.
 #
-# Die Medien-Nodes (MEDIA_NODES, in deploy/catalog.json auf target/release
-# verdrahtet) werden im Release-Profil gebaut, alle übrigen im Debug-Profil.
-# Nutzerwunsch 2026-10-05. Erwartung realistisch halten: die Frame-Verarbeitung
-# läuft in GStreamers C-Code, Release betrifft nur die Rust-Schicht — gemessen
-# beim Kanal-Player (1080i-MXF → 720p25): 146 % Debug vs. 138 % Release (docs/
-# decisions.md Nachtrag 163 kam für den Mischer zum selben Schluss). Der größere
-# Hebel sind Ausgabeformat (720p statt 1080p) und die Deinterlace-Methode.
-MEDIA_NODES := omp-channel-player omp-video-mixer-me omp-audio-mixer omp-audio-monitor omp-viewer omp-playout-automation omp-source omp-hls-source omp-mxl-bridge omp-mxf-player omp-mxf-player-direct omp-webrtc-gateway omp-multiviewer omp-scaler omp-switcher omp-playout-buffer omp-intercom omp-subtitle-asr omp-sign-avatar
+# Alles, was deploy/catalog.json aus target/release startet, wird auch dort
+# gebaut (Liste wird aus dem Katalog abgeleitet — eine handgepflegte Liste
+# liess neue Nodes still veralten), dazu EXTRA_RELEASE_NODES (nicht als
+# Katalog-Kommando verdrahtet). Der Rest des Workspace entsteht im Debug-Profil.
+# Erwartung realistisch halten: die Frame-Verarbeitung läuft in GStreamers
+# C-Code, Release betrifft nur die Rust-Schicht (docs/decisions.md Nachtrag 163).
+GO_NODES := omp-vfa omp-vfa-vision
+EXTRA_RELEASE_NODES := omp-subtitle-asr
+CATALOG_NODES := $(shell sed -n 's|.*nodes/target/release/\([a-z0-9-]*\)".*|\1|p' deploy/catalog.json)
+RELEASE_NODES := $(sort $(filter-out $(GO_NODES),$(CATALOG_NODES)) $(EXTRA_RELEASE_NODES))
 nodes:
-	cd nodes && cargo build --workspace --bins $(foreach n,$(MEDIA_NODES),--exclude $(n))
-	cd nodes && cargo build --release $(foreach n,$(MEDIA_NODES),-p $(n))
+	cd nodes && cargo build --workspace --bins $(foreach n,$(RELEASE_NODES),--exclude $(n))
+	cd nodes && cargo build --release $(foreach n,$(RELEASE_NODES),-p $(n))
 	# Go-Nodes (Video folgt Audio, Kapitel 46): reines Go, landen neben den Rust-Binaries
 	mkdir -p nodes/target/release
 	cd nodes/omp-vfa && go build -o ../target/release/omp-vfa .
@@ -90,7 +92,7 @@ preflight doctor:
 # aufsteigen (Default: Datum + Uhrzeit).
 UPDATE_KEY ?= $(HOME)/.omp-update/update-signing.key
 UPDATE_VERSION ?= $(shell date +%Y.%-m.%-d.%H%M)
-NODES_PROFILE ?= debug
+NODES_PROFILE ?= release
 VERSION_PKG := github.com/infantilo/openmediaplatform/orchestrator/internal/version
 
 update-keygen:

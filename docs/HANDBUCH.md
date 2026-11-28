@@ -312,7 +312,7 @@ jeder angemeldete Nutzer wird ungefragt ausgeloggt.
   gelisteten Node-Typen aus der GUI heraus starten (Instanz-Launcher,
   `UMSETZUNG.md` C8) — vorausgesetzt, sie wurden vorher gebaut:
   ```sh
-  make nodes   # baut nodes/target/debug/{omp-source,omp-switcher,omp-viewer}
+  make nodes   # baut alle Katalog-Nodes nach nodes/target/release (Liste aus catalog.json)
   ```
 - Gestartete Instanzen erscheinen automatisch als Kacheln (Selbstregistrierung
   über NMOS, kein manuelles Eintragen).
@@ -498,12 +498,12 @@ unsignierte Pakete und ist nur für die Entwicklung gedacht.
 **Paket bauen.**
 ```sh
 make update-bundle                    # baut Binaries + UI und packt sie signiert nach dist/
-make update-bundle UPDATE_VERSION=2026.10.1 NODES_PROFILE=release
+make update-bundle UPDATE_VERSION=2026.10.1
 ```
 Enthalten: Orchestrator (mit Versionsstempel), Supervisor, Host-Agent,
 UI-Bundle und alle im Katalog referenzierten Node-Programme aus
-`nodes/target/<NODES_PROFILE>`. Debug-Nodes summieren sich auf mehrere GB;
-für Pakete `NODES_PROFILE=release` verwenden. Die Version muss numerisch
+`nodes/target/<NODES_PROFILE>` (Standard `release`, dorthin baut `make nodes`
+alle Katalog-Nodes). Die Version muss numerisch
 aufsteigen (Standard: Datum + Uhrzeit). Zusätzliche Optionen (Migrationen,
 Mindestversion, Hinweistext) über `UPDATE_BUNDLE_ARGS` bzw. direkt mit
 `cd tools/update-bundle && go run . pack -h`; `go run . verify -pub <Schlüssel> <Paket>`
