@@ -576,6 +576,11 @@ TLS (Client- und Cluster-Port), Anmeldung und ohne Platzhalter-Passwörter; Einr
 ohne die Variable erben die Nodes die Zugangsdaten des Starters). Logs und Oberfläche zeigen die Adresse ohne
 Zugangsdaten. Das Dev-Setup (`make up`) bleibt ohne Anmeldung.
 
+**Node-API-Token je Host (optional).** Standardmäßig teilen sich alle Nodes ein API-Token. `OMP_NODE_TOKEN_SCOPE=host`
+am Orchestrator (auf jedem Cluster-Mitglied) gibt jedem Host ein eigenes; zwischen Nodes sind dann nur noch die
+Aufrufe möglich, die sie wirklich brauchen. Vor dem Einschalten Nodes und Host-Agents aktualisieren, danach **alle
+Instanzen neu starten** — bis dahin antworten laufende Nodes dem Orchestrator mit 401. Ausschalten ebenso.
+
 **Datenbank-Cluster in Produktion.** Die Quadlets für etcd und Patroni verlangen TLS mit Zertifikaten (etcd:
 Client- und Peer-Port; Patroni-REST: schreibend nur mit Zertifikat und Anmeldung) und eigene Passwörter aus
 `/etc/omp/patroni.env`, auch für die Datenbankrolle `omp` (`OMP_DB_PASSWORD`). Einrichtung und Umstellung:

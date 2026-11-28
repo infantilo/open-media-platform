@@ -19,6 +19,39 @@ pub fn token() -> Option<&'static str> {
     TOKEN.get_or_init(|| std::env::var("OMP_NODE_API_TOKEN").ok().filter(|t| !t.is_empty())).as_deref()
 }
 
+/// Peer-Token (`OMP_NODE_PEER_TOKEN`) der Betriebsart "Token je Host": öffnet bei fremden Nodes nur die Aufrufe aus
+/// [`peer_allowed`]; das eigene volle Token dieses Prozesses kennen andere Nodes nicht.
+pub fn peer_token() -> Option<&'static str> {
+    static TOKEN: OnceLock<Option<String>> = OnceLock::new();
+    TOKEN.get_or_init(|| std::env::var("OMP_NODE_PEER_TOKEN").ok().filter(|t| !t.is_empty())).as_deref()
+}
+
+/// Parameter, die ein Node bei einem anderen mit dem Peer-Token lesen darf (auch mit Präfix, z. B. `me1.pip.canvas`).
+const PEER_PARAMS: &[&str] = &["fabricsTargetInfo", "layers", "subtitle", "keyer.inputs", "keyer.source", "keyer.enabled", "pip.canvas", "pip.slots"];
+/// Methoden, die ein Node bei einem anderen mit dem Peer-Token aufrufen darf (ebenso mit Präfix).
+const PEER_METHODS: &[&str] = &[
+    "activateLowresPreview", "releaseLowresPreview",
+    "pip.setAnimDelay", "pip.setSource", "pip.setPose", "pip.setEnabled", "crosspoint.setTransWindow",
+    "keyer.setSource", "keyer.setEnabled",
+    "show", "hide", "update",
+];
+
+/// Ist das ein Aufruf, den Nodes untereinander brauchen? Wer hier einen neuen `PeerClient`-Aufruf ergänzt, muss ihn
+/// in die Listen oben aufnehmen, sonst antwortet das Ziel in der Betriebsart "Token je Host" mit 401.
+pub fn peer_allowed(method: &str, path: &str) -> bool {
+    let bare = path.split('?').next().unwrap_or(path);
+    let (prefix, list) = if method.eq_ignore_ascii_case("GET") {
+        ("/params/", PEER_PARAMS)
+    } else if method.eq_ignore_ascii_case("POST") {
+        ("/methods/", PEER_METHODS)
+    } else {
+        return false;
+    };
+    let Some(name) = bare.strip_prefix(prefix) else { return false };
+    !name.contains(['/', '%'])
+        && list.iter().any(|allowed| name == *allowed || name.strip_suffix(allowed).is_some_and(|p| p.ends_with('.')))
+}
+
 /// Vergleich in konstanter Zeit (Längenunterschied verrät nur die Länge).
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -43,9 +76,9 @@ pub fn always_open(method: &str, path: &str) -> bool {
         || (method.eq_ignore_ascii_case("GET") && !dotted && (bare == "/https-info" || bare == "/x-nmos" || bare.starts_with("/x-nmos/")))
 }
 
-/// Hängt das Token (falls gesetzt) an eine ausgehende `ureq`-Anfrage an Nodes.
+/// Hängt das Token (falls gesetzt) an eine ausgehende `ureq`-Anfrage an Nodes: das Peer-Token, wenn es eines gibt.
 pub fn with_token<B>(req: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
-    match token() {
+    match peer_token().or_else(token) {
         Some(t) => req.header("X-OMP-Node-Token", t),
         None => req,
     }
@@ -71,6 +104,20 @@ mod tests {
         assert!(!authorized(Some("abc"), &h("ab")));
         assert!(!authorized(Some("abc"), &[]));
         assert!(!authorized(Some("abc"), &h("")));
+    }
+
+    #[test]
+    fn peer_token_opens_only_the_listed_calls() {
+        for (m, p) in [("GET", "/params/layers"), ("GET", "/params/me1.pip.canvas?x=1"), ("POST", "/methods/activateLowresPreview"), ("POST", "/methods/me2.keyer.setSource"), ("POST", "/methods/show")] {
+            assert!(peer_allowed(m, p), "{m} {p}");
+        }
+        for (m, p) in [
+            ("PATCH", "/params/layers"), ("POST", "/params/layers"), ("GET", "/methods/show"), ("POST", "/methods/take"),
+            ("POST", "/methods/crosspoint.take"), ("POST", "/methods/xshow"), ("POST", "/methods/show/x"), ("POST", "/methods/..%2fshow"),
+            ("GET", "/params/config"), ("PATCH", "/x-nmos/connection/v1.2/single/receivers/1/staged"), ("POST", "/state"),
+        ] {
+            assert!(!peer_allowed(m, p), "{m} {p}");
+        }
     }
 
     #[test]

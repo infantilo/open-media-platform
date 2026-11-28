@@ -6,8 +6,9 @@
 // OMP_NODE_API_TOKEN an jeden Node, den er startet; ein Node mit dieser Variable verlangt es in jeder Anfrage
 // (Header X-OMP-Node-Token) und antwortet sonst mit 401. Orchestrator und Nodes senden es an ihre Gegenstellen.
 //
-// Grenze: ein einziges Token für alle Nodes — wer einen Node übernimmt, kann damit die anderen Nodes ansprechen. Eine Token je
-// Instanz scheitert daran, dass Nodes einander direkt aufrufen (peer.rs) und dafür das Token des Ziels kennen müssten.
+// Standard: ein Token für alle Nodes — wer einen Node übernimmt, kann damit die anderen ansprechen. Mit
+// OMP_NODE_TOKEN_SCOPE=host bekommt jeder Host ein eigenes Token (nur der Orchestrator kennt alle); Nodes rufen
+// einander dann mit dem Peer-Token auf, das nur die freigegebenen Aufrufe öffnet (docs/decisions.md 2026-11-28).
 package nodeauth
 
 import (
@@ -27,12 +28,35 @@ const Env = "OMP_NODE_API_TOKEN"
 const Header = "X-OMP-Node-Token"
 
 // Derive leitet das Plattform-Token aus dem gemeinsamen Geheimnis ab. Leeres Geheimnis ergibt kein Token.
-func Derive(secret []byte) string {
+func Derive(secret []byte) string { return derive(secret, "omp-node-api-v1") }
+
+// PeerEnv: Peer-Token für Node-zu-Node-Aufrufe in der Betriebsart "Token je Host" (nur die Aufrufe, die ein Node
+// dafür freigibt, s. omp-node-sdk nodeauth::peer_allowed).
+const PeerEnv = "OMP_NODE_PEER_TOKEN"
+
+// ScopeEnv schaltet mit dem Wert "host" auf ein Node-API-Token je Host um (Review 2026-11-27 B3).
+const ScopeEnv = "OMP_NODE_TOKEN_SCOPE"
+
+// LocalHost steht im Host-Token für Instanzen ohne Host-Agent (auf dem Orchestrator-Rechner).
+const LocalHost = "local"
+
+// DeriveHost leitet das Token der Nodes eines Hosts ab; es öffnet nur deren APIs.
+func DeriveHost(secret []byte, hostID string) string {
+	if hostID == "" {
+		hostID = LocalHost
+	}
+	return derive(secret, "omp-node-api-v2:host:"+hostID)
+}
+
+// DerivePeer leitet das gemeinsame Peer-Token ab.
+func DerivePeer(secret []byte) string { return derive(secret, "omp-node-peer-v1") }
+
+func derive(secret []byte, label string) string {
 	if len(secret) == 0 {
 		return ""
 	}
 	m := hmac.New(sha256.New, secret)
-	m.Write([]byte("omp-node-api-v1"))
+	m.Write([]byte(label))
 	return hex.EncodeToString(m.Sum(nil))
 }
 
@@ -96,6 +120,22 @@ func trusted(host string) bool {
 // gemeinsame Geheimnis geladen ist) wirken sie; vorher senden sie nichts.
 func SetToken(t string) { current.Store(t) }
 
+var resolver atomic.Value // func(string) string
+
+// SetResolver setzt die Zuordnung Ziel (URL-Host "name:port") → Token dieses Ziels. Liefert sie "", geht das mit
+// SetToken gesetzte Token mit (extern gestartete Nodes). Ohne Resolver gilt immer dieses.
+func SetResolver(f func(hostport string) string) { resolver.Store(f) }
+
+// TokenFor liefert das Token, das an ein Ziel geht ("name:port").
+func TokenFor(hostport string) string {
+	if f, _ := resolver.Load().(func(string) string); f != nil {
+		if t := f(hostport); t != "" {
+			return t
+		}
+	}
+	return token()
+}
+
 func token() string {
 	t, _ := current.Load().(string)
 	return t
@@ -112,7 +152,7 @@ func Wrap(base http.RoundTripper) http.RoundTripper {
 }
 
 func (t *transport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if tok := token(); tok != "" && r.Header.Get(Header) == "" && internalHost(r.URL.Hostname()) {
+	if tok := TokenFor(r.URL.Host); tok != "" && r.Header.Get(Header) == "" && internalHost(r.URL.Hostname()) {
 		r = r.Clone(r.Context())
 		r.Header.Set(Header, tok)
 	}

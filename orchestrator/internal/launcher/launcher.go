@@ -379,6 +379,23 @@ func (l *Launcher) SetServiceToken(token string) {
 	l.serviceToken = token
 }
 
+// SetNodeTokenScope schaltet auf ein Node-API-Token je Host: hostToken liefert es für einen Host ("" = lokal),
+// peerToken ist das eingeschränkte Token für Node-zu-Node-Aufrufe. Vor dem ersten Start aufrufen.
+func (l *Launcher) SetNodeTokenScope(hostToken func(hostID string) string, peerToken string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.hostToken, l.peerToken = hostToken, peerToken
+}
+
+// nodeTokenFor ist das Node-API-Token, das eine Instanz auf hostID bekommt. Ohne l.mu aufrufen oder halten —
+// die Felder ändern sich nach dem Start nicht (s. SetNodeTokenScope).
+func (l *Launcher) nodeTokenFor(hostID string) string {
+	if l.hostToken != nil {
+		return l.hostToken(hostID)
+	}
+	return l.nodeAPIToken
+}
+
 // SetNodeAPIToken setzt das Node-API-Token (Audit 2026-10-23 B1, internal/nodeauth): jede vom Launcher gestartete Instanz bekommt es als
 // OMP_NODE_API_TOKEN und verlangt es dann in jeder Anfrage an ihre HTTP-API. Auf Hosts mit Host-Agent geht es im signierten Startkommando mit.
 func (l *Launcher) SetNodeAPIToken(token string) {
@@ -393,6 +410,9 @@ type Launcher struct {
 	serviceToken string
 	// nodeAPIToken s. SetNodeAPIToken (gleiche Sperr-Regel wie serviceToken).
 	nodeAPIToken string
+	// hostToken/peerToken s. SetNodeTokenScope (nil/"" = ein Token für alle).
+	hostToken func(hostID string) string
+	peerToken string
 	// respawned: IDs der Instanzen, die RestoreLocal nach Neustart/Reboot frisch (leer) gestartet hat.
 	respawned []string
 
@@ -1331,8 +1351,11 @@ func (l *Launcher) withOptions(nodeType, instanceID, valuesFrom string, extraEnv
 	if l.serviceToken != "" {
 		out[ServiceTokenEnv] = l.serviceToken // nur im Start-Umfeld, nie in Instance.ExtraEnv (das bleibt unverändert)
 	}
-	if l.nodeAPIToken != "" {
-		out[nodeauth.Env] = l.nodeAPIToken // ebenso nur im Start-Umfeld
+	if t := l.nodeTokenFor(""); t != "" {
+		out[nodeauth.Env] = t // ebenso nur im Start-Umfeld
+	}
+	if l.peerToken != "" {
+		out[nodeauth.PeerEnv] = l.peerToken
 	}
 	for k, v := range typeVals {
 		out[k] = v
@@ -2076,7 +2099,7 @@ func (l *Launcher) startRemotePre(nodeType, version, hostID, customLabel string,
 		ExtraEnv:     extraEnv,
 		Options:      l.remoteOptions(nodeType, id, optionsFrom, extraEnv),
 		LaunchSecret: launchSecret,
-		NodeAPIToken: l.nodeAPIToken,
+		NodeAPIToken: l.nodeTokenFor(hostID), NodePeerToken: l.peerToken,
 		ServiceToken: l.serviceToken,
 	})
 	if err != nil {
@@ -2121,6 +2144,8 @@ type remoteCommand struct {
 	LaunchSecret string `json:"launchSecret,omitempty"`
 	// NodeAPIToken: s. Launcher.SetNodeAPIToken; der Host-Agent setzt es als OMP_NODE_API_TOKEN (Audit B1).
 	NodeAPIToken string `json:"nodeApiToken,omitempty"`
+	// NodePeerToken: s. Launcher.SetNodeTokenScope (OMP_NODE_PEER_TOKEN).
+	NodePeerToken string `json:"nodePeerToken,omitempty"`
 	// ServiceToken: s. Launcher.SetServiceToken; der Host-Agent setzt es als OMP_SERVICE_TOKEN (Kapitel 48).
 	ServiceToken string `json:"serviceToken,omitempty"`
 	// Options (Kapitel 29): Node-Optionen; der Host-Agent prüft sie gegen sein EIGENES Schema.
@@ -2280,7 +2305,7 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 		// wie beim lokalen Restart-Pfad, s. execEntry-Aufrufstelle
 		// oben im Datei/"LaunchSecret aus dem getrackten Zustand"-Doku).
 		LaunchSecret: current.LaunchSecret,
-		NodeAPIToken: l.nodeAPIToken,
+		NodeAPIToken: l.nodeTokenFor(hostID), NodePeerToken: l.peerToken,
 		ServiceToken: l.serviceToken,
 	})
 	if err != nil || !resp.OK {
@@ -3097,7 +3122,7 @@ func (l *Launcher) restoreRemoteOne(inst Instance) {
 		resp, err := l.sendCommand(inst.HostID, remoteCommand{
 			Action: "start", Type: inst.Type, Version: inst.Version, InstanceID: inst.ID, Label: inst.Label,
 			ExtraEnv: inst.ExtraEnv, Options: l.remoteOptions(inst.Type, inst.ID, "", inst.ExtraEnv),
-			LaunchSecret: secret, NodeAPIToken: l.nodeAPIToken, ServiceToken: l.serviceToken,
+			LaunchSecret: secret, NodeAPIToken: l.nodeTokenFor(inst.HostID), NodePeerToken: l.peerToken, ServiceToken: l.serviceToken,
 		})
 		if err == nil && resp.OK {
 			inst.PID = resp.PID

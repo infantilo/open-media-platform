@@ -248,7 +248,7 @@ fn route(method: &Method, url: &str, body: &[u8], store: &Arc<dyn ParamStore>) -
 
 fn route_with_headers(method: &Method, url: &str, headers: &[(String, String)], body: &[u8], store: &Arc<dyn ParamStore>) -> ResponseBox {
     // Audit 2026-10-23 B1: mit gesetztem OMP_NODE_API_TOKEN nur Anfragen mit dem Token (s. crate::nodeauth).
-    if let Some(denied) = gate(crate::nodeauth::token(), method, url, headers, store) {
+    if let Some(denied) = gate(crate::nodeauth::token(), crate::nodeauth::peer_token(), method, url, headers, store) {
         return denied;
     }
     // Zustand der angemeldeten Medien-Pipelines (Support, Kap. 72.7); hinter derselben Zugangsprüfung wie alles andere.
@@ -399,9 +399,11 @@ fn route_with_headers(method: &Method, url: &str, headers: &[(String, String)], 
     error_response(404, "not found")
 }
 
-/// `Some(401)`, wenn `want` ein Token verlangt und die Anfrage weder es trägt noch offen ist.
-fn gate(want: Option<&str>, method: &Method, url: &str, headers: &[(String, String)], store: &Arc<dyn ParamStore>) -> Option<ResponseBox> {
-    if crate::nodeauth::authorized(want, headers) || crate::nodeauth::always_open(method.as_str(), url) || store.public_route(method.as_str(), url) {
+/// `Some(401)`, wenn `want` ein Token verlangt und die Anfrage weder es trägt noch offen ist noch ein freigegebener
+/// Node-zu-Node-Aufruf mit dem Peer-Token `peer` ist.
+fn gate(want: Option<&str>, peer: Option<&str>, method: &Method, url: &str, headers: &[(String, String)], store: &Arc<dyn ParamStore>) -> Option<ResponseBox> {
+    let by_peer = peer.is_some() && crate::nodeauth::peer_allowed(method.as_str(), url) && crate::nodeauth::authorized(peer, headers);
+    if by_peer || crate::nodeauth::authorized(want, headers) || crate::nodeauth::always_open(method.as_str(), url) || store.public_route(method.as_str(), url) {
         return None;
     }
     Some(error_response(401, "node api token required"))
@@ -499,11 +501,14 @@ mod tests {
     #[test]
     fn gate_blocks_without_token_and_passes_with_it() {
         let store = store_without_plugins();
-        let denied = |m: Method, url: &str, h: &[(String, String)]| gate(Some("secret"), &m, url, h, &store).map(|r| r.status_code().0);
+        let denied = |m: Method, url: &str, h: &[(String, String)]| gate(Some("secret"), Some("peer"), &m, url, h, &store).map(|r| r.status_code().0);
         assert_eq!(denied(Method::Patch, "/params/x", &[]), Some(401));
         assert_eq!(denied(Method::Post, "/methods/x", &tok("wrong")), Some(401));
         assert_eq!(denied(Method::Get, "/descriptor.json", &[]), Some(401));
         assert_eq!(denied(Method::Post, "/label", &[]), Some(401));
+        assert_eq!(denied(Method::Post, "/methods/activateLowresPreview", &tok("peer")), None);
+        assert_eq!(denied(Method::Post, "/methods/x", &tok("peer")), Some(401));
+        assert_eq!(denied(Method::Patch, "/params/x", &tok("peer")), Some(401));
         assert_eq!(denied(Method::Post, "/methods/x", &tok("secret")), None);
         assert_eq!(denied(Method::Options, "/params/x", &[]), None);
         assert_eq!(denied(Method::Get, "/https-info", &[]), None);
@@ -528,7 +533,7 @@ mod tests {
     #[test]
     fn gate_is_off_without_a_configured_token() {
         let store = store_without_plugins();
-        assert!(gate(None, &Method::Patch, "/params/x", &[], &store).is_none());
+        assert!(gate(None, None, &Method::Patch, "/params/x", &[], &store).is_none());
     }
 
     #[test]

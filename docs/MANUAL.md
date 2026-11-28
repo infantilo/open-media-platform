@@ -570,6 +570,11 @@ with TLS (client and cluster port), authentication and no placeholder passwords;
 nodes inherit the starter's credentials). Logs and UI show the address without credentials. The dev setup
 (`make up`) stays unauthenticated.
 
+**Node API token per host (optional).** By default all nodes share one API token. `OMP_NODE_TOKEN_SCOPE=host` on the
+orchestrator (on every cluster member) gives each host its own; between nodes only the calls they really need remain
+possible. Update nodes and host agents before enabling it, then **restart all instances** — until then running nodes
+answer the orchestrator with 401. The same applies when disabling it.
+
 **Database cluster in production.** The etcd and Patroni quadlets require TLS with certificates (etcd: client and
 peer port; Patroni REST: writing only with certificate and credentials) and own passwords from
 `/etc/omp/patroni.env`, including the database role `omp` (`OMP_DB_PASSWORD`). Setup and migration:

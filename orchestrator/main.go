@@ -672,6 +672,26 @@ func main() {
 	}
 	launcherSvc.SetNodeAPIToken(nodeAPIToken)
 	nodeauth.SetToken(nodeAPIToken)
+	// Review 2026-11-27 B3: auf Wunsch ein Token je Host. Wirkt für ab jetzt gestartete Instanzen; bereits laufende
+	// behalten ihr altes Token und müssen nach dem Umschalten neu gestartet werden.
+	if os.Getenv(nodeauth.ScopeEnv) == "host" {
+		launcherSvc.SetNodeTokenScope(func(hostID string) string { return nodeauth.DeriveHost(jwtSecret, hostID) }, nodeauth.DerivePeer(jwtSecret))
+		nodeauth.SetResolver(nodeauth.HostResolver(jwtSecret, func() []nodeauth.Target {
+			hostOf := map[string]string{}
+			for _, inst := range launcherSvc.List() {
+				hostOf[inst.ID] = inst.HostID
+			}
+			var targets []nodeauth.Target
+			for _, view := range store.List() {
+				// Extern gestartete Nodes (ohne Instanz) bekommen weiter das Plattform-Token.
+				if hostID, ok := hostOf[view.InstanceID]; ok && view.APIBaseURL != "" {
+					targets = append(targets, nodeauth.Target{BaseURL: view.APIBaseURL, HostID: hostID})
+				}
+			}
+			return targets
+		}))
+		slog.Info("node api token scope: one token per host")
+	}
 	nodeauth.SetExtraHosts(strings.Split(os.Getenv("OMP_NODE_API_TOKEN_HOSTS"), ","))
 	// Nach Neustart/Reboot die zuvor laufenden Instanzen wieder starten (lokale hier, Instanzen auf
 	// Host-Agents vom Cluster-Leader, s. unten).

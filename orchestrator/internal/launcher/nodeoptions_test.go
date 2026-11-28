@@ -139,3 +139,17 @@ func TestStartWithOptionsAppliesInstanceValuesAtFirstStart(t *testing.T) {
 		t.Fatalf("Instanz-Werte: %v", vals)
 	}
 }
+
+// Token je Host: lokale Starts bekommen das Token von "lokal" plus das Peer-Token.
+func TestNodeTokenScopePerHost(t *testing.T) {
+	l := &Launcher{}
+	l.SetNodeAPIToken("plattform")
+	if got := l.nodeTokenFor("h1"); got != "plattform" {
+		t.Fatalf("ohne Scope: %q", got)
+	}
+	l.SetNodeTokenScope(func(h string) string { return "t-" + h }, "peer")
+	env := l.withOptions("x", "i", "", nil)
+	if env["OMP_NODE_API_TOKEN"] != "t-" || env["OMP_NODE_PEER_TOKEN"] != "peer" || l.nodeTokenFor("h1") != "t-h1" {
+		t.Fatalf("env = %v", env)
+	}
+}

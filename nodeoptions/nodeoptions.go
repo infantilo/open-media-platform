@@ -107,7 +107,7 @@ var (
 	// reserved sind Variablen, die der Launcher selbst setzt — nie überschreibbar.
 	reserved = map[string]bool{
 		"OMP_INSTANCE_ID": true, "OMP_LABEL": true, "OMP_PORT": true, "OMP_REGISTRY_URL": true,
-		"OMP_NATS_URL": true, "OMP_ORCHESTRATOR_URL": true, "OMP_LAUNCH_SECRET": true,
+		"OMP_NATS_URL": true, "OMP_NODE_API_TOKEN": true, "OMP_NODE_PEER_TOKEN": true, "OMP_ORCHESTRATOR_URL": true, "OMP_LAUNCH_SECRET": true,
 		"OMP_WORKFLOW_ID": true, "OMP_ROLE_SEED": true,
 	}
 

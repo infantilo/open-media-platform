@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/errcodes"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/nodeauth"
 	"io"
 	"net/http"
 	"net/url"
@@ -209,6 +210,7 @@ func handleNodeStreamProxy(nodes NodeLister, client *http.Client) http.HandlerFu
 			http.Error(w, "failed to build stream request", http.StatusInternalServerError)
 			return
 		}
+		nodeauth.Attach(streamReq, node.APIBaseURL)
 		streamResp, err := client.Do(streamReq)
 		if err != nil {
 			cache.dropURL(key)

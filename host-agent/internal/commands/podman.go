@@ -43,7 +43,7 @@ func (e *Executor) startPodman(req Request, entry catalog.Entry, extra map[strin
 	containerID, _, err := podmanrun.Run(podmanEntry(entry), podmanrun.Params{
 		ID: req.InstanceID, Label: label, LaunchSecret: req.LaunchSecret, ExtraEnv: extra,
 		RegistryURL: e.registryURL, OrchestratorURL: e.orchestratorURL, NatsURL: e.natsURL,
-		AdvertiseHost: os.Getenv("OMP_HOST"), NodeAPIToken: req.NodeAPIToken, ServiceToken: req.ServiceToken,
+		AdvertiseHost: os.Getenv("OMP_HOST"), NodeAPIToken: req.NodeAPIToken, NodePeerToken: req.NodePeerToken, ServiceToken: req.ServiceToken,
 	})
 	if err != nil {
 		return Response{OK: false, Error: fmt.Sprintf("start: %v", err)}

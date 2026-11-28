@@ -51,6 +51,8 @@ type Params struct {
 	AdvertiseHost string
 	// NodeAPIToken: wird als OMP_NODE_API_TOKEN gesetzt (leer = nicht gesetzt).
 	NodeAPIToken string
+	// NodePeerToken: wird als OMP_NODE_PEER_TOKEN gesetzt (leer = nicht gesetzt).
+	NodePeerToken string
 	// ServiceToken: wird als OMP_SERVICE_TOKEN gesetzt (leer = nicht gesetzt).
 	ServiceToken string
 }
@@ -216,6 +218,9 @@ func BuildArgs(e Entry, p Params, port, extraPort int) []string {
 	}
 	if p.NodeAPIToken != "" {
 		merged["OMP_NODE_API_TOKEN"] = p.NodeAPIToken
+	}
+	if p.NodePeerToken != "" {
+		merged["OMP_NODE_PEER_TOKEN"] = p.NodePeerToken
 	}
 	if p.ServiceToken != "" {
 		merged["OMP_SERVICE_TOKEN"] = p.ServiceToken

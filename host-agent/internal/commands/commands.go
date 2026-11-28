@@ -159,6 +159,8 @@ type Request struct {
 	// NodeAPIToken (Audit 2026-10-23 B1): Node-API-Token der Plattform; der gestartete Node bekommt es als OMP_NODE_API_TOKEN und verlangt es dann
 	// in jeder Anfrage an seine HTTP-API. Es kommt nur in signierten Startkommandos (s. cmdauth) und nicht über ExtraEnv.
 	NodeAPIToken string `json:"nodeApiToken,omitempty"`
+	// NodePeerToken: bei "Token je Host" das eingeschränkte Token für Node-zu-Node-Aufrufe (OMP_NODE_PEER_TOKEN).
+	NodePeerToken string `json:"nodePeerToken,omitempty"`
 	// ServiceToken (Kapitel 48): Dienst-Token des Orchestrators; der gestartete Node bekommt es als OMP_SERVICE_TOKEN (nimmt Dienst-Routen
 	// nur damit an). Leer (älterer Orchestrator) = der Wert aus der Umgebung des Agents wird vererbt, falls gesetzt.
 	ServiceToken string `json:"serviceToken,omitempty"`
@@ -499,6 +501,9 @@ func (e *Executor) start(req Request) Response {
 	env := buildEnv(entry.Env, extra, req.InstanceID, req.Label, e.registryURL, e.natsURL, e.orchestratorURL, req.LaunchSecret)
 	if req.NodeAPIToken != "" {
 		env = append(env, "OMP_NODE_API_TOKEN="+req.NodeAPIToken)
+	}
+	if req.NodePeerToken != "" {
+		env = append(env, "OMP_NODE_PEER_TOKEN="+req.NodePeerToken)
 	}
 	if req.ServiceToken != "" {
 		env = append(env, "OMP_SERVICE_TOKEN="+req.ServiceToken) // letzter Eintrag gewinnt gegen einen vererbten

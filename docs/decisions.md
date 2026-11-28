@@ -30962,3 +30962,22 @@ Passwörter in `/etc/omp/patroni.env`, Start verweigert bei Platzhaltern. Behobe
 Abweisung ohne Zertifikat/Anmeldung, Datenbank-Passwort mit Sonderzeichen. Dabei gefunden: eine CA ohne
 `keyUsage` lehnt Patroni ab. **Nicht geprüft:** Start unter systemd (Quadlet), Umstellung eines Altbestands.
 **Offen:** TLS für Postgres selbst.
+
+## 2026-11-28 — Node-API-Token je Host, zuschaltbar (Review-Paket P5)
+
+Bisher gilt ein aus dem JWT-Geheimnis abgeleitetes Token für alle Nodes; wer einen Node übernimmt, steuert alle.
+Mit `OMP_NODE_TOKEN_SCOPE=host` (Orchestrator, alle Cluster-Mitglieder) bekommt jede Instanz das Token ihres Hosts
+(HMAC über die Host-ID, ohne Host-Agent `local`) als `OMP_NODE_API_TOKEN`; der Orchestrator wählt je Ziel das
+passende (`nodeauth.HostResolver`). Für Aufrufe zwischen Nodes gibt es zusätzlich `OMP_NODE_PEER_TOKEN`, das nur die
+Liste in `omp-node-sdk/src/nodeauth.rs` (`peer_allowed`) öffnet.
+
+Abgewogen: (a) Token je Instanz, Orchestrator verteilt Ziel-Token je Verbindung — enger, aber Peer-Ziele werden in
+mehreren Nodes erst zur Laufzeit aus der Registry bestimmt; (b) Token je Host ohne Peer-Token — bricht
+Node-Aufrufe über Hostgrenzen (Multiviewer/Switcher-Vorschau, Grafik↔Mischer, Fabrics-Gateway); (c) signierte
+Kurzzeit-Token — Zielbindung bräuchte dieselbe Zuordnung, ohne sie wären sie weiterreichbar. Standard bleibt aus,
+weil das Umschalten alle Instanzen neu starten und neue Node- und Host-Agent-Programme voraussetzt.
+
+**Grenzen:** Ein übernommener Node kann mit dem Peer-Token weiterhin die gelisteten Aufrufe ausführen (u. a.
+PIP, Keyer, Grafik ein/aus). Nodes desselben Hosts teilen sich das Token. Das Dienst-Token (`OMP_SERVICE_TOKEN`)
+ist weiter für alle gleich. Extern gestartete Nodes erhalten wie bisher das Plattform-Token. Nicht live auf
+mehreren Hosts und nicht im Orchestrator-Cluster geprüft.
