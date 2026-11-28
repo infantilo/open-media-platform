@@ -31008,3 +31008,16 @@ vor einem Fehler wiederhergestellt und eingespielt, Zeitzonen, Zeit vor/nach dem
 `make stop` endete mit SIGKILL: `http.Server.Shutdown` wartet auf SSE- und Stream-Verbindungen bis zur Frist von
 5 s, genauso lange wartete das Stop-Skript (Log: „graceful shutdown failed, forcing close“ bei jedem Stopp).
 Jetzt endet der Kontext aller Anfragen nach 1 s, Frist 3 s, Stop-Skript wartet bis 10 s.
+
+## 2026-11-28 — Offene Punkte (für später)
+
+- Das Dienst-Token (`OMP_SERVICE_TOKEN`) ist für alle Nodes gleich.
+- Postgres-Verbindungen und Replikation sind unverschlüsselt.
+- NATS: alle Host-Agents teilen sich einen Benutzer, alle Nodes ebenso.
+- Mit `OMP_NODE_TOKEN_SCOPE=host` bleiben die Node-zu-Node-Aufrufe der Peer-Liste für jeden Node möglich.
+- Das Wurzelgeheimnis (Node- und Cluster-Token) hat keinen Wechselablauf; die lokale Startwert-Datei bleibt Klartext.
+- Nicht geprüft: Quadlets (NATS, etcd, Patroni, Basissicherung) unter systemd; Umstellung eines Altbestands;
+  Token je Host auf mehreren Rechnern und im Orchestrator-Cluster; Wiederherstellung auf einen Zeitpunkt über einen
+  Failover und auf einem Netzlaufwerk.
+- Am laufenden System ansehen: Workflow „OGraf folgt PIPs (Demo)“ zeigt nach Stop/Start die PIP-Wand ohne Zutun;
+  `make nodes` einmal vollständig bauen.
