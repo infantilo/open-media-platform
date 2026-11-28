@@ -160,6 +160,23 @@ pub fn panel_url(node_base: &str, request_host: &str, token: &str, https: &Value
     format!("{scheme}://{}{q}", join_host_port(&host, &port))
 }
 
+/// Link für einen **Gast** (wird weitergegeben, in die Handy-Kamera-Seite eingebettet und gespeichert). Anders als `panel_url`
+/// nie über den Node-Port: der wechselt bei jedem Start, ein gespeicherter Link liefe ins Leere („Verbindung abgelehnt“).
+/// Mit HTTPS immer dessen fester Port (`OMP_HTTPS_PORT`), auch wenn der Aussteller über `localhost` arbeitet.
+pub fn guest_url(node_base: &str, request_host: &str, token: &str, https: &Value) -> String {
+    let port = https.get("port").and_then(Value::as_u64).filter(|p| *p > 0);
+    let (true, Some(port)) = (https.get("enabled").and_then(Value::as_bool) == Some(true), port) else {
+        return panel_url(node_base, request_host, token, https);
+    };
+    let mut host = split_base(node_base).map(|(h, _)| h).unwrap_or_else(|| "127.0.0.1".into());
+    if is_loopback(&host) {
+        if let Some((h, _)) = split_base(request_host).filter(|(h, _)| !h.is_empty()) {
+            host = h;
+        }
+    }
+    format!("https://{}/panel?token={}", join_host_port(&host, &port.to_string()), query_escape(token))
+}
+
 /// Kennzahlen im Prometheus-Textformat.
 pub fn metrics_text(online: usize, total: usize, underruns: i64, late_ticks: u64, max_tick_us: u64) -> String {
     format!(
@@ -306,6 +323,15 @@ mod tests {
         assert_eq!(panel_url("http://127.0.0.1:7001", "localhost:8080", "t", &https), "http://localhost:7001/panel?token=t");
         assert_eq!(panel_url("http://127.0.0.1:7001", "127.0.0.1:8080", "t", &https), "http://127.0.0.1:7001/panel?token=t");
         assert_eq!(panel_url("http://[::1]:7001", "[::1]:8080", "a b", &https), "http://[::1]:7001/panel?token=a%20b");
+    }
+
+    #[test]
+    fn guest_url_keeps_the_fixed_https_port_even_on_the_same_machine() {
+        let https = json!({"enabled": true, "port": 9445});
+        assert_eq!(guest_url("http://127.0.0.1:7001", "localhost:8000", "t", &https), "https://localhost:9445/panel?token=t");
+        assert_eq!(guest_url("http://127.0.0.1:7001", "studio.lan:8000", "t", &https), "https://studio.lan:9445/panel?token=t");
+        assert_eq!(guest_url("http://10.0.0.5:7001", "localhost:8000", "t", &https), "https://10.0.0.5:9445/panel?token=t");
+        assert_eq!(guest_url("http://127.0.0.1:7001", "localhost:8000", "t", &json!({"enabled": false})), "http://localhost:7001/panel?token=t");
     }
 
     #[test]

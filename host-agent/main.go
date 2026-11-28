@@ -123,6 +123,17 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// requireCommandKey: nur ein ausdrückliches „false“ (oder 0) lässt unsignierte Kommandos zu; leer oder unlesbar nicht.
+func requireCommandKey(value string) bool {
+	v, err := strconv.ParseBool(value)
+	return err != nil || v
+}
+
+func envBool(key string) bool {
+	v, _ := strconv.ParseBool(os.Getenv(key))
+	return v
+}
+
 // loadNatsTLSConfig baut die *tls.Config für eine mTLS-gesicherte
 // NATS-Verbindung (ARCHITECTURE.md §20.4 Restlücke "NATS-
 // Verschlüsselung") — liefert (nil, nil), solange
@@ -283,6 +294,12 @@ func main() {
 	defer nc.Close()
 
 	executor := commands.NewExecutor(cat, registryURL, natsURL, orchestratorURL, st.HostID, nc)
+	// Zustand (Kommandoschlüssel) und Katalog (bestimmt, was gestartet wird) sind für Dateioperationen tabu.
+	catalogDir := ""
+	if catalogPath != "" {
+		catalogDir = filepath.Dir(catalogPath)
+	}
+	executor.SetProtectedPaths(statePath, catalogDir)
 	// Kapitel 29: agent-lokales Optionsschema (Sicherheitsgrenze: der Host entscheidet, welche
 	// Variablen der Orchestrator pro Node-Typ setzen darf). Fehlt die Datei, bleibt alles wie früher.
 	optionsPath := envOr("OMP_HOST_AGENT_NODE_OPTIONS", filepath.Join(filepath.Dir(catalogPath), "node-options.json"))
@@ -337,11 +354,16 @@ func main() {
 		}
 	}
 	cmdSubject := fmt.Sprintf("omp.host.%s.cmd", st.HostID)
-	requireKey, _ := strconv.ParseBool(envOr("OMP_HOST_AGENT_REQUIRE_KEY", "false"))
-	gate := &commands.Gate{RequireKey: requireKey, Verifier: jobwire.NewVerifier(st.CmdKey), Persist: func(key string) error {
-		st.CmdKey = key
-		return state.Save(statePath, st)
-	}}
+	gate := &commands.Gate{
+		RequireKey:         requireCommandKey(os.Getenv("OMP_HOST_AGENT_REQUIRE_KEY")),
+		AllowNATSProvision: envBool("OMP_HOST_AGENT_ALLOW_NATS_PROVISION"),
+		EncryptedTransport: natsTLSConfig != nil,
+		Verifier:           jobwire.NewVerifier(st.CmdKey),
+		Persist: func(key string) error {
+			st.CmdKey = key
+			return state.Save(statePath, st)
+		},
+	}
 	if reset, _ := strconv.ParseBool(envOr("OMP_HOST_AGENT_RESET_TERM", "false")); reset && st.MaxTerm != 0 {
 		// Notausgang: wurde der Raft-Speicher des Orchestrators neu angelegt, beginnen die Amtszeiten wieder bei 1 und der Agent würde jedes
 		// Kommando als „früherer Leader“ abweisen. Einmal mit dieser Variable starten, dann wieder ohne.
@@ -355,8 +377,14 @@ func main() {
 			slog.Warn("could not persist the leader term", "error", err)
 		}
 	})
-	if st.CmdKey == "" {
-		slog.Warn("no command key yet — commands are accepted unsigned until the orchestrator provisions one")
+	switch {
+	case st.CmdKey != "":
+	case !gate.RequireKey:
+		slog.Warn("INSECURE: no command key and OMP_HOST_AGENT_REQUIRE_KEY=false — every NATS participant can start processes on this host")
+	case gate.AllowNATSProvision:
+		slog.Warn("no command key yet — waiting for the orchestrator to send one over NATS (the first sender wins; remove OMP_HOST_AGENT_ALLOW_NATS_PROVISION afterwards)")
+	default:
+		slog.Error("no command key — all commands are refused. Register this host again, or start once with OMP_HOST_AGENT_ALLOW_NATS_PROVISION=1")
 	}
 	cmdSub, err := nc.Subscribe(cmdSubject, func(msg *nats.Msg) {
 		req, err := commands.DecodeRequest(msg.Data)

@@ -9,6 +9,8 @@
 #   OMP_ORCHESTRATOR_URL=http://192.168.0.60:8000
 #   OMP_REGISTRY_URL=http://192.168.0.60:8010
 #   OMP_NATS_URL=nats://192.168.0.60:4222,nats://192.168.0.60:4223,nats://192.168.0.60:4224
+#   # Dateiverwaltung: nur diese Verzeichnisse (sonst OMP_MEDIA_MOUNTS; ohne beides keine Dateioperationen)
+#   OMP_FILE_ROOTS=/srv/media:/srv/review
 #   # nur beim allerersten Start (Registrierung): OMP_HOST_AGENT_BOOTSTRAP_TOKEN=...
 # Hinweis: Beim Stoppen/Neustarten des Dienstes werden die vom Agent gestarteten Nodes mit beendet.
 [Unit]

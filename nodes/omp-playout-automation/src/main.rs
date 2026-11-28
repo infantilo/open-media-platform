@@ -64,6 +64,7 @@ mod foreign;
 mod hooks;
 mod mixersetup;
 mod persist;
+mod playlistfile;
 use omp_playout_core::playlist;
 use omp_playout_core::readiness;
 use omp_playout_core::remote;
@@ -425,6 +426,21 @@ fn resolve_live_selector(selector: &omp_resolver::Selector, sources: &[omp_resol
         Some(id) => Ok((id, resolution)),
         None => Err(format!("Live-Quelle nicht auflösbar — {}", resolution.summary)),
     }
+}
+
+/// Tauscht die komplette Liste aus (`load`, `playlist.import` mit `replace`). Reine Listenoperation: die Kanäle
+/// bleiben unangetastet.
+fn replace_playlist(state: &mut AutomationState, ids: Vec<String>, metadata: HashMap<String, ItemMeta>, asrun_reason: &str) {
+    // Der Fixtime-Stand hängt an Item-IDs, die gerade neu vergeben wurden.
+    state.fixtime_resolved.clear();
+    state.playlist.replace_all(ids);
+    state.asrun.end(chrono::Utc::now().timestamp_millis(), "INTERRUPTED", asrun_reason);
+    state.metadata = metadata;
+    state.onair_since = None;
+    // Das gemerkte letzte Live-Item gibt es in der neuen Liste nicht mehr.
+    state.last_live_item_id = None;
+    // C20: Zeitplan-Cache ab Index 0 ungültig.
+    state.timeline.invalidate_from(0);
 }
 
 /// Baut `ItemMedia` aus den vom Operator übergebenen Rohargumenten —
@@ -1778,20 +1794,7 @@ impl AutomationStore {
                 *target_id = ids[*t].clone();
             }
         }
-        state.fixtime_resolved.clear();
-        state.playlist.replace_all(ids);
-        state.asrun.end(chrono::Utc::now().timestamp_millis(), "INTERRUPTED", "Playlist ersetzt (load)");
-        state.metadata = metadata;
-        state.onair_since = None;
-        // Die Rundown-Liste wurde komplett ersetzt — eine vorher
-        // gemerkte last_live_item_id existiert danach evtl. nicht mehr
-        // in `state.metadata`, s. dortige Doku. Der aktuell laufende
-        // Kanal selbst bleibt unangetastet (kein `take_on_targets`-
-        // Aufruf hier, reine Listenoperation).
-        state.last_live_item_id = None;
-        // C20: komplette Playlist ersetzt, Zeitplan-Cache ab Index 0
-        // ungültig.
-        state.timeline.invalidate_from(0);
+        replace_playlist(&mut state, ids, metadata, "Playlist ersetzt (load)");
         Ok(())
     }
 
@@ -4174,6 +4177,8 @@ impl ParamStore for AutomationStore {
                 range: None,
                 readonly: false,
             },
+            // Playlist als Datei (Panel „Speichern“), Gegenstück zur Methode `playlist.import`.
+            ParamSpec { name: "playlistDocument".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             ParamSpec { name: "audioRouting".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
             // Wartet die Sendung auf den Operator (HOLD-Event, Manual Hold am Ende, manueller Start des Nachfolgers)? → Next blinkt.
             ParamSpec { name: "operatorWait".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
@@ -4407,6 +4412,13 @@ impl ParamStore for AutomationStore {
                     name: "itemsJson".to_string(),
                     kind: ParamType::String,
                 }],
+            },
+            MethodSpec {
+                name: "playlist.import".to_string(),
+                args: vec![
+                    MethodArg { name: "documentJson".to_string(), kind: ParamType::String },
+                    MethodArg { name: "mode".to_string(), kind: ParamType::String },
+                ],
             },
             MethodSpec {
                 name: "remove".to_string(),
@@ -4707,6 +4719,7 @@ impl ParamStore for AutomationStore {
                     }))
                     .collect::<Vec<_>>()
             )),
+            "playlistDocument" => Some(serde_json::json!(playlistfile::export(&state))),
             "currentItemId" => Some(serde_json::json!(current_or_cued_id(&state, true))),
             "cuedItemId" => Some(serde_json::json!(current_or_cued_id(&state, false))),
             "mode" => Some(serde_json::json!(match state.playlist.mode() {
@@ -4937,6 +4950,10 @@ impl ParamStore for AutomationStore {
                 let items_json = args.get("itemsJson").and_then(Value::as_str).unwrap_or("[]");
                 self.do_load(items_json)
             }
+            "playlist.import" => self.do_import_playlist(
+                args.get("documentJson").and_then(Value::as_str).unwrap_or(""),
+                args.get("mode").and_then(Value::as_str).unwrap_or(""),
+            ),
             "remove" => match args.get("itemId").and_then(Value::as_str) {
                 Some(id) => self.do_remove(id),
                 None => Err("itemId fehlt".to_string()),
@@ -5153,7 +5170,7 @@ impl ParamStore for AutomationStore {
         if result.is_ok()
             && matches!(
                 name,
-                "append" | "appendAsset" | "load" | "remove" | "moveItem" | "duplicateItems" | "updateItem" | "setStartType" | "setTransition" | "setAudio" | "setChildren" | "setMediaRef"
+                "append" | "appendAsset" | "load" | "playlist.import" | "remove" | "moveItem" | "duplicateItems" | "updateItem" | "setStartType" | "setTransition" | "setAudio" | "setChildren" | "setMediaRef"
             )
         {
             hooks::fire("playlistEvent", serde_json::json!({ "method": name, "channelId": structlog::current_channel(), "args": Value::Object(args.clone()) }));

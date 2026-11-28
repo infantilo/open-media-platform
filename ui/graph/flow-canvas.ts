@@ -102,10 +102,14 @@ const HOST_ZONE_LANE_GAP = 30;
 const HOST_ZONE_MIN_LANE_WIDTH = NODE_WIDTH + 40;
 const HOST_ZONE_RESIZE_HANDLE_WIDTH = 8;
 const HOST_ZONE_HEADER_HEIGHT = 46;
-// Kap. 88: Zeilen der Workflow-Pads an der Kachel (Eingänge links, Ausgänge rechts); Zeile 2 trägt bei mehr Pads das „+n“.
-const WORKFLOW_PAD_ROWS = 2;
+// Kap. 88: Zeilen der Workflow-Pads an der Kachel (Eingänge links, Ausgänge rechts); die Kachel wächst mit der Zahl der Pads.
 const WORKFLOW_PAD_FIRST_Y = 12;
 const WORKFLOW_PAD_GAP = 18;
+function workflowTileHeight(wf: WorkflowSummary | undefined): number {
+  const ifc = wf?.definition.interface as WorkflowInterface | undefined;
+  const rows = Math.max(ifc?.inputs?.length ?? 0, ifc?.outputs?.length ?? 0, 1);
+  return HEADER_HEIGHT + Math.max(MIN_BODY_HEIGHT, 2 * WORKFLOW_PAD_FIRST_Y + (rows - 1) * WORKFLOW_PAD_GAP);
+}
 // Höhe des "Geplant"-Blocks am Fuß einer Host-Zone (Titelzeile + eine Zeile je nicht gestartetem Workflow).
 function ghostBlockHeight(entries: number): number {
   return 36 + entries * 14;
@@ -115,8 +119,9 @@ function ghostBlockHeight(entries: number): number {
 const WORKFLOW_BAND_CAPTION = 20;
 const WORKFLOW_BAND_ROW_GAP = 10;
 const WORKFLOW_BAND_PAD = 10;
-function workflowBandHeight(count: number): number {
-  return count > 0 ? WORKFLOW_BAND_CAPTION + count * (MIN_BODY_HEIGHT + HEADER_HEIGHT + WORKFLOW_BAND_ROW_GAP) + WORKFLOW_BAND_PAD : 0;
+function workflowBandHeight(workflows: WorkflowSummary[]): number {
+  const tiles = workflows.reduce((sum, wf) => sum + workflowTileHeight(wf) + WORKFLOW_BAND_ROW_GAP, 0);
+  return workflows.length > 0 ? WORKFLOW_BAND_CAPTION + tiles + WORKFLOW_BAND_PAD : 0;
 }
 const HOST_ZONE_TILE_GAP = 36; // inkl. Platz für die Reiter (Domain, Host) über der nächsten Kachel
 const HOST_ZONE_MARGIN = 24;
@@ -1514,6 +1519,10 @@ export class FlowCanvas extends HTMLElement {
   // Nutzerwunsch 2026-07-26: "im Root soll ein Workflow aussehen wie
   // eine Gruppe", auch während er läuft — also eine Position pro
   // Workflow statt (wie vorher, nur für laufende) einer pro Runtime-Node.
+  #workflowTileHeightById(tileId: string): number {
+    return workflowTileHeight(this.#workflows.find((w) => w.id === workflowIdFromTileId(tileId)));
+  }
+
   #allWorkflowTileIds(): string[] {
     return this.#workflows.map((wf) => workflowTileId(wf.id));
   }
@@ -1680,7 +1689,7 @@ export class FlowCanvas extends HTMLElement {
   // "Geplant"-Einträge einer Host-Zone: nicht gestartete Workflows, die sich über mehrere Zonen verteilen.
   #zoneTopInset(zoneId: string): number {
     if (this.#collapsedZoneIds.has(zoneId)) return 0;
-    return this.#ghostBlockInset(zoneId) + workflowBandHeight(this.#workflowsForZone(zoneId).length);
+    return this.#ghostBlockInset(zoneId) + workflowBandHeight(this.#workflowsForZone(zoneId));
   }
   #ghostBlockInset(zoneId: string): number {
     const n = this.#ghostsForZone(zoneId).length;
@@ -1845,11 +1854,10 @@ export class FlowCanvas extends HTMLElement {
     // keine Ports), teilen sich aber denselben Lane-Stapel wie die echten
     // Root-Kacheln ihrer Zone (#zoneIdForWorkflow), sonst bleiben sie wie
     // vor diesem Fix frei schwebend außerhalb des Host-Fensters.
-    const workflowHeight = MIN_BODY_HEIGHT + HEADER_HEIGHT;
     const workflowEntries = this.#workflowsInScope().map((wf) => ({
       id: workflowTileId(wf.id),
       zoneId: this.#zoneIdForWorkflow(wf),
-      height: workflowHeight,
+      height: workflowTileHeight(wf),
     }));
     const laneOffsets = this.#laneOffsets(tiles);
     for (const zone of zones) {
@@ -1900,9 +1908,11 @@ export class FlowCanvas extends HTMLElement {
       // Überschrift, dann eine Kachel je Zeile. Die Node-Kacheln beginnen darunter (Reservierung über `ghostInset`).
       const bandTop = HOST_ZONE_HEADER_HEIGHT + this.#ghostBlockInset(zone.id) + WORKFLOW_BAND_CAPTION;
       const bandX = x + Math.max(WORKFLOW_BAND_PAD, Math.floor((laneWidth - NODE_WIDTH) / 2));
-      this.#workflowsForZone(zone.id).forEach((wf, i) => {
-        finalPos.set(workflowTileId(wf.id), { x: bandX, y: bandTop + i * (workflowHeight + WORKFLOW_BAND_ROW_GAP) });
-      });
+      let bandY = bandTop;
+      for (const wf of this.#workflowsForZone(zone.id)) {
+        finalPos.set(workflowTileId(wf.id), { x: bandX, y: bandY });
+        bandY += workflowTileHeight(wf) + WORKFLOW_BAND_ROW_GAP;
+      }
       // Kacheln stehen mittig in der Lane (wie die Workflow-Kacheln), nicht bündig auf dem Zonenrand; gemerkte Positionen
       // von früher, die am Rand klebten, rücken hierher.
       const tileX = x + Math.max(WORKFLOW_BAND_PAD, Math.floor((laneWidth - NODE_WIDTH) / 2));
@@ -3136,10 +3146,9 @@ export class FlowCanvas extends HTMLElement {
     const pos = this.#positions[workflowTileId(workflowId)];
     if (idx < 0 || !pos) return null;
     if (this.#hostViewEnabled && this.#scope === null && wf && this.#collapsedZoneIds.has(this.#zoneIdForWorkflow(wf))) return null;
-    const row = Math.min(idx, WORKFLOW_PAD_ROWS - 1);
     return {
       x: pos.x + (side === "input" ? 0 : NODE_WIDTH),
-      y: pos.y + HEADER_HEIGHT + WORKFLOW_PAD_FIRST_Y + row * WORKFLOW_PAD_GAP,
+      y: pos.y + HEADER_HEIGHT + WORKFLOW_PAD_FIRST_Y + idx * WORKFLOW_PAD_GAP,
     };
   }
 
@@ -3323,10 +3332,9 @@ export class FlowCanvas extends HTMLElement {
     return lines;
   }
 
-  // Kap. 88: Pads der Workflow-Schnittstelle am Rand der Workflow-Kachel — Eingänge links, Ausgänge rechts, höchstens zwei
-  // Zeilen je Seite ("+n" für den Rest; die volle Liste steht im Tooltip und im Schnittstellen-Dialog).
+  // Kap. 88: Pads der Workflow-Schnittstelle am Rand der Workflow-Kachel — Eingänge links, Ausgänge rechts, eine Zeile
+  // je Port.
   #appendWorkflowInterfacePads(g: SVGGElement, workflowId: string, status: string, ifc: WorkflowInterface, tilePos: Point) {
-    const MAX_ROWS = WORKFLOW_PAD_ROWS;
     const MAX_DOTS = 4;
     const DOT_STEP = 11;
     const live = status === "started";
@@ -3344,13 +3352,10 @@ export class FlowCanvas extends HTMLElement {
     const draw = (ports: InterfacePort[], side: "input" | "output") => {
       const dir = side === "input" ? 1 : -1;
       const edgeX = side === "input" ? 0 : NODE_WIDTH;
-      const shown = ports.length > MAX_ROWS ? MAX_ROWS : ports.length;
-      for (let i = 0; i < shown; i++) {
+      for (let i = 0; i < ports.length; i++) {
         const y = HEADER_HEIGHT + WORKFLOW_PAD_FIRST_Y + i * WORKFLOW_PAD_GAP;
-        const rest = ports.length - (MAX_ROWS - 1);
-        const more = ports.length > MAX_ROWS && i === MAX_ROWS - 1;
-        const dots = more ? [{ format: "", label: "", available: live }] : dotsOf(side, ports[i]).slice(0, MAX_DOTS);
-        const portName = more ? "" : ports[i].name;
+        const dots = dotsOf(side, ports[i]).slice(0, MAX_DOTS);
+        const portName = ports[i].name;
         dots.forEach((d, k) => {
           const x = edgeX + dir * k * DOT_STEP;
           const pad = document.createElementNS(SVG_NS, "circle");
@@ -3364,23 +3369,19 @@ export class FlowCanvas extends HTMLElement {
           pad.setAttribute("stroke", side === "input" ? "#5b9bd5" : "#70ad47");
           pad.setAttribute("stroke-width", "1.5");
           if (!d.available && d.format) pad.setAttribute("opacity", "0.45");
-          if (!more) {
-            pad.setAttribute("data-workflow-id", workflowId);
-            pad.style.cursor = side === "output" ? "crosshair" : "copy";
-            // Kap. 88: Ausgang ist Ziehquelle, Eingang Ablageziel (s. #finishConnect). Die Kugeln einer Gruppe gehören zusammen:
-            // gezogen/abgelegt wird immer die ganze Schnittstellengruppe, die Farben zeigen nur, was sie enthält.
-            pad.addEventListener("pointerdown", (ev) => {
-              ev.stopPropagation();
-              if (side === "output") {
-                this.#startWorkflowOutputDrag(ev, workflowId, ports[i].name, { x: tilePos.x + edgeX, y: tilePos.y + y });
-              }
-            });
-          }
+          pad.setAttribute("data-workflow-id", workflowId);
+          pad.style.cursor = side === "output" ? "crosshair" : "copy";
+          // Kap. 88: Ausgang ist Ziehquelle, Eingang Ablageziel (s. #finishConnect). Die Kugeln einer Gruppe gehören zusammen:
+          // gezogen/abgelegt wird immer die ganze Schnittstellengruppe, die Farben zeigen nur, was sie enthält.
+          pad.addEventListener("pointerdown", (ev) => {
+            ev.stopPropagation();
+            if (side === "output") {
+              this.#startWorkflowOutputDrag(ev, workflowId, ports[i].name, { x: tilePos.x + edgeX, y: tilePos.y + y });
+            }
+          });
           const tip = document.createElementNS(SVG_NS, "title");
           const kind = d.format ? formatAbbrev(d.format, d.label) : "";
-          tip.textContent = more
-            ? ports.slice(MAX_ROWS - 1).map((p) => p.label || p.name).join(", ")
-            : `${ports[i].label || ports[i].name}${kind ? ` — ${kind}${d.label ? ` ${d.label}` : ""}` : ""}`;
+          tip.textContent = `${ports[i].label || ports[i].name}${kind ? ` — ${kind}${d.label ? ` ${d.label}` : ""}` : ""}`;
           pad.appendChild(tip);
           g.appendChild(pad);
         });
@@ -3392,7 +3393,7 @@ export class FlowCanvas extends HTMLElement {
         text.setAttribute("fill", "#d8d8d8");
         text.setAttribute("font-size", "10");
         text.setAttribute("pointer-events", "none");
-        text.textContent = more ? `+${rest}` : truncateTileTitle(ports[i].label || ports[i].name, Math.max(6, 13 - 2 * (dots.length - 1)));
+        text.textContent = truncateTileTitle(ports[i].label || ports[i].name, Math.max(6, 13 - 2 * (dots.length - 1)));
         g.appendChild(text);
       }
     };
@@ -3464,7 +3465,6 @@ export class FlowCanvas extends HTMLElement {
   // innerhalb einer Gruppe verschachtelbar.
   #renderWorkflowTiles(): SVGGElement[] {
     if (this.#scope !== null) return [];
-    const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
     const tiles: SVGGElement[] = [];
 
     // Kapitel 13 Teil 4: dieselbe Einklapp-Ausblendung wie für echte
@@ -3479,6 +3479,7 @@ export class FlowCanvas extends HTMLElement {
       if (!pos) continue;
       const color = WORKFLOW_FRAME_COLORS[wf.status] ?? "#5b9bd5";
 
+      const height = workflowTileHeight(wf);
       const g = document.createElementNS(SVG_NS, "g");
       g.setAttribute("data-role", "workflow-tile");
       g.setAttribute("data-workflow-id", wf.id);
@@ -3825,7 +3826,7 @@ export class FlowCanvas extends HTMLElement {
         width: NODE_WIDTH,
         height: this.#tileHeightById.get(id) ?? nodeHeight(0, 0),
       })),
-      ...workflowIds.map((id) => ({ id, width: NODE_WIDTH, height: MIN_BODY_HEIGHT + HEADER_HEIGHT })),
+      ...workflowIds.map((id) => ({ id, width: NODE_WIDTH, height: this.#workflowTileHeightById(id) })),
     ];
     this.#applyAutoArrange([...tileIds, ...workflowIds], nodes, this.#edgesAmongTiles(new Set(tileIds)));
   }
@@ -4295,7 +4296,7 @@ export class FlowCanvas extends HTMLElement {
       .map((id) => {
         const p = this.#positions[id];
         if (!p) return null;
-        const h = workflowIdFromTileId(id) !== null ? MIN_BODY_HEIGHT + HEADER_HEIGHT : this.#tileHeightById.get(id) ?? MIN_BODY_HEIGHT + HEADER_HEIGHT;
+        const h = workflowIdFromTileId(id) !== null ? this.#workflowTileHeightById(id) : this.#tileHeightById.get(id) ?? MIN_BODY_HEIGHT + HEADER_HEIGHT;
         return { x1: p.x, y1: p.y - 16, x2: p.x + NODE_WIDTH, y2: p.y + h };
       })
       .filter((b): b is { x1: number; y1: number; x2: number; y2: number } => b !== null);
@@ -4345,7 +4346,7 @@ export class FlowCanvas extends HTMLElement {
       if (this.#zoneIdForWorkflow(wf) !== zoneId) continue;
       const pos = this.#positions[workflowTileId(wf.id)];
       if (!pos) continue;
-      bottom = Math.max(bottom, pos.y + (MIN_BODY_HEIGHT + HEADER_HEIGHT) + HOST_ZONE_MARGIN);
+      bottom = Math.max(bottom, pos.y + workflowTileHeight(wf) + HOST_ZONE_MARGIN);
     }
     // Der „Geplant“-Block liegt oben; leere Zonen brauchen trotzdem Platz dafür.
     bottom = Math.max(bottom, HOST_ZONE_HEADER_HEIGHT + this.#zoneTopInset(zoneId) + HOST_ZONE_MARGIN * 2);
@@ -4613,7 +4614,7 @@ export class FlowCanvas extends HTMLElement {
         bandFrame.setAttribute("x", "8");
         bandFrame.setAttribute("y", String(bandY));
         bandFrame.setAttribute("width", String(laneWidth - 16));
-        bandFrame.setAttribute("height", String(workflowBandHeight(bandCount) - 4));
+        bandFrame.setAttribute("height", String(workflowBandHeight(this.#workflowsForZone(zone.id)) - 4));
         bandFrame.setAttribute("rx", "4");
         bandFrame.setAttribute("fill", "#262b33");
         bandFrame.setAttribute("stroke", "#4a5568");

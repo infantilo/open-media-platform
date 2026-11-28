@@ -120,6 +120,10 @@ pub fn measure(
     while t0.elapsed().as_secs_f64() < secs && !stop.load(Ordering::Relaxed) {
         let mut idle = true;
         match vr.get_grain_non_blocking(vidx) {
+            Ok(g) if g.index == vidx && crate::mxl::grain_invalid(g.flags) => {
+                vidx += 1;
+                idle = false;
+            }
             Ok(g) if g.index == vidx => {
                 let p = &g.payload[..g.payload.len().min(1 << 16)];
                 let mean = p.iter().map(|&b| b as f64).sum::<f64>() / p.len().max(1) as f64;

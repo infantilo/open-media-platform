@@ -104,6 +104,8 @@ var (
 	// antwortete: der Stop ist vorgemerkt (Instance.StopPending) und wird nachgeholt, statt die Instanz zu
 	// vergessen. Aufrufer dürfen das als "wird erledigt" werten.
 	ErrStopDeferred = errors.New("launcher: stop deferred until the host is reachable again")
+	// ErrNotStopPending: Discard gilt nur für entfernte Instanzen, deren Stop noch aussteht.
+	ErrNotStopPending = errors.New("launcher: instance has no pending stop, stop it first")
 )
 
 // stopGracePeriod ist die Wartezeit zwischen SIGTERM und SIGKILL beim
@@ -369,8 +371,8 @@ const ServiceTokenEnv = "OMP_SERVICE_TOKEN"
 
 // SetServiceToken setzt das Dienst-Token, das jede vom Launcher gestartete Instanz (lokal, Podman, Host-Agent) bekommt.
 // Mit ihm weist sich das Dienst-Gateway gegenüber Nodes aus, die einen Dienst anbieten. Leer = keins. Auf Hosts mit
-// Host-Agent gilt die Allowlist des Agents: dort muss dasselbe Token in der Umgebung des Agents stehen (er vererbt sie an
-// seine Nodes), es wird nicht über das Netz mitgeschickt.
+// Host-Agent geht es wie das Node-API-Token im signierten Startkommando mit und hat dort Vorrang vor einem Wert aus der
+// Umgebung des Agents (die Signatur verschlüsselt nicht: Vertraulichkeit auf der Leitung gibt nur NATS-TLS).
 func (l *Launcher) SetServiceToken(token string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -2075,6 +2077,7 @@ func (l *Launcher) startRemotePre(nodeType, version, hostID, customLabel string,
 		Options:      l.remoteOptions(nodeType, id, optionsFrom, extraEnv),
 		LaunchSecret: launchSecret,
 		NodeAPIToken: l.nodeAPIToken,
+		ServiceToken: l.serviceToken,
 	})
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: remote start on host %s: %w", hostID, err)
@@ -2118,6 +2121,8 @@ type remoteCommand struct {
 	LaunchSecret string `json:"launchSecret,omitempty"`
 	// NodeAPIToken: s. Launcher.SetNodeAPIToken; der Host-Agent setzt es als OMP_NODE_API_TOKEN (Audit B1).
 	NodeAPIToken string `json:"nodeApiToken,omitempty"`
+	// ServiceToken: s. Launcher.SetServiceToken; der Host-Agent setzt es als OMP_SERVICE_TOKEN (Kapitel 48).
+	ServiceToken string `json:"serviceToken,omitempty"`
 	// Options (Kapitel 29): Node-Optionen; der Host-Agent prüft sie gegen sein EIGENES Schema.
 	Options map[string]string `json:"options,omitempty"`
 	// Path/Kind: Action "check-path".
@@ -2276,6 +2281,7 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 		// oben im Datei/"LaunchSecret aus dem getrackten Zustand"-Doku).
 		LaunchSecret: current.LaunchSecret,
 		NodeAPIToken: l.nodeAPIToken,
+		ServiceToken: l.serviceToken,
 	})
 	if err != nil || !resp.OK {
 		errMsg := resp.Error
@@ -2441,6 +2447,25 @@ func (l *Launcher) forget(id string) {
 	if err := l.store.Delete(id); err != nil {
 		slog.Warn("launcher: failed to persist instance state", "error", err)
 	}
+}
+
+// Discard entfernt den Eintrag einer entfernten Instanz mit vorgemerktem Stop, ohne auf die Bestätigung ihres Hosts zu
+// warten (Bedienerentscheidung für dauerhaft weggefallene Hosts). Läuft sie dort doch noch, führt der Orchestrator sie
+// danach nicht mehr und stoppt sie auch nicht nach. Andere Instanzen: ErrNotStopPending.
+func (l *Launcher) Discard(id string) error {
+	inst, ok := l.Get(id)
+	if !ok {
+		inst, ok = l.adoptRemoteFromStore(id)
+	}
+	if !ok {
+		return ErrUnknownInstance
+	}
+	if inst.HostID == "" || !inst.StopPending {
+		return ErrNotStopPending
+	}
+	slog.Warn("launcher: stop-pending instance discarded without confirmation from its host", "id", id, "host_id", inst.HostID, "type", inst.Type, "label", inst.Label)
+	l.forget(id)
+	return nil
 }
 
 // RetryPendingStops holt vorgemerkte Stops (Instance.StopPending) für hostID nach. Aufruf, sobald der Host wieder
@@ -3072,7 +3097,7 @@ func (l *Launcher) restoreRemoteOne(inst Instance) {
 		resp, err := l.sendCommand(inst.HostID, remoteCommand{
 			Action: "start", Type: inst.Type, Version: inst.Version, InstanceID: inst.ID, Label: inst.Label,
 			ExtraEnv: inst.ExtraEnv, Options: l.remoteOptions(inst.Type, inst.ID, "", inst.ExtraEnv),
-			LaunchSecret: secret, NodeAPIToken: l.nodeAPIToken,
+			LaunchSecret: secret, NodeAPIToken: l.nodeAPIToken, ServiceToken: l.serviceToken,
 		})
 		if err == nil && resp.OK {
 			inst.PID = resp.PID

@@ -64,7 +64,8 @@ export class Wall {
   }
 
   async #poll() {
-    const want = pictureIds(this.#events, this.#pinned);
+    // Bilder nur anfordern, wenn sie zu sehen sind: jede Anforderung hält einen Multiviewer am Laufen.
+    const want = document.hidden || !this.el.getClientRects().length ? [] : pictureIds(this.#events, this.#pinned);
     try {
       const res = await apiFetch(`/api/v1/mcr/monitor${want.length ? `?watch=${want.join(",")}` : ""}`);
       if (!res.ok) return;

@@ -713,6 +713,8 @@ impl RawVideoCopy {
                     // nach dem Timeout — kein Nachsehen im Takt. Gemessen (blocking_read_probe, MXL 1.1.0 GA): auch mit 8
                     // Lesern und ständigem Öffnen/Schließen kein Hängen über das Timeout hinaus.
                     match grain_reader.get_complete_grain(index, READ_TIMEOUT) {
+                        // Vom Schreiber ausgelassener Index: nichts zu kopieren.
+                        Ok(g) if g.index == index && crate::mxl::grain_invalid(g.flags) => index += 1,
                         Ok(g) if g.index == index => {
                             match grain_writer.open_grain(index) {
                                 Ok(mut access) => {

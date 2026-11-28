@@ -498,7 +498,7 @@ func (u *updater) writeRollbackIndex(dir string, done []swapped) {
 	}
 	if data, err := json.MarshalIndent(rows, "", "  "); err == nil {
 		_ = os.MkdirAll(dir, 0o750)
-		_ = os.WriteFile(filepath.Join(dir, "index.json"), data, 0o640)
+		_ = writeFileAtomic(filepath.Join(dir, "index.json"), data, 0o640)
 	}
 }
 
@@ -542,10 +542,7 @@ func (u *updater) appendHistory(h historyEntry) {
 	}
 	if data, err := json.MarshalIndent(all, "", "  "); err == nil {
 		_ = os.MkdirAll(u.updateDir, 0o750)
-		tmp := path + ".tmp"
-		if os.WriteFile(tmp, data, 0o640) == nil {
-			_ = os.Rename(tmp, path)
-		}
+		_ = writeFileAtomic(path, data, 0o640)
 	}
 }
 
@@ -555,7 +552,7 @@ func (u *updater) saveLastStatus() {
 	snap := u.srv.status.snapshot()
 	if data, err := json.Marshal(snap); err == nil {
 		_ = os.MkdirAll(u.updateDir, 0o750)
-		_ = os.WriteFile(filepath.Join(u.updateDir, "supervisor-status.json"), data, 0o640)
+		_ = writeFileAtomic(filepath.Join(u.updateDir, "supervisor-status.json"), data, 0o640)
 	}
 }
 

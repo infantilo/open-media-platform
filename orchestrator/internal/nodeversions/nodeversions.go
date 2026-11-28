@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/fsutil"
 	"github.com/infantilo/openmediaplatform/update"
 )
 
@@ -160,7 +161,7 @@ func (s *Store) Add(name, srcPath, source string) (Version, error) {
 	v := Version{Name: name, ID: id, Version: info.Version, Commit: info.Commit, BuiltAt: info.BuiltAt, Contract: info.Generation(),
 		SHA256: sha, Size: size, AddedAt: time.Now().UTC(), Source: source}
 	meta, _ := json.MarshalIndent(v, "", "  ")
-	if err := os.WriteFile(filepath.Join(dir, "meta.json"), meta, 0o640); err != nil {
+	if err := fsutil.WriteFileAtomic(filepath.Join(dir, "meta.json"), meta, 0o640); err != nil {
 		_ = os.RemoveAll(dir)
 		return Version{}, err
 	}
