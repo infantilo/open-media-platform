@@ -12,7 +12,8 @@ if [ -f "$PID_FILE" ]; then
   PID="$(cat "$PID_FILE")"
   if kill -0 "$PID" 2>/dev/null; then
     kill "$PID"
-    for _ in $(seq 1 10); do
+    # Bis zu 10 s: HTTP abbauen (höchstens 3 s) und den Cluster-Knoten sauber verlassen.
+    for _ in $(seq 1 20); do
       kill -0 "$PID" 2>/dev/null || break
       sleep 0.5
     done

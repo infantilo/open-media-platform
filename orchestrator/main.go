@@ -1865,6 +1865,7 @@ func main() {
 	}
 	srv := &http.Server{Addr: cfg.Listen, Handler: httpapi.LimitRequests(handler)}
 	httpapi.ConfigureServer(srv)
+	endRequests := cancellableRequests(srv)
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- srv.ListenAndServe()
@@ -1882,12 +1883,7 @@ func main() {
 		// ctx wurde bisher nur an den Poller weitergereicht, ohne dass
 		// der HTTP-Server je darauf reagierte.
 		slog.Info("shutdown signal received, draining")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			slog.Warn("graceful shutdown failed, forcing close", "error", err)
-			srv.Close()
-		}
+		drain(srv, endRequests, time.Second, 3*time.Second)
 	}
 }
 

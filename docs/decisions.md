@@ -31002,3 +31002,9 @@ klein, der Dump-Weg nutzt den vorhandenen, erprobten Restore. Grundlage: Postgre
 Point-in-Time Recovery". Standard aus. **Geprüft** an einem Ein-Knoten-Patroni: Archivierung, Basissicherung, Stand
 vor einem Fehler wiederhergestellt und eingespielt, Zeitzonen, Zeit vor/nach dem Archiv, Aufräumen.
 **Nicht geprüft:** Netzlaufwerk, Wiederherstellung über einen Failover (Zeitleistenwechsel), systemd-Timer.
+
+## 2026-11-28 — Orchestrator-Stopp beendet Dauerverbindungen
+
+`make stop` endete mit SIGKILL: `http.Server.Shutdown` wartet auf SSE- und Stream-Verbindungen bis zur Frist von
+5 s, genauso lange wartete das Stop-Skript (Log: „graceful shutdown failed, forcing close“ bei jedem Stopp).
+Jetzt endet der Kontext aller Anfragen nach 1 s, Frist 3 s, Stop-Skript wartet bis 10 s.
